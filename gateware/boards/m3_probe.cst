@@ -1,0 +1,64 @@
+// M3 bring-up probe: the decoder, I2C and reset pins of M4 (m4_dual_mix.cst), plus the RX5808 SPI and
+// USB-UART pins of M6 (m6_puck_proto.cst). Keep in step with those two files.
+// M4: two TVP5150AM1 modules (our own) on headers J6 (decoder A) and J5 (decoder B).
+// Pin functions from apicula chipdb (GW2AR-18C QFN88); header positions from the v3921 schematic.
+// Decoder A: SCLK J6-5 PIN77 (GCLKT_1); YOUT0..7 = J6-8 PIN27, J6-9 PIN28, J6-11 PIN26, J6-12 PIN29,
+//            J6-13 PIN30, J6-14 PIN31, J6-1 PIN73, J6-2 PIN74.
+// Decoder B: SCLK J5-4 PIN80 (GCLKT_0); YOUT0..7 = J5-3 PIN76, J5-5 PIN42, J5-6 PIN41, J5-10 PIN48,
+//            J5-12 PIN49, J5-13 PIN86, J5-14 PIN79, J5-17 PIN72.
+// I2C: SCL J6-3 PIN75 shared; SDA decoder A J6-4 PIN85, SDA decoder B J5-9 PIN51 (separate lines, because two
+//      identical modules both answer at B8h). 2.2-4.7 k pull-ups to 3.3 V on the modules or added.
+// RESETB J6-10 PIN25 to both decoders (the common red module has no reset pin: solder a wire to TVP pin 8).
+// The configuration pins 52-56 are deliberately not used.
+IO_LOC  "tvpa_sclk" 77;
+IO_PORT "tvpa_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+CLOCK_LOC "tvpa_sclk" BUFG;
+IO_LOC  "tvpa_d[0]" 27;
+IO_PORT "tvpa_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[1]" 28;
+IO_PORT "tvpa_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[2]" 26;
+IO_PORT "tvpa_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[3]" 29;
+IO_PORT "tvpa_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[4]" 30;
+IO_PORT "tvpa_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[5]" 31;
+IO_PORT "tvpa_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[6]" 73;
+IO_PORT "tvpa_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[7]" 74;
+IO_PORT "tvpa_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_sclk" 80;
+IO_PORT "tvpb_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+CLOCK_LOC "tvpb_sclk" BUFG;
+IO_LOC  "tvpb_d[0]" 76;
+IO_PORT "tvpb_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[1]" 42;
+IO_PORT "tvpb_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[2]" 41;
+IO_PORT "tvpb_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[3]" 48;
+IO_PORT "tvpb_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[4]" 49;
+IO_PORT "tvpb_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[5]" 86;
+IO_PORT "tvpb_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[6]" 79;
+IO_PORT "tvpb_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[7]" 72;
+IO_PORT "tvpb_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "i2c_scl" 75;
+IO_PORT "i2c_scl" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "i2c_sda_a" 85;
+IO_PORT "i2c_sda_a" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "i2c_sda_b" 51;
+IO_PORT "i2c_sda_b" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "tvp_resetb" 25;
+IO_PORT "tvp_resetb" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// RX5808 SPI CLK (as M6); DATA and SEL are led[4] PIN19 = J6-17 and led[5] PIN20 = J6-16 (tangnano20k.cst)
+IO_LOC  "rx_spi_clk" 71;
+IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// onboard BL616 USB-UART RX (as M6)
+IO_LOC  "uart_txd" 69;
+IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

@@ -55,5 +55,47 @@ module async_fifo #(
         else begin rbin <= rbin_n; rgray <= rgray_n; end
         {wgray_r2, wgray_r1} <= {wgray_r1, wgray};
     end
+
+`ifdef FORMAL
+    // Proven by formal/run.sh (formal/fifo_props.v starts all pointers at 0 and drives
+    // both clocks, enables and data freely):
+    //   occupancy  real pointers never differ by more than the depth: no overflow, no underflow
+    //   views      each side's view of the other pointer lags the real one (full/empty are conservative)
+    //   gray       Gray pointers match their counters and move one step per own-clock edge
+    //   data       a word at a free address reads back unchanged until it is overwritten
+    localparam [AW:0] DEPTH = 1 << AW;
+    wire [AW:0] f_occ    = wbin - rbin;
+    wire [AW:0] f_w_view = wbin - g2b(rgray_w2);
+    wire [AW:0] f_r_view = g2b(wgray_r2) - rbin;
+    wire [AW:0] f_r_lag  = rbin - g2b(rgray_w2);
+    wire [AW:0] f_w_lag  = wbin - g2b(wgray_r2);
+    wire [AW:0] f_r_lag1 = rbin - g2b(rgray_w1);         // first synchroniser stages: newer than the second
+    wire [AW:0] f_w_lag1 = wbin - g2b(wgray_r1);
+    wire [AW:0] f_age    = wbin - f_at;                  // writes since the watched word
+    (* anyconst *) wire [AW-1:0] f_watch;
+    reg         f_armed;
+    reg [W-1:0] f_value;
+    reg [AW:0]  f_at;
+    always @(posedge wclk) if (!wrst && wr_en && !full && wbin[AW-1:0] == f_watch) begin
+        f_armed <= 1'b1; f_value <= wr_data; f_at <= wbin;
+    end
+    always @* begin
+        assert (f_occ <= DEPTH);
+        assert (f_w_view <= DEPTH && f_w_view >= f_occ);
+        assert (f_r_view <= f_occ);
+        assert (f_r_lag <= DEPTH && f_w_lag <= DEPTH);
+        assert (f_r_lag1 <= f_r_lag && f_w_lag1 <= f_w_lag);
+        assert (wgray == ((wbin >> 1) ^ wbin));
+        assert (rgray == ((rbin >> 1) ^ rbin));
+        assert ($countones(wgray_n ^ wgray) <= 1);
+        assert ($countones(rgray_n ^ rgray) <= 1);
+        if (f_armed && !empty && rbin == f_at) assert (rd_data == f_value);
+        // induction strengthening for the data property
+        if (f_armed) begin
+            assert (f_at[AW-1:0] == f_watch && f_age != 0 && f_age <= DEPTH);
+            assert (mem[f_watch] == f_value);
+        end
+    end
+`endif
 endmodule
 `default_nettype wire

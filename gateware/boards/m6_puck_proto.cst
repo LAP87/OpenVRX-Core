@@ -168,13 +168,11 @@ IO_LOC "IO_sdram_dq[31]" IOR44B;
 IO_PORT "IO_sdram_dq[31]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
 
 // RX5808 x2, shared CLK/DATA/SEL (both tuned to the same channel). 3.3 V logic; modules powered from 5 V.
-// J5-18 PIN71 = SPI CLK (RX5808 "CH3"), J5-19 PIN53 = SPI DATA ("CH1"), J5-20 PIN52 = SEL/LE ("CH2").
+// J5-18 PIN71 = SPI CLK (RX5808 "CH3"). SPI DATA ("CH1") = led[4] PIN19 = J6-17, SEL/LE ("CH2") = led[5]
+// PIN20 = J6-16 (constrained in tangnano20k.cst). Not PIN52/53: those are SSPI configuration pins and the
+// HDMI DDC lines (2.2 k pull-ups on the board).
 IO_LOC  "rx_spi_clk" 71;
 IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-IO_LOC  "rx_spi_data" 53;
-IO_PORT "rx_spi_data" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-IO_LOC  "rx_spi_sel_n" 52;
-IO_PORT "rx_spi_sel_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 // onboard S2 button (apicula examples/tangnano20k.cst: key_i on 87)
 IO_LOC  "key_i" 87;
 IO_PORT "key_i" IO_TYPE=LVCMOS33;

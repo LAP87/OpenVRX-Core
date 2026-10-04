@@ -5,15 +5,19 @@
 // longer a reset button; reset comes from the PLLs locking at power-up.
 // See puck_ui.v for the screen and design/PUCK_2027_KONCEPT.md for the idea.
 //
-// LEDs (active low): 0 heartbeat, 1 lines from A, 2 lines from B, 3 mixer
-// currently prefers B, 4 a field is being shown, 5 both decoders answered
-// on I2C and report horizontal + vertical lock.
+// LEDs (active low): 0 heartbeat, 1 lines from A, 2 lines from B, 3 both
+// decoders answered on I2C and report horizontal + vertical lock.
+// led[4] and led[5] are not LEDs here: their pins (19, 20) are also header
+// J6-17 / J6-16 and carry the RX5808 SPI DATA and SEL. Every ordinary GPIO on
+// the headers is taken by the two decoders, and the free pins 52-56 are FPGA
+// configuration pins (52 = SSPI SCLK, 53 = DOUT), so they are avoided. The two
+// LEDs flicker briefly when a channel is written.
 `default_nettype none
 module m6_puck_proto (
     input  wire        clk,
     input  wire        rst_i,             // S1: OK button
     input  wire        key_i,             // S2: NEXT button
-    output wire        rx_spi_clk, rx_spi_data, rx_spi_sel_n,   // both RX5808 modules (same channel)
+    output wire        rx_spi_clk,        // both RX5808 modules (same channel); DATA and SEL leave on led[4], led[5]
     input  wire        tvpa_sclk,
     input  wire [7:0]  tvpa_d,
     input  wire        tvpb_sclk,
@@ -53,6 +57,7 @@ module m6_puck_proto (
     // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl (one master at a time)
     wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack;
     wire [1:0] trow, force_bad, sel_n;
+    wire       spi_data;
     wire [4:0] tcol;
     wire [6:0] tchar;
     wire [2:0] band, ch;
@@ -73,11 +78,10 @@ module m6_puck_proto (
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
-                .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
+                .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat));
-    assign rx_spi_sel_n = sel_n[0];
     assign i2c_scl = (scl_low | oled_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
@@ -138,6 +142,6 @@ module m6_puck_proto (
 
     reg [24:0] sec;
     always @(posedge clk) sec <= sec + 1'b1;
-    assign led = ~{locked_ok, have_video, cur, b_lines, a_lines, sec[24]};
+    assign led = {sel_n[0], spi_data, ~{locked_ok, b_lines, a_lines, sec[24]}};   // [5] SEL (J6-16), [4] DATA (J6-17)
 endmodule
 `default_nettype wire

@@ -13,13 +13,14 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 | M1s — samma, separata synksignaler (HSYNC/VSYNC/AVID) | `top/m1s_moneagle_view_sync.v` | ✔ `build/m1s_moneagle_view_sync.fs` (1 052 LUT, 44/46 BSRAM) | Båda polariteter och bytefaser |
 | **M2 — full upplösning i färg via SDRAM, trippelbuffert, ingen rivning** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 154 LUT 15 %, 16 BSRAM, 2 PLL; SDRAM 127 MHz mot 64,8) | Tre klockdomäner + SDRAM-modell: SDRAM-innehåll och RGB-pixlar mot modell |
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 387 LUT 16 %, 4 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
+| **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | se bygget nedan | Rapportraderna mot en frisk och en felkopplad dekoder (`sim/test_probe.py`) |
 | **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (7 026 LUT 33 %, 24 BSRAM; SDRAM 90 MHz) | Mixern bitexakt mot facit (två klockor, snö, trasig synk, död kanal, olåst dekoder); I2C mot slavmodeller |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | ✔ `build/m5c_moneagle_1080p.fs` (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
 | **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (10 341 LUT 49 %, 24 BSRAM; SDRAM 84 MHz, 27 MHz-domän 81 MHz, pixel 131 MHz) | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); M4-delen som ovan |
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (50 test, ca 5 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (52 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -149,6 +150,8 @@ Lysdioder (tänd = sant): LED0 hjärtslag, LED1 rader från A, LED2 rader från 
 | Pixelklocka 148,5 MHz | PIN76 (J5-3) | DCLK |
 | Y0–7 | PIN80, 42, 41, 56, 54, 51, 48, 55 (J5-4…J5-11) | D8–D15 |
 | C0–7 (Cb/Cr växelvis) | PIN49, 86, 79, 72, 71, 53, 52 (J5-12…J5-20) + PIN25 (J6-10) | D16–D23 |
+
+**Varning (2026-10-04):** PIN52/53 är SSPI-konfigurationsstift och HDMI-DDC på Tang-kortet. M5C behöver ny stiftplan innan den provas.
 | I2C SCL / SDA | PIN75 (J6-3) / PIN85 (J6-4) | SCL / SDA |
 | Reset | — (inget stift kvar) | RC-reset: 10 k till 3,3 V + 1 µF till jord |
 
@@ -160,13 +163,15 @@ Var hittar man en LT8618SX att koppla till? Ingen färdig breakout är verifiera
 
 ## M6 — puckprototyp steg 1 (M4 + meny, RX5808, OLED)
 
+> Koppling, uppstartsordning och felsökning steg för steg: [BRINGUP.md](BRINGUP.md). Ändrat 2026-10-04: SPI DATA och SEL flyttade från PIN53/52 (konfigurationsstift och HDMI-DDC på kortet) till lysdiodsstiften 19/20. Lysdioderna i M6 är nu fyra: LED0 hjärtslag, LED1 rader från A, LED2 rader från B, LED3 båda dekodrarna låsta.
+
 `top/m6_puck_proto.v` → `build/m6_puck_proto.fs`. Allt från M4 plus:
 
 | Signal | Tang Nano 20K | Ansluts till |
 |---|---|---|
 | RX5808 SPI CLK | PIN71 (J5-18) | båda modulernas "CH3" |
-| RX5808 SPI DATA | PIN53 (J5-19) | båda modulernas "CH1" |
-| RX5808 SEL | PIN52 (J5-20) | båda modulernas "CH2" |
+| RX5808 SPI DATA | PIN19 (J6-17, lysdiod 4) | båda modulernas "CH1" |
+| RX5808 SEL | PIN20 (J6-16, lysdiod 5) | båda modulernas "CH2" |
 | OLED SSD1306 128×32 (I2C 3Ch) | SCL PIN75 (J6-3), SDA PIN85 (J6-4) | samma buss som dekoder A; OLED-modulen matas med 3,3 V |
 | OK-knapp | S1 (PIN88) | kortets knapp — **inte längre reset** |
 | NEXT-knapp | S2 (PIN87) | kortets knapp |
@@ -230,3 +235,18 @@ Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i
 - **Signerade jämförelser** har felkompilerats av Apicula (seed-beroende). `tmds_encoder.v` och `ycbcr2rgb.v` är omskrivna utan signerad aritmetik och bitexakt kontrollerade mot de gamla versionerna (alla 16,7 miljoner YCbCr-värden, plus en lång slumpsekvens genom TMDS-kodaren). Ingen annan modul använder `signed`.
 - **Insignaler i samma I/O-bank som HDMI** (bank 5: stift 26–31, där dekoder A:s buss ligger) packades i en nyare Apicula som LVDS-mottagare. **Vår Apicula 0.32 gör inte det.** `tools/test_lvds_bank_inputs.py` bygger två små designer, med och utan LVDS-utgång i banken, och kräver att insignalernas IOB-fuses är identiska. En riktig LVDS-mottagare som negativ kontroll visar att testet ser skillnaden. Kör testet efter varje Apicula-uppgradering. Om det fallerar: packa via en omslagare som CVBS2HDMI:s `scripts/gowin_pack_io.py` (MIT).
 - Inga `DRIVE=`/`BANK_VCCIO=` på LVDS25-stift (gäller redan våra cst-filer).
+
+## M3 — uppstartsprob
+
+`top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar och statusregister. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe`. Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
+
+## Formella bevis
+
+`formal/run.sh` (cirka 15 s, ingår i testsviten via `tools/test_formal.py`) bevisar med k-induktion i yosys, utan extern lösare:
+
+| Modul | Bevisat | Negativ kontroll |
+|---|---|---|
+| `async_fifo.v` (djup 4 och 8) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under |
+| `genlock_timing.v` | med fria lock/trig/h_alt: räknarna håller sig inom gränserna, och varje bild slutar inom V_TOTAL + MAX_WAIT rader | utan väntegränsen kan en bild stå still |
+
+Egenskaperna står i modulerna inom `ifdef FORMAL`. Klockdomänshandskakningarna i `fb_backend.v` är inte bevisade än.

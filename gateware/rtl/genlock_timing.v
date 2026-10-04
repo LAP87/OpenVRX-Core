@@ -77,5 +77,26 @@ module genlock_timing #(
         vsync       <= ((vc >= V_ACTIVE + V_FP) && (vc < V_SYNC_END)) ? V_POL[0] : ~V_POL[0];
         frame_start <= (hc == 0) && (vc == 0);
     end
+
+`ifdef FORMAL
+    // Proven by formal/run.sh with lock, trig and h_alt free at every clock:
+    // the counters stay in range, and every frame ends within V_TOTAL + MAX_WAIT
+    // lines (the output never stalls, whatever the triggers do).
+    localparam [11:0] H_LAST_MAX = H_ACTIVE + (FP1 > FP0 ? FP1 : FP0) + H_SYNC + H_BP - 1;
+    reg [11:0] f_lines;                                   // lines finished since the frame started
+    always @(posedge clk)
+        if (rst || (hc == 0 && vc == 0)) f_lines <= 0;
+        else if (hc == h_last && f_lines != 12'hFFF) f_lines <= f_lines + 1'b1;
+    always @* begin
+        assert (vc < V_TOTAL);
+        assert (hc <= H_LAST_MAX);
+        assert (wait_n <= MAX_WAIT);
+        assert (f_lines <= V_TOTAL + MAX_WAIT);
+        // induction strengthening: waiting only happens on the last line, and the
+        // frame so far is no longer than the lines counted plus the repeats
+        if (wait_n != 0) assert (vc == V_TOTAL - 1);
+        if (!(hc == 0 && vc == 0)) assert (f_lines <= vc + wait_n);
+    end
+`endif
 endmodule
 `default_nettype wire

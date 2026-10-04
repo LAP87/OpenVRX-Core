@@ -9,3 +9,4 @@ gateware/sim/*.xml
 .pytest_cache/
 *.vcd
 *.fst
+gateware/formal/build/
