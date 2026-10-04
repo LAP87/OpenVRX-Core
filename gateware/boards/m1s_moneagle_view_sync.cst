@@ -1,0 +1,32 @@
+// M1: TVP5150AM1 tap on header J6 (Tang Nano 20K v3921 schematic, page 2).
+// Header position -> FPGA pin: J6-5 PIN77 = SCLK (IOT30A/GCLKT_1, dedicated clock input per apicula chipdb),
+// J6-8 PIN27, J6-9 PIN28, J6-11 PIN26, J6-12 PIN29, J6-13 PIN30, J6-14 PIN31,
+// J6-1 PIN73, J6-2 PIN74, J6-20 GND.
+// I/O standard assumes the TVP's IO_DVDD is 3.3 V — MEASURE TVP pin 10 FIRST.
+// If it is 1.8 V, a level shifter is needed (these banks run at 3.3 V).
+IO_LOC  "tvp_sclk" 77;
+IO_PORT "tvp_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+CLOCK_LOC "tvp_sclk" BUFG;
+IO_LOC  "tvp_d[0]" 27;
+IO_PORT "tvp_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[1]" 28;
+IO_PORT "tvp_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[2]" 26;
+IO_PORT "tvp_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[3]" 29;
+IO_PORT "tvp_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[4]" 30;
+IO_PORT "tvp_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[5]" 31;
+IO_PORT "tvp_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[6]" 73;
+IO_PORT "tvp_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_d[7]" 74;
+IO_PORT "tvp_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// discrete syncs: J6-3 PIN75 = HSYNC (TVP pin 25), J6-4 PIN85 = VSYNC (TVP pin 24), J6-10 PIN25 = AVID (TVP pin 26)
+IO_LOC  "tvp_hsync" 75;
+IO_PORT "tvp_hsync" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_vsync" 85;
+IO_PORT "tvp_vsync" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvp_avid" 25;
+IO_PORT "tvp_avid" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

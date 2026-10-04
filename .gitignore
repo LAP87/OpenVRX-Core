@@ -1,0 +1,11 @@
+# local toolchain (see README: Setup)
+.venv
+.tools
+# build and simulation output
+gateware/build/
+gateware/sim/build/
+gateware/sim/*.xml
+**/__pycache__/
+.pytest_cache/
+*.vcd
+*.fst

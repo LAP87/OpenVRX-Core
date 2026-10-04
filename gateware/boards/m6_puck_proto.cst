@@ -1,0 +1,183 @@
+// M6 puck prototype = M4 pins + RX5808 SPI on J5-18/19/20 + S2 button; OLED shares SCL/SDA_A.
+// M4: two TVP5150AM1 modules (our own) on headers J6 (decoder A) and J5 (decoder B).
+// Pin functions from apicula chipdb (GW2AR-18C QFN88); header positions from the v3921 schematic.
+// Decoder A: SCLK J6-5 PIN77 (GCLKT_1); YOUT0..7 = J6-8 PIN27, J6-9 PIN28, J6-11 PIN26, J6-12 PIN29,
+//            J6-13 PIN30, J6-14 PIN31, J6-1 PIN73, J6-2 PIN74.
+// Decoder B: SCLK J5-4 PIN80 (GCLKT_0); YOUT0..7 = J5-3 PIN76, J5-5 PIN42, J5-6 PIN41, J5-10 PIN48,
+//            J5-12 PIN49, J5-13 PIN86, J5-14 PIN79, J5-17 PIN72.
+// I2C: SCL J6-3 PIN75 shared; SDA decoder A J6-4 PIN85, SDA decoder B J5-9 PIN51 (separate lines, because two
+//      identical modules both answer at B8h). 2.2-4.7 k pull-ups to 3.3 V on the modules or added.
+// RESETB J6-10 PIN25 to both decoders (the common red module has no reset pin: solder a wire to TVP pin 8).
+// The configuration pins 52-56 are deliberately not used.
+IO_LOC  "tvpa_sclk" 77;
+IO_PORT "tvpa_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+CLOCK_LOC "tvpa_sclk" BUFG;
+IO_LOC  "tvpa_d[0]" 27;
+IO_PORT "tvpa_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[1]" 28;
+IO_PORT "tvpa_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[2]" 26;
+IO_PORT "tvpa_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[3]" 29;
+IO_PORT "tvpa_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[4]" 30;
+IO_PORT "tvpa_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[5]" 31;
+IO_PORT "tvpa_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[6]" 73;
+IO_PORT "tvpa_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpa_d[7]" 74;
+IO_PORT "tvpa_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_sclk" 80;
+IO_PORT "tvpb_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+CLOCK_LOC "tvpb_sclk" BUFG;
+IO_LOC  "tvpb_d[0]" 76;
+IO_PORT "tvpb_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[1]" 42;
+IO_PORT "tvpb_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[2]" 41;
+IO_PORT "tvpb_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[3]" 48;
+IO_PORT "tvpb_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[4]" 49;
+IO_PORT "tvpb_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[5]" 86;
+IO_PORT "tvpb_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[6]" 79;
+IO_PORT "tvpb_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[7]" 72;
+IO_PORT "tvpb_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "i2c_scl" 75;
+IO_PORT "i2c_scl" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "i2c_sda_a" 85;
+IO_PORT "i2c_sda_a" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "i2c_sda_b" 51;
+IO_PORT "i2c_sda_b" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "tvp_resetb" 25;
+IO_PORT "tvp_resetb" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// embedded SDRAM (GW2AR-18), from Seyviour/sdram-tang-nano-20k-os-example; banks 2/7 at 3.3 V
+IO_LOC "O_sdram_clk" IOR11B;
+IO_PORT "O_sdram_clk"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_cke" IOL13A;
+IO_PORT "O_sdram_cke"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_cs_n" IOL14B;
+IO_PORT "O_sdram_cs_n"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_cas_n" IOL14A;
+IO_PORT "O_sdram_cas_n"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_ras_n" IOL13B;
+IO_PORT "O_sdram_ras_n"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_wen_n" IOL12B;
+IO_PORT "O_sdram_wen_n"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_dqm[0]" IOL12A;
+IO_PORT "O_sdram_dqm[0]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_dqm[1]" IOR11A;
+IO_PORT "O_sdram_dqm[1]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_dqm[2]" IOL18A;
+IO_PORT "O_sdram_dqm[2]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_dqm[3]" IOR15B;
+IO_PORT "O_sdram_dqm[3]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[0]" IOR14A;
+IO_PORT "O_sdram_addr[0]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[1]" IOR13B;
+IO_PORT "O_sdram_addr[1]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[2]" IOR14B;
+IO_PORT "O_sdram_addr[2]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[3]" IOR15A;
+IO_PORT "O_sdram_addr[3]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[4]" IOL16B;
+IO_PORT "O_sdram_addr[4]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[5]" IOL17B;
+IO_PORT "O_sdram_addr[5]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[6]" IOL16A;
+IO_PORT "O_sdram_addr[6]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[7]" IOL17A;
+IO_PORT "O_sdram_addr[7]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[8]" IOL15B;
+IO_PORT "O_sdram_addr[8]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[9]" IOL15A;
+IO_PORT "O_sdram_addr[9]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_addr[10]" IOR12B;
+IO_PORT "O_sdram_addr[10]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_ba[0]" IOR13A;
+IO_PORT "O_sdram_ba[0]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "O_sdram_ba[1]" IOR12A;
+IO_PORT "O_sdram_ba[1]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[0]" IOL3A;
+IO_PORT "IO_sdram_dq[0]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[1]" IOL3B;
+IO_PORT "IO_sdram_dq[1]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[2]" IOL8A;
+IO_PORT "IO_sdram_dq[2]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[3]" IOL8B;
+IO_PORT "IO_sdram_dq[3]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[4]" IOL9A;
+IO_PORT "IO_sdram_dq[4]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[5]" IOL9B;
+IO_PORT "IO_sdram_dq[5]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[6]" IOL11A;
+IO_PORT "IO_sdram_dq[6]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[7]" IOL11B;
+IO_PORT "IO_sdram_dq[7]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[8]" IOR9B;
+IO_PORT "IO_sdram_dq[8]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[9]" IOR9A;
+IO_PORT "IO_sdram_dq[9]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[10]" IOR5B;
+IO_PORT "IO_sdram_dq[10]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[11]" IOR6A;
+IO_PORT "IO_sdram_dq[11]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[12]" IOR5A;
+IO_PORT "IO_sdram_dq[12]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[13]" IOR4B;
+IO_PORT "IO_sdram_dq[13]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[14]" IOR3B;
+IO_PORT "IO_sdram_dq[14]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[15]" IOR3A;
+IO_PORT "IO_sdram_dq[15]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[16]" IOL39B;
+IO_PORT "IO_sdram_dq[16]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[17]" IOL39A;
+IO_PORT "IO_sdram_dq[17]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[18]" IOL35B;
+IO_PORT "IO_sdram_dq[18]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[19]" IOL35A;
+IO_PORT "IO_sdram_dq[19]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[20]" IOL30B;
+IO_PORT "IO_sdram_dq[20]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[21]" IOL30A;
+IO_PORT "IO_sdram_dq[21]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[22]" IOL20A;
+IO_PORT "IO_sdram_dq[22]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[23]" IOL18B;
+IO_PORT "IO_sdram_dq[23]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[24]" IOR17A;
+IO_PORT "IO_sdram_dq[24]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[25]" IOR16A;
+IO_PORT "IO_sdram_dq[25]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[26]" IOR16B;
+IO_PORT "IO_sdram_dq[26]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[27]" IOR17B;
+IO_PORT "IO_sdram_dq[27]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[28]" IOR18A;
+IO_PORT "IO_sdram_dq[28]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[29]" IOR18B;
+IO_PORT "IO_sdram_dq[29]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[30]" IOR44A;
+IO_PORT "IO_sdram_dq[30]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+IO_LOC "IO_sdram_dq[31]" IOR44B;
+IO_PORT "IO_sdram_dq[31]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+
+// RX5808 x2, shared CLK/DATA/SEL (both tuned to the same channel). 3.3 V logic; modules powered from 5 V.
+// J5-18 PIN71 = SPI CLK (RX5808 "CH3"), J5-19 PIN53 = SPI DATA ("CH1"), J5-20 PIN52 = SEL/LE ("CH2").
+IO_LOC  "rx_spi_clk" 71;
+IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_data" 53;
+IO_PORT "rx_spi_data" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_sel_n" 52;
+IO_PORT "rx_spi_sel_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// onboard S2 button (apicula examples/tangnano20k.cst: key_i on 87)
+IO_LOC  "key_i" 87;
+IO_PORT "key_i" IO_TYPE=LVCMOS33;
+// measurement log: FPGA TXD -> onboard BL616 USB-UART (apicula examples/tangnano20k.cst "TXD" 69)
+IO_LOC  "uart_txd" 69;
+IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

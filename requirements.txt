@@ -1,0 +1,8 @@
+# Versions this tree was tested with (2026-10-04). Icarus Verilog 12 is also needed (not on PyPI).
+cocotb==2.1.0
+pytest==9.1.1
+yowasp-yosys==0.69.0.0.post1233
+yowasp-nextpnr-himbaechel-gowin==0.11.1.0.post826
+apycula==0.32
+numpy==2.5.3
+opencv-python-headless==5.0.0.93   # mixer/ and tests/latency only
