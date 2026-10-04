@@ -223,7 +223,7 @@ Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i
 
 **Varför det fungerar:** utgången skannar varje källrad långsammare (3 × 22,2 µs) än ingången levererar den (63,6 µs). Läsaren kan alltså aldrig gå om skrivaren, och skrivaren ligger högst cirka 13 rader före (därav 16 platser). Upplösningen är densamma i båda lägena, så läget går att byta medan det kör. Vid byte mellan PAL och NTSC i `LOW` ändras bildfrekvensen, och skärmen synkar om (1–2 s).
 
-**Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751). CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. Prova på Moneagle-/XR-glasögonen och en TV innan läget blir standard. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell, uppmätt fördröjning).
+**Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751). CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. Prova på Moneagle-monitorn, XR-glasögonen och en TV innan läget blir standard. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell, uppmätt fördröjning).
 
 ## Apicula-fällor (från otanl/CVBS2HDMI, kontrollerade 2026-10-04)
 
