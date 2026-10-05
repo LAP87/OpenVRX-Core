@@ -2,43 +2,44 @@
 
 > Del av [OpenVRX](https://github.com/LAP87/OpenVRX). Sökvägar som `../research/` och `../design/` syftar på den ursprungliga samlade mappen: forskning finns nu i OpenVRX-navet, kortdesignen i OpenVRX-Puck.
 
-Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
+Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-04
+## Status 2026-10-05
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
 | M0 — testbild 720p60 på kortets HDMI | `top/m0_testpattern.v` | ✔ `build/m0_testpattern.fs` (792 LUT, 3 %; pixel 140 MHz mot 74,25) | Simulering av TMDS och tidsbas |
-| M1 — Moneagles TVP5150AM1 → HDMI (luma, 360×240, 720p60), inbäddad BT.656-synk | `top/m1_moneagle_view.v` | ✔ `build/m1_moneagle_view.fs` (822 LUT, 44/46 BSRAM) | Hela ingångsvägen mot facit |
+| M1 — Moneagles TVP5150AM1 → HDMI (luma, 360×240, 720p60), inbäddad BT.656-synk | `top/m1_moneagle_view.v` | ✔ `build/m1_moneagle_view.fs` (809 LUT, 44/46 BSRAM) | Hela ingångsvägen mot facit |
 | M1s — samma, separata synksignaler (HSYNC/VSYNC/AVID) | `top/m1s_moneagle_view_sync.v` | ✔ `build/m1s_moneagle_view_sync.fs` (1 052 LUT, 44/46 BSRAM) | Båda polariteter och bytefaser |
-| **M2 — full upplösning i färg via SDRAM, trippelbuffert, ingen rivning** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 177 LUT 15 %, 16 BSRAM, 2 PLL; SDRAM 122 MHz mot 64,8; byggt 2026-10-05) | Tre klockdomäner + SDRAM-modell med databladets tider: SDRAM-innehåll och RGB-pixlar mot modell, inga protokollfel i minnesmodellen |
-| M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 387 LUT 16 %, 4 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
-| **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 408 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 95 MHz mot 64,8; byggt 2026-10-05) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
-| **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 589 LUT 12 %, 0 BSRAM; 27 MHz-domän 180 MHz, dekoderklockorna 117 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (7 199 LUT 34 %, 24 BSRAM; SDRAM 101 MHz, pixel 111 MHz) | Mixern bitexakt mot facit (två klockor, snö, trasig synk, död kanal, olåst dekoder); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`) |
-| **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | ✔ `build/m5c_moneagle_1080p.fs` (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
-| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (10 467 LUT 50 %, 24 BSRAM; SDRAM 104 MHz, 27 MHz-domän 88 MHz, pixel 128 MHz) | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
+| **M2 — full upplösning i färg via SDRAM, fältminne med fyra buffertar** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 648 LUT 17 %, 17 BSRAM, 2 PLL; SDRAM 112 MHz mot 64,8) | Tre klockdomäner + SDRAM-modell med databladets tider: SDRAM-innehåll och RGB-pixlar mot modell, inga protokollfel i minnesmodellen |
+| M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 848 LUT 18 %, 17 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
+| **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 342 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 95 MHz mot 64,8) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
+| **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 499 LUT 12 %, 0 BSRAM; 27 MHz-domän 218 MHz, dekoderklockorna 118 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 332 LUT 40 %, 25 BSRAM; SDRAM 107 MHz, pixel 118 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka (14 scenarier, `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`) |
+| **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
+| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (11 932 LUT 57 %, 25 BSRAM; SDRAM 97 MHz, pixel 125 MHz, 27 MHz-domän 65 MHz mot 54; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04; M3, M4 och M6 byggda om 2026-10-05 efter stiftflytten, med kravet 75 MHz på alla klockor). I de byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
+**Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning. M1, M2, M2s, M2a, M3, M4 och M6 är byggda 2026-10-05 ur den här commiten, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); M0 och M1s är från 2026-10-04. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (68 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (274 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
 
 ## Moduler (`rtl/`)
 
 | Modul | Vad | Test |
 |---|---|---|
-| `bt656_rx.v` | BT.656-mottagare + mått per rad (synkord med felrättning, radlängd, HF-energi) | `sim/test_bt656_rx.py`: bitexakt mot `model/bt656.py` |
+| `bt656_rx.v` | BT.656-mottagare + mått per rad (synkord med felrättning, radlängd, HF-energi). Radnummer räknas från vertikalsläckningen (två synkord i följd med V = 1), inte från F-biten | `sim/test_bt656_rx.py`: bitexakt mot `model/bt656.py` |
 | `luma_writer.v` | Varannan lumasampel → bildminnesadress (360 kolumner × 240 rader) | `sim/test_m1_input.py`: varje skrivning mot modellen |
 | `dual_clock_ram.v` | Bildminne, skriv på TVP-klockan, läs på pixelklockan (BSRAM) | via M1-bygget |
 | `tmds_encoder.v` | DVI TMDS 8b/10b (utan signerade jämförelser, se nedan) | `sim/test_video.py`: 4 200 symboler mot Python-implementation av DVI-specen |
 | `video_timing.v` | 720p60-tidsbas (CEA-861) | `sim/test_video.py` |
 | `dvi_tx_gowin.v`, `clocks_720p.v` | OSER10 + TLVDS, rPLL 27→371,25 MHz, /5 → 74,25 MHz | via bygge (primitiver enligt apicula-exemplet) |
 | `tvp_sync_rx.v` | Mottagare för separata synksignaler (HSYNC/VSYNC/AVID), självinställande polaritet och bytefas | `sim/test_m1s_input.py` |
-| `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `fb_sdram.v`, `fb_display.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | M2:s SDRAM-bildbuffert och visning (`ycbcr2rgb.v` helt utan signerad aritmetik) | `sim/test_sdram.py`, `sim/test_m2.py` |
-| `fb_backend.v` | SDRAM-trippelbuffert + visning som en modul (ord in, RGB ut); delas av M2 och M4. **Låglatensläge** (`ll_mode`): förbi SDRAM, ringbuffert på 16 rader, utgången låst till ingångens fält | `sim/test_m2.py` (båda lägena) |
-| `genlock_timing.v` | Tidsbas som `video_timing.v`, men kan låsas till ingångens fält (låglatensläget); 720p50-rad för PAL | `sim/test_m2.py::m2_low_latency` |
+| `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | Ord om två pixlar, klockdomänsbyte, SDRAM-styrning (burstar om 8 ord), BT.601 till RGB utan signerad aritmetik | `sim/test_sdram.py`, `sim/test_m2.py` |
+| `fb_sdram.v`, `fb_display.v`, `field_phase.v` | Fältminne i SDRAM med fyra buffertar: väljer vid varje bildstart vilket fält som visas, håller reda på vilka rader som är lagrade och täcker de som saknas; radmappning med halv rads förskjutning mellan fälten; vilket fält som är det nedre avgörs på ankomsttid | `sim/test_fb.py` mot `model/fb_ref.py` (varje beslut, varje läst rad), `model/test_fb_ref.py` |
+| `fb_backend.v` | Fältminne + visning som en modul (ord in, RGB ut); delas av M2 och M4. **Låglatensläge** (`ll_mode`): förbi SDRAM, ringbuffert på 16 rader, utgången låst till ingångens fält | `sim/test_m2.py` (båda lägena) |
+| `genlock_timing.v` | Tidsbas som `video_timing.v`, men kan låsas till ingångens fält (låglatensläget); 720p50-rad för PAL. En enstaka tidig trigger kortar inte bilden | `sim/test_m2.py::m2_low_latency`, `sim/test_fb.py`, formellt bevis |
 | `m2_core.v` | M2: en TVP (BT.656 eller separata synkar) → `fb_backend` | `sim/test_m2.py` |
-| `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer (val/blandning med hysteres) → ordström | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln mot Python-prototypen i `model/test_line_mixer_ref.py` |
+| `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer → ordström. Reglerna står under M4 nedan | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln för parade rader mot Python-prototypen och fem egenskaper på slumpade radföljder i `model/test_line_mixer_ref.py` |
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
 | `rx5808_spi.v`, `rx5808_tune.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI) och när kanalen skrivs (0,5 s efter start, vid kanalbyte, varannan sekund utan lås), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_rx5808_tune.py`: skrivtidpunkterna mot en modell av regeln; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
 | `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/04h/0Dh/03h; 04h maskar SECAM ur autoswitchen), pollning av status 88h/89h, och ny uppstart av en dekoder som har återställts (03h läses tillbaka vid varje pollning, räknare per dekoder) | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder, återställd dekoder, dekoder som inte tar emot skrivningar, SDA kortsluten låg, dekoder som kommer in sent) |
@@ -106,8 +107,8 @@ Samma 10 trådar som M1 (inbäddad BT.656-synk). Kedja och klockdomäner:
 ```
 TVP 27 MHz:  bt656_rx -> word_packer (Cb Y Cr Y = 1 ord = 2 pixlar) -> async_fifo
 SDRAM 64,8 MHz:  fb_sdram: skrivare (8-ords burstar) + radhämtare + arbiter -> sdram_burst -> inbyggt SDRAM
-                 3 halvbildsbuffertar; publicerar färdig halvbild; skriver aldrig i den som visas
-Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radmappning (240/243/288 rader),
+                 4 fältbuffertar; väljer vid varje bildstart vilket fält som visas; skriver aldrig i det som visas
+Pixel 74,25 MHz: fb_display: begär rader, radmappning (240/243/288 rader) med halv rads förskjutning mellan fälten,
                  förhämtning av nästa källrad till 4-plats radbuffert, YCbCr -> RGB (BT.601), 4:3-fönster
 ```
 
@@ -118,7 +119,7 @@ Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radma
 - T_RCD/T_RP/T_RC är 2/2/6 klockor, som NESTang anger. Databladet för EM638325-6 kräver 18 ns för de två första, alltså 2 klockor. Till 2026-10-05 stod här 180° och 1/1/4, vilket ingen uppströms kör.
 - Läspunkten är `RD_SAMPLE` i `rtl/sdram_burst.v` (alla toppmoduler) eller parametern med samma namn i `rtl/fb_backend.v`. Fel läspunkt ger en bild som är förskjuten 2 pixlar eller trasig i 8-pixelsblock.
 - Bandbredd (simulerat): bilden behöver ca 21 MB/s in och ca 21 MB/s ut. Styrningen läser 130 MB/s (16 klockor per burst) och skriver 80 MB/s genom `fb_sdram`. En rad hämtas på högst 11,7 µs; en utrad är 22,2 µs.
-- Halvbild visas med radupprepning (bob): ingen kamskada vid snabba FPV-rörelser, ca 1 halvbild (16,7–20 ms) buffertlatens.
+- Fälten visas ett i taget med radupprepning (bob): ingen kamskada vid snabba FPV-rörelser. Det nedre fältet ritas en halv källrad lägre. Latens och övrigt beteende står i avsnittet "Bildvägen efter mixern".
 - Lysdioder (tänd = sant): LED0 hjärtslag, LED1 BT.656-rader kommer in, LED2 SDRAM initierat, LED3 halvbild visas, LED4 SDRAM-PLL låst, LED5 pixel-PLL låst.
 - SDRAM-stiftens placering verifierad i place & route (55 signaler på IOL/IOR-platserna).
 
@@ -174,7 +175,15 @@ Vilken rad som blir ren på ett riktigt kort vet ingen förrän testet har kört
 
 ## M4 — två egna mottagare/dekodrar med mixer
 
-`top/m4_dual_mix.v` → `build/m4_dual_mix.fs`. Två TVP5150-moduler (se `../bom/GATEWARE_DEVKIT.md` #3), var och en matad med CVBS från en egen 5,8 GHz-mottagare på samma kanal. FPGA:n startar dekodrarna via I2C och startar om en dekoder som har återställts (`rtl/tvp_ctrl.v`); mixern väljer per rad den renaste kanalen eller blandar (detaljer och begränsningar: `../design/GATEWARE_PLAN.md`, "M4-implementering").
+`top/m4_dual_mix.v` → `build/m4_dual_mix.fs`. Två TVP5150-moduler, var och en matad med CVBS från en egen 5,8 GHz-mottagare på samma kanal. FPGA:n startar dekodrarna via I2C och startar om en dekoder som har återställts (`rtl/tvp_ctrl.v`); mixern väljer per rad den renaste kanalen eller blandar.
+
+Mixerns regler (`rtl/line_mixer.v`; i sin helhet i `model/line_mixer_ref.py`):
+- Två rader paras om de har samma radnummer och kommer inom 15,8 µs från varandra. Av ett par visas den renare raden (minst HF-energi), med hysteres, eller en blandning när de är ungefär lika rena. En dålig rad (trasigt synkord, fel längd, olåst dekoder, tvingad från menyn) förlorar mot en bra.
+- En rad utan partner avgörs 15,8 µs efter att den kom. Den visas om den kommer från den aktuella kanalen, eller som lucktätning när kanalerna går i takt och den andra kanalen inte levererade något intill den.
+- Utan parade rader byter mixern kanal när den aktuella kanalens åtta senaste rader är dåliga och den andras åtta bra, eller när den aktuella har varit tyst i 8 av den andras rader (i takt) eller 40 (ur takt, längre än en vertikalsläckning). Ingen tidsgräns i klocktid ingår i besluten.
+- Raderna lämnar mixern i stigande ordning inom ett fält, och utströmmens F-bit låses vid fältets första rad.
+
+Till 2026-10-05 räknade mixern en kanal som död efter 1,0 ms utan rader, vilket är kortare än en vertikalsläckning, och ensamma rader visades utan att deras kvalitet prövades (granskningen 2026-10-05, M-1 till M-5). Planens avsnitt "M4-implementering" i navets `docs/GATEWARE_PLAN.md` beskriver den äldre mixern.
 
 | Signal | Dekoder A | Dekoder B |
 |---|---|---|
@@ -212,9 +221,9 @@ Lysdioder (tänd = sant): LED0 hjärtslag, 1 Hz när båda dekodrarna svarar på
 
 Alla 28 lediga stift används. 148,5 MHz över stiftlistetrådar är på gränsen — korta trådar, gärna jord emellan; detta steg är främst till för att verifiera glasögonen och LT8618SX-sekvensen innan rev A.
 
-FPGA:n kör LT8618SX-sekvensen (`../research/LT8618SX_INIT.md`) efter uppstart. Osäkert och därför lätt att ändra: I2C-adressen (`lt8618_ctrl` parameter `DEV`, antagen 39h = 72h i 8-bitsform), klockflanken (`CLK_INVERT` i toppen, eller LT-register 82:4F) och om LT:n behöver radnummer/CRC efter EAV (finns inte). Lysdioder: LED0 hjärtslag, LED1 BT.656-rader, LED2 SDRAM klart, LED3 halvbild visas, LED4 LT8618SX-sekvensen klar, LED5 LT8618SX-fel (inget I2C-svar eller TX-PLL olåst).
+FPGA:n kör LT8618SX-sekvensen efter uppstart (anteckningen `LT8618SX_INIT.md` är inte publicerad, se rutan ovan). Osäkert och därför lätt att ändra: I2C-adressen (`lt8618_ctrl` parameter `DEV`, antagen 39h = 72h i 8-bitsform), klockflanken (`CLK_INVERT` i toppen, eller LT-register 82:4F) och om LT:n behöver radnummer/CRC efter EAV (finns inte). Lysdioder: LED0 hjärtslag, LED1 BT.656-rader, LED2 SDRAM klart, LED3 halvbild visas, LED4 LT8618SX-sekvensen klar, LED5 LT8618SX-fel (inget I2C-svar eller TX-PLL olåst).
 
-Var hittar man en LT8618SX att koppla till? Ingen färdig breakout är verifierad än (se `../design/REV_A_KONCEPT.md`). Det här bygget är förberett för den dagen — eller för rev A, där samma gateware används.
+Var hittar man en LT8618SX att koppla till? Ingen färdig breakout är verifierad än (se `design/REV_A_KONCEPT.md` i OpenVRX-Puck). Det här bygget är förberett för den dagen — eller för rev A, där samma gateware används.
 
 ## M6 — puckprototyp steg 1 (M4 + meny, RX5808, OLED)
 
@@ -253,15 +262,15 @@ B   2345 ######
 ```
 Talen är medel-HF-energin per bildrad (summan |Y[n]−Y[n−1]|, samma mått som mixern väljer på) över 1 024 rader (≈ 65 ms) per mottagare. Stapeln är logaritmisk: ett block per fördubbling över 32. `  ----` betyder att inga rader kommer från den mottagaren. USE = andel av de senaste 1 024 mixerbesluten som visade A, B eller en blandning. Talen räknas om i `snow_stats.v` (mixerns klockdomän) och visas via en sekventiell decimalomvandlare (`bin2bcd.v`).
 
-Används för egenstörningsmätningen i `../design/PUCK_2027_KONCEPT.md` ("Inbyggt mätinstrument"): stillastående kamera, VTX på fast avstånd, jämför värdena med HDMI på/av, kanal F4 mot andra kanaler, mottagarna på olika avstånd och med/utan skärmburk. Måttet beror också på bildinnehållet, så bara jämförelser med samma motiv betyder något.
+Används för egenstörningsmätningen i `design/PUCK_2027_KONCEPT.md` i OpenVRX-Puck ("Inbyggt mätinstrument"): stillastående kamera, VTX på fast avstånd, jämför värdena med HDMI på/av, kanal F4 mot andra kanaler, mottagarna på olika avstånd och med/utan skärmburk. Måttet beror också på bildinnehållet, så bara jämförelser med samma motiv betyder något.
 
-**OSD i videon** (`osd_overlay.v`): samma fyra rader som OLED:n, 3× förstorade, vita på en halvmörk platta längst ned i 4:3-fönstret (x 176, y 576 i 720p). Syns i 5 s efter varje knapptryck och hela tiden på mätarsidan, så att menyn går att använda med XR-glasögonen på. Pixelexakt testad (`sim/test_osd.py`).
+**OSD i videon** (`osd_overlay.v`): samma fyra rader som OLED:n, 3× förstorade, vita på en halvmörk platta längst ned i 4:3-fönstret (x 176, y 576 i 720p). Syns i 5 s efter varje knapptryck och hela tiden på mätarsidan, så att menyn går att läsa i bilden, utan att se på pucken. Pixelexakt testad (`sim/test_osd.py`).
 
 **Mätlogg över USB** (`uart_tx.v`, PIN69 → kortets BL616 USB-UART, 115200 8N1): en rad per mätfönster (≈ 15/s):
 ```
-S 012345 002345 040 034 025 F4 5800 MIX
+S 012345 002345 040 034 025 F4 5800 MIX -
 ```
-snö A, snö B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, läge. På datorn:
+snö A, snö B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, läge, och sist `!` om mixern sedan start har tappat en rad för att dess radplatser var fulla (annars `-`). På datorn (Windows: `COM5` i stället för `/dev/ttyUSB1`; den vägen är inte provad mot en riktig port):
 ```
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_pa --seconds 30 --out emi.csv
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_av --seconds 30 --out emi.csv
@@ -271,27 +280,41 @@ python gateware/tools/snowlog.py --summary emi.csv
 
 Ingen RSSI ännu: RX5808:s RSSI är analog och Tang Nano 20K saknar ADC. Det kommer med en extern I2C-ADC eller med GW5A-25:s inbyggda ADC.
 
-## Låglatensläge (`LOW` i menyn, `LOW_LATENCY=1` i M4)
+## Bildvägen efter mixern: `BUF` och `LOW`
 
-Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i FPGA:ns block-RAM, och 720p-utgången låses till ingångens fält (`genlock_timing.v`). Varje utbild startar när rad 1 i ett nytt fält har kommit, och raderna läses medan de kommer in.
+Två lägen, valbara i menyn medan det kör (`LOW_LATENCY=1` i M4 väljer `LOW`).
 
-| | `BUF` (SDRAM-trippelbuffert) | `LOW` (ringbuffert, genlock) |
+**`BUF`** (`rtl/fb_sdram.v`): fälten skrivs till fyra buffertar i SDRAM, och utgången går i fast 720p60.
+- Vilken buffert en bild visar bestäms i SDRAM-domänen, där skrivaren finns, vid bildens första radbegäran. Skrivaren får aldrig bufferten som visas, dess reserv eller den nyss publicerade. (Förut skickade visningen sitt val över klockdomänsgränsen, och en källa snabbare än utgången kunde få bufferten som visades.)
+- En bild visar fältet som håller på att skrivas om skrivaren ligger minst 4 rader före (44 för fält över 270 rader, som en 60 Hz-utgång läser fortare än de kommer). Annars visas senaste hela fält. `RT_EN = 0` ger bara hela fält.
+- En bit per rad och buffert säger att raden är lagrad i sin helhet. En rad som saknas ersätts av raden ovanför (högst två i följd) och därefter av samma rad i fältet före. Visningen får alltså aldrig en halvskriven rad, vad skrivaren än gör.
+- Bilden skalas efter det mindre av de två senaste fältens radantal när de skiljer högst 2 rader (243/244, 287/288). Ett avklippt fält ändrar inte skalan.
+
+**`LOW`**: utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i FPGA:ns block-RAM, och 720p-utgången låses till ingångens fält (`genlock_timing.v`). Varje utbild startar när rad 1 i ett nytt fält har kommit, och raderna läses medan de kommer in.
+
+| | `BUF` | `LOW` |
 |---|---|---|
-| Fördröjning ingång → HDMI | ett helt fält plus väntan på nästa utbild: ca 17–50 ms, varierande | ca 0,1 ms överst i bilden, ca 0,8 ms nederst, konstant |
-| Utgång vid NTSC | 720p60,00 (fält upprepas ibland) | 720p 59,94 Hz (bilder om 750/751 rader) |
+| Översta radens ålder när den visas, NTSC | 0,3–17 ms. Räknat ur radtiderna; `sim/test_fb.py` visar vinsten på ett fält i en nedskalad bild. Med `RT_EN = 0`: 17–33 ms | ca 0,1 ms överst i bilden, ca 0,8 ms nederst |
+| Utgång vid NTSC | 720p60,00, ett fält visas två gånger var 17:e sekund | 720p 59,94 Hz (bilder om 750/751 rader) |
 | Utgång vid PAL | 720p60 (var 5:e fält upprepas, ryckigt) | 720p50 (CEA-861-radlängd 1980) |
 | Ingen signal | grå ruta | grå ruta, utgången frigår |
-| Tappad rad | syns inte (hela fält visas) | raden visar vad som fanns i platsen 16 rader tidigare |
+| Rad som saknas | raden ovanför, därefter förra fältets rad | det som fanns i ringens plats 16 rader tidigare |
+| Falsk fältstart, brus på ingången | påverkar inte utgångens timing | en tidig trigger ignoreras; tre i följd ger en kort bild, sedan ingen fler på 32 bilder |
 
-**Varför det fungerar:** utgången skannar varje källrad långsammare (3 × 22,2 µs) än ingången levererar den (63,6 µs). Läsaren kan alltså aldrig gå om skrivaren, och skrivaren ligger högst cirka 13 rader före (därav 16 platser). Upplösningen är densamma i båda lägena, så läget går att byta medan det kör. Vid byte mellan PAL och NTSC i `LOW` ändras bildfrekvensen, och skärmen synkar om (1–2 s).
+Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning (dess kamfilter arbetar över flera rader) och skärmens kommer till.
 
-**Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751). CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. Prova på Moneagle-monitorn, XR-glasögonen och en TV innan läget blir standard. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell, uppmätt fördröjning).
+**Fälten ligger en halv rad isär.** Fälten i en sammanflätad bild kommer omväxlande en radtid längre och en radtid kortare isär (263/262 rader i NTSC). `field_phase.v` avgör på ankomsttiden vilket fält som är det nedre, inte på F-biten: en TVP5150AM1 håller F på 1 när den tar signalen för icke sammanflätad. `fb_display.v` ritar det nedre fältet en halv källrad lägre (`BOB = 0` stänger av det). I `LOW` fördröjs dessutom bildstarten för det tidiga fältet med halva skillnaden, så att utbilderna blir lika långa; utan det växlar de med tre rader (`LL_EQ = 0`).
+
+**Varför `LOW` fungerar:** utgången skannar varje källrad långsammare (3 × 22,2 µs) än ingången levererar den (63,6 µs). Läsaren kan alltså aldrig gå om skrivaren, och skrivaren ligger högst cirka 13 rader före (därav 16 platser). Upplösningen är densamma i båda lägena, så läget går att byta medan det kör. Vid byte mellan PAL och NTSC i `LOW` ändras bildfrekvensen, och skärmen synkar om (1–2 s).
+
+**Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751), och vad en skärm gör med den korta bilden vid omlåsning är inte känt. CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. XR-glasögon tar enligt navets anteckningar inte emot 720p alls; `LOW` är för skärmar och goggles som gör det. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell) och `sim/test_fb.py` (lika långa bilder, fält utan rad 1, falsk fältstart, källa som flyttar sig).
 
 ## Apicula-fällor (från otanl/CVBS2HDMI, kontrollerade 2026-10-04)
 
 - **Signerade jämförelser** har felkompilerats av Apicula (seed-beroende). `tmds_encoder.v` och `ycbcr2rgb.v` är omskrivna utan signerad aritmetik och bitexakt kontrollerade mot de gamla versionerna (alla 16,7 miljoner YCbCr-värden, plus en lång slumpsekvens genom TMDS-kodaren). Ingen annan modul använder `signed`.
 - **Insignaler i samma I/O-bank som HDMI** (bank 5: stift 26–31, där dekoder A:s buss ligger) packades i en nyare Apicula som LVDS-mottagare. **Vår Apicula 0.32 gör inte det.** `tools/test_lvds_bank_inputs.py` bygger två små designer, med och utan LVDS-utgång i banken, och kräver att insignalernas IOB-fuses är identiska. En riktig LVDS-mottagare som negativ kontroll visar att testet ser skillnaden. Kör testet efter varje Apicula-uppgradering. Om det fallerar: packa via en omslagare som CVBS2HDMI:s `scripts/gowin_pack_io.py` (MIT).
 - Inga `DRIVE=`/`BANK_VCCIO=` på LVDS25-stift (gäller redan våra cst-filer).
+- **Vanliga utgångar i HDMI-parens banker** (stift 25–42) ändrar hur Apicula packar klockparet. `tools/test_tmds_bank_outputs.py` vaktar cst-filerna, och `tools/tmds_fuses.py` jämför färdiga bitströmmar mot M0. Kör testet efter varje Apicula-uppgradering.
 
 ## M3 — uppstartsprob
 
@@ -299,11 +322,16 @@ Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i
 
 ## Formella bevis
 
-`formal/run.sh` (cirka 15 s, ingår i testsviten via `tools/test_formal.py`) bevisar med k-induktion i yosys, utan extern lösare:
+`formal/run.sh` (cirka en minut, ingår i testsviten via `tools/test_formal.py`) bevisar med k-induktion i yosys, utan extern lösare:
 
 | Modul | Bevisat | Negativ kontroll |
 |---|---|---|
 | `async_fifo.v` (djup 4 och 8) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under |
-| `genlock_timing.v` | med fria lock/trig/h_alt: räknarna håller sig inom gränserna, och varje bild slutar inom V_TOTAL + MAX_WAIT rader | utan väntegränsen kan en bild stå still |
+| `genlock_timing.v` | med fria lock/trig/h_alt: räknarna håller sig inom gränserna, varje bild slutar inom V_TOTAL + MAX_WAIT rader, varje bild som inte är en avsiktlig omlåsning har minst V_TOTAL − 1 rader, och två omlåsningar ligger minst HOLD bildstarter isär | utan väntegränsen kan en bild stå still; med två överhoppade rader blir en bild för kort; utan spärrtiden kan två korta bilder följa på varandra |
 
 Egenskaperna står i modulerna inom `ifdef FORMAL`. Klockdomänshandskakningarna i `fb_backend.v` är inte bevisade än.
+
+## Bygget av M6
+
+- **Seed.** Med seed 0 och 1 kan nextpnr inte lägga kortets klocka på det globala klocknätet ("Can't route the clocks.clk_27 net"); med seed 2 och 3 går det. Orsaken är inte utredd, och M4 ur samma träd bygger med seed 0. `boards/m6_puck_proto.seed` håller därför seed 2, och `build.sh` tar `SEED=<n>` och säger till när klockroutningen misslyckas. Efter en ändring i M6 kan ett annat seed behövas.
+- **27 MHz-domänen** når 64–69 MHz. Den kritiska vägen är menyns frekvensräkning i `puck_ui.v`. `boards/m6_puck_proto.sdc` begär 54 MHz av den klockan, dubbla dess frekvens; övriga klockor får 75 MHz som i de andra byggena.
