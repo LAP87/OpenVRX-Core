@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (64 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (67 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -140,7 +140,7 @@ Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per d
 
 M4 ställer själv båda mottagarna på F4 5800 MHz (`rtl/rx5808_tune.v`, samma stift som M3 och M6): 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst. Testat mot en modell av regeln i `sim/test_rx5808_tune.py`.
 
-RESETB låg på PIN25 (J6-10) till 2026-10-05. Stift 25–42 (bank 4 och 5) bär HDMI-paren, och en vanlig utgång där ändrar hur Apicula packar klockparet: se [BRINGUP.md](BRINGUP.md) avsnitt 5. Stiften till lysdiod 3–5 används därför som stiftlistestift (J6-18, J6-17, J6-16), och toppmodulerna M3, M4 och M6 har bara tre lysdioder.
+RESETB låg på PIN25 (J6-10) till 2026-10-05. Stift 25–42 (bank 4 och 5) bär HDMI-paren, och en vanlig utgång där ändrar hur Apicula packar klockparet: se [BRINGUP.md](BRINGUP.md) avsnitt 5. Stiften till lysdiod 3–5 används därför som stiftlistestift (J6-18, J6-17, J6-16), och toppmodulerna M3, M4 och M6 har bara tre lysdioder. `tools/test_tmds_bank_outputs.py` vaktar att ingen toppmodul med HDMI har en vanlig utgång eller in/utgång på stift 25–42, och `tools/tmds_fuses.py` jämför färdiga bitströmmars HDMI-par mot M0. Kör testet efter varje Apicula-uppgradering, som `tools/test_lvds_bank_inputs.py`.
 
 Lysdioder (tänd = sant): LED0 hjärtslag, 1 Hz när båda dekodrarna svarar på I2C och rapporterar H- och V-lås, annars 4 Hz. LED1 rader från A, LED2 rader från B. Testat i simulering av hela toppmodulen (`sim/test_top_pins.py`).
 

@@ -165,4 +165,13 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 
 **Inga utgångar på stift 25–42.** Bank 4 och 5 bär HDMI-paren. Apicula 0.32 sätter `BANK_VCCIO` för hela banken efter bankens första vanliga utgång, och då packas HDMI-klockparet annorlunda än i M0. RESETB låg tidigare på stift 25 (som dessutom går till HDMI-CEC genom 100 Ω) och är därför flyttad till stift 18. Dekodrarnas databitar på 26–31, 41 och 42 är ingångar och påverkar inte packningen (`tools/test_lvds_bank_inputs.py`).
 
+`tools/test_tmds_bank_outputs.py` vaktar regeln: det läser toppmodulernas portar mot cst-filerna, och det bygger små testdesigner som visar att en utgång på stift 18 lämnar HDMI-parens IOB-fuses orörda medan en på stift 25 eller 41 ändrar dem. Efter ett bygge jämför `tools/tmds_fuses.py` de färdiga bitströmmarnas HDMI-par mot M0:
+
+```bash
+gateware/build.sh m0_testpattern && gateware/build.sh m4_dual_mix && gateware/build.sh m6_puck_proto
+.venv/bin/python gateware/tools/tmds_fuses.py
+```
+
+Om en skärm faktiskt bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
+
 Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15). Ändringen görs i `boards/*.cst` och `top/*.v`.

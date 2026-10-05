@@ -13,7 +13,7 @@
 // FPGA configuration pins (52 = SSPI SCLK, 53 = DOUT), so they are avoided.
 // RESETB must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for
 // a whole bank from its first single-ended output, and that changes the IOB
-// fuses of the TMDS pairs there.
+// fuses of the TMDS pairs there (tools/test_tmds_bank_outputs.py).
 `default_nettype none
 module m6_puck_proto #(
     parameter CLK_HZ = 27_000_000         // board clock; a testbench shortens the millisecond timers with it

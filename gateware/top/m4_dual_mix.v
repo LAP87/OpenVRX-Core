@@ -10,7 +10,7 @@
 // the RX5808 SPI DATA on 19 (J6-17) and SEL on 20 (J6-16).
 // RESETB must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for
 // a whole bank from its first single-ended output, and that changes the IOB
-// fuses of the TMDS pairs there.
+// fuses of the TMDS pairs there (tools/test_tmds_bank_outputs.py).
 `default_nettype none
 module m4_dual_mix #(
     parameter LOW_LATENCY = 0,            // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
