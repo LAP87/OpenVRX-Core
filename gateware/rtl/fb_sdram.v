@@ -131,13 +131,16 @@ module fb_sdram #(
     reg [9:0]  rep_line;
     reg [1:0]  miss;                     // lines in a row missing from the shown field (saturates)
 
-    // stored-line bits: 4 buffers x 1024 lines, 8 lines per byte
-    reg        ok_we;
+    // stored-line bits: 4 buffers x 1024 lines, 8 lines per byte. A byte that is read in the
+    // cycle it is written comes from the write (what a block RAM returns then is not defined).
+    reg        ok_we, fw_hit;
     reg [8:0]  ok_wa, ok_ra;
-    reg [7:0]  ok_wd;
-    wire [7:0] ok_rd;
+    reg [7:0]  ok_wd, fw_data;
+    wire [7:0] ok_q;
     dual_clock_ram #(.DEPTH(512), .AW(9), .W(8)) okram (
-        .wclk(clk), .we(ok_we), .waddr(ok_wa), .wdata(ok_wd), .rclk(clk), .raddr(ok_ra), .rdata(ok_rd));
+        .wclk(clk), .we(ok_we), .waddr(ok_wa), .wdata(ok_wd), .rclk(clk), .raddr(ok_ra), .rdata(ok_q));
+    always @(posedge clk) begin fw_hit <= ok_we && ok_wa == ok_ra; fw_data <= ok_wd; end
+    wire [7:0] ok_rd = fw_hit ? fw_data : ok_q;
 
     wire new_field  = e_field != cur_field || e_line < last_line;
     wire breaks_grp = (grp_mask != 0) && (e_line != grp_line || e_idx[8:3] != grp_base);

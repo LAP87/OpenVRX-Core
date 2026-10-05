@@ -69,10 +69,12 @@ module tb_fb;
     reg        look3_d = 0, w_have = 0, w_f, trig_d = 0;
     reg [9:0]  w_line;
     reg        rd_bad;
-    always @(posedge sd_clk) if (!rst && dut.fb.resetn) begin
+    always @(posedge sd_clk) if (!rst && (dut.fb.resetn || LL != 0)) begin
         if (dut.fb.first)
             $fwrite(fs, "D %0d %0d %0d %0d %0d %0d\n", dut.fb.s_dec, dut.fb.p_dec, dut.fb.pok_dec,
                     dut.fb.d_cur ? dut.fb.ph_low : dut.fb.low_of[dut.fb.latest], dut.fb.rt_now, cyc);
+        // a line stored at this edge is seen by a request accepted at the same edge, but not by the frame decision
+        if (dut.fb.stored) $fwrite(fs, "M %0d\n", dut.fb.grp_line);
         if (dut.fb.accept) $fwrite(fs, "F %0d\n", dut.fb.fetch_line);
         look3_d <= dut.fb.look == 2'd3;
         if (look3_d) $fwrite(fs, "S %0d %0d\n", dut.fb.f_buf, dut.fb.f_src);
@@ -80,7 +82,6 @@ module tb_fb;
         if (dut.fb.publish)
             $fwrite(fs, "N %0d %0d %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.cur_buf, dut.fb.n_now, dut.fb.nxt);
         if (dut.fb.pub_valid) $fwrite(fs, "P %0d\n", dut.fb.pub_lines);
-        if (dut.fb.stored) $fwrite(fs, "M %0d\n", dut.fb.grp_line);
         if (dut.fb.take && (!w_have || w_f != dut.fb.e_field || w_line != dut.fb.e_line)) begin
             $fwrite(fs, "W %0d %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.e_idx, cyc);
             w_have <= 1; w_f <= dut.fb.e_field; w_line <= dut.fb.e_line;

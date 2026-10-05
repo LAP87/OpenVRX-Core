@@ -103,8 +103,9 @@ module fb_backend #(
     assign sdram_ready = init_done;
 
     wire fb_pop;
+    // held in reset in low-latency mode, so that it starts empty when the mode is left
     fb_sdram #(.RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT)) fb (
-        .clk(sd_clk), .resetn(~srst & init_done),
+        .clk(sd_clk), .resetn(~srst & init_done & ~ll_s),
         .in_empty(f_empty | ll_s), .in_data(f_data), .in_pop(fb_pop),
         .fetch_req(s_fetch_req), .fetch_first(s_fetch_first), .fetch_line(s_fetch_line), .fetch_slot(s_fetch_slot),
         .lb_we(lb_we), .lb_addr(lb_waddr), .lb_data(lb_wdata),
