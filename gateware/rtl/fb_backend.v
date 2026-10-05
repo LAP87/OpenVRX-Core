@@ -29,6 +29,7 @@ module fb_backend #(
     parameter H_ACTIVE = 1280, H_FP = 110, H_SYNC = 40, H_BP = 220,
     parameter V_FP = 5, V_SYNC = 5,
     parameter SDRAM_FREQ = 64_800_000,
+    parameter [4:0] RD_SAMPLE = 5'd0,       // SDRAM read sample point; 0 = sdram_burst's default
     parameter H_WIN0 = 160, H_WIN = 960, H_HALF = 0,
     parameter H_FP_ALT = 440,               // 720p50 front porch, low-latency mode with PAL input
     parameter BOB = 1,                      // fb_display.v
@@ -97,7 +98,7 @@ module fb_backend #(
     sdram_burst #(.FREQ(SDRAM_FREQ)) sdram (
         .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
         .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .SDRAM_DQM(SDRAM_DQM),
-        .clk(sd_clk), .clk_sdram(sd_clk_shift), .resetn(~srst),
+        .clk(sd_clk), .clk_sdram(sd_clk_shift), .resetn(~srst), .rd_sample(RD_SAMPLE),
         .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
         .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid), .init_done(init_done));
     assign sdram_ready = init_done;

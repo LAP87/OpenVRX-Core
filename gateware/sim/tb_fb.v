@@ -20,6 +20,9 @@ module tb_fb;
     reg sd_clk = 0, pix_clk = 0, rst = 1;
     always #(T_S / 2) sd_clk = ~sd_clk;
     always #(T_P / 2) pix_clk = ~pix_clk;
+    // SDRAM clock as from clocks_sdram.v: sd_clk shifted 225 degrees
+    reg sd_clk_shift = 0;
+    always @(sd_clk) sd_clk_shift <= #(0.625 * T_S) sd_clk;
 
     // ---- source: lines.hex entries {start cycle[31:0], field, line[9:0], tag[11:0]}
     reg [54:0] src [0:N_LINES-1];
@@ -54,14 +57,17 @@ module tb_fb;
     fb_backend #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .SDRAM_FREQ(5_000_000),
                  .BOB(BOB), .RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT),
                  .LL_EQ(LL_EQ), .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD)) dut (
-        .sd_clk(sd_clk), .sd_clk_shift(~sd_clk), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(LL != 0),
+        .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(LL != 0),
         .f_empty(f_empty), .f_data(f_data), .f_pop(f_pop),
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe), .SDRAM_nRAS(nras),
         .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hsync), .vsync(vsync), .yo(yo), .cbo(cbo), .cro(cro), .tx(tx), .ty(ty),
         .have_video(have_video), .sdram_ready(sdram_ready));
-    sdram_model #(.AW(21)) mem (.clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
-                                .ba(ba), .a(a), .dqm(dqm), .dq(dq));
+    // As in tb_m2.v: SDRAM_FREQ above shortens the controller's power-up wait, so the model is told 15 us;
+    // refresh is checked over 8 refreshes; STRICT ends the simulation at the first protocol error.
+    sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8), .STRICT(1)) mem (
+        .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
+        .ba(ba), .a(a), .dqm(dqm), .dq(dq));
 
     // ---- SDRAM domain log. Order within a cycle: what the display asked and was told,
     // then what the writer did (the model replays the lines in this order).

@@ -2,30 +2,60 @@
 // SDRAM (2K rows x 256 columns x 4 banks x 32 bit).
 //
 // Derived from nand2mario's byte controller (github.com/nand2mario/sdram-tang-nano-20k,
-// via Seyviour/sdram-tang-nano-20k-os-example for the open toolchain): same
-// init sequence, timing parameters and DQ sampling point, which are proven on
-// hardware at 64.8 MHz. Changed to 32-bit words, burst length 8 (one request
-// moves 8 consecutive words of a row) and internal refresh.
+// via Seyviour/sdram-tang-nano-20k-os-example for the open toolchain): the state
+// machine, the init sequence and the rule "sample read data CAS+1 clocks after
+// the READ command". Changed here: 32-bit words, burst length 8 (one request
+// moves 8 consecutive words of a row), internal refresh, and T_RCD/T_RP/T_RC
+// of 2/2/6 clocks instead of 1/1/4. Both upstream repositories are under the
+// Apache License 2.0; their sdram.v carries the author's name, nand2mario,
+// and no other notice.
+//
+// What is proven on hardware and what is not (upstream sources read 2026-10-05):
+//  * nand2mario's example runs at 27 MHz. NESTang (src/sdram_nes.v) runs this
+//    SDRAM at 64.8 MHz. Both give the SDRAM a clock shifted 225 degrees, read
+//    single words (burst length 1) and sample them CAS+1 clocks after READ.
+//  * This controller has not run on hardware, and its 8-word bursts are not
+//    covered by upstream. In a burst each word leaves the bus tOH (2.5 ns)
+//    after the next SDRAM clock edge and the following one is valid tAC (6 ns)
+//    after it; a single word stays on the released bus. So here the sample
+//    point must hit a window of one clock period less 3.5 ns, and where that
+//    window lies depends on the board's clock and data delays, which nobody
+//    has measured.
+//  * 2/2/6 are the values NESTang declares (its start-up sequence uses T_RP
+//    and T_RC; its accesses issue READ one or two clocks after ACTIVATE,
+//    depending on the port). The EM638325-6 datasheet figures that
+//    sim/sdram_model.v checks (tRCD and tRP 18 ns, tRC 60 ns) need 2/2/4 at
+//    64.8 MHz; 1/1 are 15.4 ns and do not meet them.
 //
 // Request: hold req_valid with req_write and req_addr (word address, low 3 bits
-// ignored) until req_ready. Writes: wdata is taken on each wdata_take pulse
-// (8 pulses, first one together with the request acceptance cycle + T_RCD).
-// Reads: 8 rdata_valid pulses.
+// ignored) until req_ready. Writes: wdata is taken at the end of each cycle in
+// which wdata_take is high (8 cycles, starting T_RCD cycles after the request
+// was accepted). Reads: 8 rdata_valid pulses.
 //
-// RD_SAMPLE: cycle (counted from ACTIVATE = 0) at whose end word 0 is sampled.
-// nand2mario samples at T_RCD+CAS+1; keep that unless hardware tests show a
-// shifted read (then adjust by +-1).
+// Read sample point: the cycle (counted from ACTIVATE = 0) at whose end word 0
+// is sampled. The default, parameter RD_SAMPLE, is CAS+1 clocks after READ, as
+// upstream. With the 225-degree clock that is 0.375 period (5.8 ns) after the
+// SDRAM clock edge at which the word is valid. The word is at the controller's
+// flip-flops then if the delay of the clock to the SDRAM plus that of the data
+// back is between 3.3 and 15.2 ns (sim/test_sdram.py checks both limits).
+// Outside that window the read is shifted by a word or broken, and another
+// sample point or another clock phase is needed. top/m2a_memtest.v shows on
+// the board which sample point reads correctly.
+//
+// rd_sample selects the sample point at run time, per read: it is taken when
+// the request is accepted. T_RCD+CAS .. T_RCD+CAS+3 are used as given; any
+// other value, such as a port tied to 0, means RD_SAMPLE.
 `default_nettype none
 
 module sdram_burst #(
     parameter         FREQ = 64_800_000,
     parameter [3:0]   CAS  = 4'd2,
-    parameter [3:0]   T_WR = 4'd2,
-    parameter [3:0]   T_MRD= 4'd2,
-    parameter [3:0]   T_RP = 4'd1,
-    parameter [3:0]   T_RCD= 4'd1,
-    parameter [3:0]   T_RC = 4'd4,
-    parameter [4:0]   RD_SAMPLE = 5'd4,       // = T_RCD + CAS + 1
+    parameter [3:0]   T_WR = 4'd2,            // clocks: write recovery
+    parameter [3:0]   T_MRD= 4'd2,            // clocks: mode register set to the next command
+    parameter [3:0]   T_RP = 4'd2,            // clocks (15.43 ns each): precharge to the next command
+    parameter [3:0]   T_RCD= 4'd2,            // clocks: ACTIVATE to READ/WRITE
+    parameter [3:0]   T_RC = 4'd6,            // clocks: refresh to the next command
+    parameter [4:0]   RD_SAMPLE = 5'd5,       // default read sample point = T_RCD + CAS + 1
     parameter         REFRESH_EVERY = 480     // cycles (~7.4 us at 64.8 MHz; spec: 4096 per 64 ms)
 ) (
     inout  wire [31:0] SDRAM_DQ,
@@ -40,8 +70,9 @@ module sdram_burst #(
     output reg  [3:0]  SDRAM_DQM,
 
     input  wire        clk,
-    input  wire        clk_sdram,             // clk shifted 180 degrees
+    input  wire        clk_sdram,             // clk shifted 225 degrees (clocks_sdram.v)
     input  wire        resetn,
+    input  wire [4:0]  rd_sample,             // read sample point, 0 = RD_SAMPLE (see the header)
 
     input  wire        req_valid,
     input  wire        req_write,
@@ -72,6 +103,8 @@ module sdram_burst #(
     reg        refresh_due;
     reg [11:0] refresh_cnt;
     reg        cfg_now;
+    reg [4:0]  rs;                            // sample point of the read in progress
+    wire       rs_usable = (rd_sample >= T_RCD + CAS) && (rd_sample <= T_RCD + CAS + 3);
 
     assign req_ready = (state == IDLE) && !refresh_due;
 
@@ -110,15 +143,17 @@ module sdram_burst #(
                 SDRAM_BA <= req_addr[20:19];
                 SDRAM_A  <= req_addr[18:8];
                 addr_buf <= req_addr;
+                rs <= rs_usable ? rd_sample : RD_SAMPLE;
                 state <= req_write ? WRITE : READ;
                 cycle <= 5'd1;
-                if (req_write) wdata_take <= 1'b1;     // word 0 is latched next cycle
+                if (req_write && T_RCD == 4'd1) wdata_take <= 1'b1;    // word 0 is latched next cycle
             end
         end
 
-        // write: cycle T_RCD issues WRITE with word 0, words 1..7 follow on consecutive cycles
+        // write: cycle T_RCD issues WRITE with word 0, words 1..7 follow on consecutive cycles.
+        // wdata_take is high during cycles T_RCD .. T_RCD+7.
         WRITE: begin
-            if (cycle < T_RCD + 7) wdata_take <= 1'b1;
+            if (cycle + 5'd1 >= T_RCD && cycle < T_RCD + 7) wdata_take <= 1'b1;
             if (cycle == T_RCD) begin
                 {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_Write;
                 SDRAM_A[10] <= 1'b1;                                   // auto precharge
@@ -141,11 +176,11 @@ module sdram_burst #(
                 SDRAM_A[9:0] <= {2'b00, addr_buf[7:3], 3'b000};
                 SDRAM_DQM <= 4'b0000;
             end
-            if (cycle >= RD_SAMPLE && cycle < RD_SAMPLE + 8) begin
+            if (cycle >= rs && cycle < rs + 8) begin
                 rdata <= SDRAM_DQ;
                 rdata_valid <= 1'b1;
             end
-            if (cycle == RD_SAMPLE + 8 + T_RP) state <= IDLE;
+            if (cycle == rs + 8 + T_RP) state <= IDLE;
         end
 
         REFRESH: if (cycle == T_RC) state <= IDLE;
