@@ -63,6 +63,7 @@ module puck_ui #(
     output reg  [6:0]  osd_char,
     output wire        osd_show,
     // measurement log over the board's USB-UART (one line per meter window, see below)
+    input  wire        mix_overflow,      // any domain, level: the mixer has dropped a line since reset
     output wire        uart_txd,
     // state (tests, LEDs)
     output reg  [2:0]  band,
@@ -267,8 +268,9 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || page;
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb ua_ ub_ um_ Bc ffff MOD\r\n"  (41 bytes, zero-padded, ------ = no lines)
-    //   snow A, snow B, % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B)
+    //   "S aaaaaa bbbbbb ua_ ub_ um_ Bc ffff MOD o\r\n"  (43 bytes, zero-padded, ------ = no lines)
+    //   snow A, snow B, % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B),
+    //   o = "!" once the mixer has dropped a line because its line slots were full, else "-"
     function [47:0] z6(input [23:0] b, input stale);
         integer i;
         begin
@@ -279,14 +281,16 @@ module puck_ui #(
     function [23:0] z3(input [11:0] b);
         z3 = {8'h30 + b[11:8], 8'h30 + b[7:4], 8'h30 + b[3:0]};
     endfunction
-    wire [327:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
+    reg  [1:0] ovf_s;
+    always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
+    wire [343:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
-                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, 16'h0D0A};
-    localparam LOG_LEN = 41;
+                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ", ovf_s[1] ? "!" : "-", 16'h0D0A};
+    localparam LOG_LEN = 43;
     reg  [8:0] log_wait;
     reg  [5:0] log_i;
     reg        log_active, u_send;
-    reg  [327:0] log_buf;
+    reg  [343:0] log_buf;
     wire       u_busy;
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));

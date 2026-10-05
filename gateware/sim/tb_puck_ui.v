@@ -23,6 +23,7 @@ module tb_puck_ui;
     wire osd_show, txd;
     wire [6:0] osd_char;
     reg  [1:0] dec_locked = 2'b01;                // decoder A locked, B not
+    reg  mix_overflow = 0;                        // set after the "final" mark
     // RX5808: first write 5 ms after reset, repeats every 40 ms while no decoder is locked
     puck_ui #(.CLK_HZ(1_000_000), .DEBOUNCE_MS(3), .OSD_MS(150), .BAUD(50_000),
               .RX_FIRST_MS(5), .RX_REPEAT_MS(40)) ui (
@@ -32,7 +33,8 @@ module tb_puck_ui;
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
         .rx_spi_clk(sclk), .rx_spi_data(sdat), .rx_spi_sel_n(sel_n),
         .text_row(row), .text_col(col), .text_char(chr),
-        .osd_row(2'd0), .osd_col(5'd0), .osd_char(osd_char), .osd_show(osd_show), .uart_txd(txd),
+        .osd_row(2'd0), .osd_col(5'd0), .osd_char(osd_char), .osd_show(osd_show),
+        .mix_overflow(mix_overflow), .uart_txd(txd),
         .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat));
 
     wire scl_low, sda_low, s_low, hold, frame_done, nack_error;
@@ -110,6 +112,7 @@ module tb_puck_ui;
         view_b = 1;
         wait_frames(2);
         $display("MARK final force=%b band=%0d ch=%0d mode=%0d field=%0d", force_bad, band, ch, mode, field);
+        mix_overflow = 1;
         press(0);                                 // field -> latency
         press(1);                                 // BUF -> LOW
         wait_frames(2);

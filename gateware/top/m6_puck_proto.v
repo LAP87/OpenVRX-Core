@@ -88,7 +88,8 @@ module m6_puck_proto #(
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
-                .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show), .uart_txd(uart_txd),
+                .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
+                .mix_overflow(overflow), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat));
     assign i2c_scl = (scl_low | oled_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low) ? 1'b0 : 1'bz;
