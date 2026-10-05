@@ -4,6 +4,7 @@
 #   gateware/build.sh m0_testpattern
 #   PULL=UP gateware/build.sh m3_probe      # weak pull-ups (or DOWN) on the decoder data pins: pull test
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
+#   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
 # Output: gateware/build/<top>.fs (with PULL: <top>_pullup.fs / _pulldown.fs; with SDRAM_PHASE: <top>_phase12.fs)
 # — flash with openFPGALoader -b tangnano20k <file>
 set -euo pipefail
@@ -37,9 +38,17 @@ fi
 # optional per-clock constraints (boards/<top>.sdc); --freq covers clocks it does not name
 sdc=()
 if [ -f "$here/boards/$top.sdc" ]; then cp "$here/boards/$top.sdc" "$top.sdc"; sdc=(--sdc "$top.sdc"); fi
+# Place-and-route seed. With some seeds nextpnr cannot put the board clock on the global clock network
+# ("Can't route the clocks.clk_27 net"); a top that has met that keeps a seed that works in boards/<top>.seed.
+seed="${SEED:-}"
+if [ -z "$seed" ] && [ -f "$here/boards/$top.seed" ]; then seed="$(tr -dc '0-9' < "$here/boards/$top.seed")"; fi
 "$bin/yowasp-nextpnr-himbaechel-gowin" --json "$top.synth.json" --write "$top.pnr.json" \
   --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst="$out/$top.cst" \
-  --freq "${FREQ_MHZ:-75}" "${sdc[@]}" --log "$top.pnr.log" --quiet
+  --freq "${FREQ_MHZ:-75}" "${sdc[@]}" --seed "${seed:-0}" --log "$top.pnr.log" --quiet || {
+    grep -E "^ERROR" "$top.pnr.log" >&2
+    if grep -q "Can't route the .* net" "$top.pnr.log"; then echo "clock routing failed with seed ${seed:-0}: try SEED=<n> $0 $top" >&2; fi
+    exit 1
+  }
 "$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$top.pnr.json"
 echo "built $out/$out_fs"
 grep -E "Max frequency for clock|Device utilisation|LUT4|DFF|OSER10|rPLL|BSRAM" "$top.pnr.log" | head -20 || true
