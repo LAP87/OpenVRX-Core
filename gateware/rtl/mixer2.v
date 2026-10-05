@@ -4,8 +4,9 @@
 `default_nettype none
 module mixer2 #(
     parameter LEN_NTSC = 1716, LEN_PAL = 1728, LEN_TOL = 2,
-    parameter TIMEOUT = 65536,
-    parameter BLEND_Q8 = 38, SWITCH_Q8 = 64
+    parameter TIMEOUT = 262144,             // alive_a/alive_b only (indicators)
+    parameter BLEND_Q8 = 38, SWITCH_Q8 = 64,
+    parameter T_PAIR = 1024, N_STEP = 8, N_DEAD = 40   // see line_mixer.v
 ) (
     input  wire        a_clk,
     input  wire [7:0]  a_d,
@@ -20,7 +21,7 @@ module mixer2 #(
     input  wire        out_pop,
 
     output wire        a_lines, b_lines,   // own clock domains: lines are being decoded
-    output wire        alive_a, alive_b,   // sys domain
+    output wire        alive_a, alive_b,   // sys domain: lines arrived within TIMEOUT cycles
     output wire        cur,                // sys domain: 0 = A, 1 = B
     output wire        overflow,           // sys domain, sticky
     output wire        dec_valid,
@@ -61,30 +62,42 @@ module mixer2 #(
         .wclk(b_clk), .wrst(brst), .wr_en(eb_v), .wr_data(eb_d), .full(fb_full), .wr_level(fb_wl),
         .rclk(sys_clk), .rrst(srst), .rd_en(fb_pop), .rd_data(fb_data), .empty(fb_empty), .rd_level(fb_rl));
 
+    localparam AGE_W = $clog2(8 * T_PAIR);
     wire        pop_a, pop_b, ha_f, hb_f, ha_bad, hb_bad, ov_a, ov_b;
+    wire        sick_a, sick_b, arr_a, arr_b;
+    wire        ha_psick, hb_psick, ha_swell, hb_swell, ha_near, hb_near;
     wire [8:0]  rd_idx;
     wire [31:0] rd_a, rd_b;
     wire [2:0]  cnt_a, cnt_b;
     wire [9:0]  ha_l, hb_l;
     wire [19:0] ha_hf, hb_hf;
-    mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT)) ch_a (
+    wire [1:0]  ha_fc, hb_fc;
+    wire [AGE_W-1:0] ha_age, hb_age, last_a, last_b;
+    mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_a (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_a), .in_empty(fa_empty), .in_data(fa_data), .in_pop(fa_pop),
-        .pop_line(pop_a), .rd_idx(rd_idx), .rd_data(rd_a), .count(cnt_a),
-        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .alive(alive_a), .overflow(ov_a));
-    mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT)) ch_b (
+        .pop_line(pop_a), .rd_idx(rd_idx), .rd_data(rd_a),
+        .peer_sick(sick_b), .peer_arrived(arr_b), .peer_last_age(last_b),
+        .sick(sick_a), .arrived(arr_a), .last_age(last_a), .count(cnt_a),
+        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .head_fc(ha_fc), .head_age(ha_age),
+        .head_peer_sick(ha_psick), .head_self_well(ha_swell), .head_near(ha_near), .alive(alive_a), .overflow(ov_a));
+    mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_b (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
-        .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b), .count(cnt_b),
-        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .alive(alive_b), .overflow(ov_b));
+        .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b),
+        .peer_sick(sick_a), .peer_arrived(arr_a), .peer_last_age(last_a),
+        .sick(sick_b), .arrived(arr_b), .last_age(last_b), .count(cnt_b),
+        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .head_fc(hb_fc), .head_age(hb_age),
+        .head_peer_sick(hb_psick), .head_self_well(hb_swell), .head_near(hb_near), .alive(alive_b), .overflow(ov_b));
     assign overflow = ov_a | ov_b;
 
     wire        o_we;
     wire [51:0] o_data;
     wire [5:0]  o_wl, o_rl;
     wire        o_full;
-    line_mixer #(.BLEND_Q8(BLEND_Q8), .SWITCH_Q8(SWITCH_Q8)) mix (
+    line_mixer #(.BLEND_Q8(BLEND_Q8), .SWITCH_Q8(SWITCH_Q8), .T_PAIR(T_PAIR), .N_STEP(N_STEP), .N_DEAD(N_DEAD), .AGE_W(AGE_W)) mix (
         .clk(sys_clk), .rst(srst), .pop_a(pop_a), .pop_b(pop_b), .rd_idx(rd_idx), .rd_a(rd_a), .rd_b(rd_b),
         .cnt_a(cnt_a), .cnt_b(cnt_b), .fa(ha_f), .fb(hb_f), .la(ha_l), .lb(hb_l), .hfa(ha_hf), .hfb(hb_hf),
-        .bada(ha_bad), .badb(hb_bad), .alive_a(alive_a), .alive_b(alive_b),
+        .bada(ha_bad), .badb(hb_bad), .fca(ha_fc), .fcb(hb_fc), .age_a(ha_age), .age_b(hb_age),
+        .near_a(ha_near), .near_b(hb_near), .psick_a(ha_psick), .psick_b(hb_psick), .swell_a(ha_swell), .swell_b(hb_swell),
         .o_we(o_we), .o_data(o_data), .o_room(o_wl < 6'd28),
         .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop), .dec_field(dec_field), .dec_line(dec_line),
         .cur(cur));

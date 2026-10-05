@@ -2,20 +2,29 @@
 bit-exact model gateware/model/line_mixer_ref.py.
 
 Two receivers see the same picture with different, per-line random "snow".
-Channel clocks differ slightly (37.00 / 37.07 ns) and start 3.3 us apart.
-Channel B gets an undecodable timing code in a blanking line (its next line
-must count as bad), channel A a broken EAV inside the picture (one line lost,
-so the channels are briefly out of step). Every decision and every output word
-must match the model.
+Fields have a real vertical blanking interval (VBI lines without any line
+record, 1.4 ms) but only LINES active lines, so that a run covers several
+fields; one test uses the real 525-line structure. Every decision, the current
+channel after it and every output word must match the model. The scenarios
+then check on the trace what the mixer is for: a complete picture from the
+better receiver, nothing from an unlocked one, no extra field boundaries.
+
+Arrival times: the model gets the time each line record completes in the byte
+stream. The RTL sees it a fraction of a microsecond later (FIFO crossing), the
+same for both channels, so the scenarios keep arrival differences away from 0
+and from the pairing window (checked in `events`).
 
 Run:  .venv/bin/python -m pytest -q gateware/sim/test_mixer.py
 """
+import bisect
 import os
 import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 HERE = Path(__file__).resolve().parent
 GW = HERE.parent
@@ -24,8 +33,14 @@ sys.path.insert(0, str(GW / 'model'))
 import bt656  # noqa: E402
 import line_mixer_ref as ref  # noqa: E402
 
-LINES, VBI, FIELDS = 10, 2, 5
-T_A, T_B, START_A, START_B = 37.0, 37.07, 2000.0, 5300.0
+LINE = 1716                 # bytes per line
+VBI, LINES = 22, 24         # blanking lines (no records) and active lines per field
+FIELD = (VBI + LINES) * LINE
+T_A, T_B, T_S = 37.0, 37.002, 15.4          # two decoders locked to one camera do not drift apart
+START_A, START_B = 2000.0, 5300.0
+T_PAIR = ref.T_PAIR_CYCLES * T_S
+LINE_NS = LINE * T_A
+RST_NS = 500.0              # tb_mixer releases reset (and starts counting START_*) at 500 ns
 BAD_XY = next(b for b, v in bt656.XY_TABLE.items() if v[3] == 'bad' and b not in (0, 255))
 
 
@@ -47,26 +62,42 @@ def active_bytes(field, line, amp, rng):
     return bytes(out)
 
 
-def stream(ch, seed, amp_override=None):
-    """BT.656 bytes for one channel plus the per-line snow amplitudes used."""
-    rng = random.Random(seed)
-    data = bytearray()
-    for fld in range(FIELDS):
-        f = fld & 1
-        for i in range(VBI + LINES):
-            v = 1 if i < VBI else 0
-            amp = 0 if v else rng.choice((0, 0, 3, 6, 25, 60))
-            if amp_override and not v and fld in amp_override:
-                amp = amp_override[fld]
-            act = bt656.blanking(1440) if v else active_bytes(fld, i - VBI, amp, rng)
-            eav_xy, sav_xy = bt656.xy(f, v, 1), bt656.xy(f, v, 0)
-            if ch == 'b' and fld == 2 and i == 1:
-                sav_xy = BAD_XY                 # undecodable code in a blanking line
-            if ch == 'a' and fld == 3 and i == VBI + 4:
-                eav_xy = BAD_XY                 # EAV of this line broken: the line before it is lost
-            data += bytes([0xFF, 0, 0, eav_xy]) + bt656.blanking(1716 - 1440 - 8)
-            data += bytes([0xFF, 0, 0, sav_xy]) + act
-    return bytes(data)
+class Stream:
+    """BT.656 bytes of one receiver, built line by line."""
+
+    def __init__(self, seed):
+        self.rng = random.Random(seed)
+        self.data = bytearray()
+
+    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None):
+        act = bt656.blanking(1440) if v else active_bytes(fld, n, amp, self.rng)
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8)
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 0) if sav is None else sav]) + act
+
+    def field(self, fld, f=None, amp=None, hooks=None, lines=LINES, vbi=VBI):
+        """Field `fld` (picture content; F bit fld & 1 unless given). amp: snow amplitude for all
+        lines or {line: amplitude}; other lines get a random one. hooks: {line index in the
+        field, blanking lines first: ('eav' | 'sav', byte to send as that timing code)}."""
+        f = fld & 1 if f is None else f
+        for i in range(vbi + lines):
+            v = 1 if i < vbi else 0
+            a = self.rng.choice((0, 0, 3, 6, 25, 60))
+            if isinstance(amp, dict):
+                a = amp.get(i - vbi, a)
+            elif amp is not None:
+                a = amp
+            self.line(f, v, fld, i - vbi, 0 if v else a, **dict([(hooks or {})[i]] if i in (hooks or {}) else []))
+        return self
+
+    def gap(self, n):
+        """n line times without any timing code (a decoder that stopped)."""
+        self.data += bt656.blanking(n * LINE)
+        return self
+
+    def done(self, f=0):
+        """Closing EAV, so that the last line completes."""
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, 1, 1)]) + bt656.blanking(64)
+        return bytes(self.data)
 
 
 def records_with_times(data, t0, period):
@@ -79,16 +110,34 @@ def records_with_times(data, t0, period):
     return out
 
 
-def model(a, b, **kw):
-    ev = [(t, 0, r) for t, r in records_with_times(a, START_A, T_A)]
-    ev += [(t, 1, r) for t, r in records_with_times(b, START_B, T_B)]
+def events(a, b, start_a=START_A, start_b=START_B, t_a=T_A, t_b=T_B, t_pair=T_PAIR):
+    """Line records of both channels in arrival order: [(t_ns, channel, record)]."""
+    ra, rb = records_with_times(a, start_a, t_a), records_with_times(b, start_b, t_b)
+    tb = [t for t, _ in rb]
+    for t, _ in ra:                                  # the scenario must not sit on a decision boundary
+        k = bisect.bisect_left(tb, t)
+        for d in [abs(t - x) for x in tb[max(0, k - 1):k + 1]]:
+            assert d > 300 and abs(d - t_pair) > 1000, f'arrival difference {d:.0f} ns is too close to a boundary'
+    return sorted([(t, 0, r) for t, r in ra] + [(t, 1, r) for t, r in rb], key=lambda e: e[:2])
+
+
+def model(ev, **kw):
     m = ref.Mixer(**kw)
-    for _, ch, r in sorted(ev, key=lambda e: e[0]):
-        m.push(ch, r)
+    for t, ch, r in ev:
+        m.push(ch, r, t)
+    m.finish()
     return m
 
 
-def run_sim(a, b, work, params=()):
+def window(ev, on, off=None):
+    """ext_bad for the model from a testbench time window; the edges must not be near an arrival."""
+    for t, _, _ in ev:
+        for edge in (on, off):
+            assert edge is None or abs(t + RST_NS - edge) > 5000, 'ext_bad edge too close to a line arrival'
+    return lambda t: t + RST_NS >= on and (off is None or t + RST_NS < off)
+
+
+def run_sim(a, b, work, params=None):
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -98,13 +147,15 @@ def run_sim(a, b, work, params=()):
     work.mkdir(parents=True)
     bt656.write_hex(work / 'a.hex', a)
     bt656.write_hex(work / 'b.hex', b)
+    p = dict(N_A=len(a), N_B=len(b), T_A=T_A, T_B=T_B, START_A=START_A, START_B=START_B)
+    p.update(params or {})
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v',
                                     'chan_capture.v', 'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'mixer2.v')]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_mixer',
-                    f'-Ptb_mixer.N_A={len(a)}', f'-Ptb_mixer.N_B={len(b)}', *params,
+                    *[f'-Ptb_mixer.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'tb_mixer.v')], cwd=work, env=env, check=True)
     subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True)
-    dec, end = [], None
+    dec, curs, end = [], [], None
     for line in (work / 'dec.txt').read_text().split('\n'):
         p = line.split()
         if not p:
@@ -113,61 +164,258 @@ def run_sim(a, b, work, params=()):
             end = (int(p[1]), int(p[2]))
         else:
             dec.append(tuple(int(x) for x in p[:4]))
+            curs.append(int(p[4]))
     out = []
     for line in (work / 'out.txt').read_text().split('\n'):
         p = line.split()
         if p:
             out.append((int(p[0]), int(p[1]), int(p[2]), int(p[3], 16)))
-    return dec, out, end
+    return dec, curs, out, end
 
 
-def test_mixer_against_model():
-    a, b = stream('a', 1), stream('b', 2)
-    m = model(a, b)
-    dec, out, end = run_sim(a, b, HERE / 'build' / 'tb_mixer')
+def check(name, a, b, params=None, ev_kw=None, **model_kw):
+    """Run the RTL and the model on the same streams; they must agree on everything."""
+    ev = events(a, b, **(ev_kw or {}))
+    ext = model_kw.pop('ext', None)
+    if ext:
+        model_kw['ext_bad'] = ext(ev)
+    m = model(ev, **model_kw)
+    dec, curs, out, end = run_sim(a, b, HERE / 'build' / name, params)
     assert end is not None, 'simulation did not finish'
     assert end[0] == 0 and not m.overflow, 'line slots overflowed'
-    kinds = {u for u, *_ in m.trace}
-    assert {ref.USE_A, ref.USE_B, ref.USE_BLEND} <= kinds, f'scenario too easy: {kinds}'
-    assert any(p != 0b11 for _, p, *_ in m.trace), 'no unpaired line in the scenario'
-    for i, (g, e) in enumerate(zip(dec, m.trace)):
-        assert g == e, f'decision {i}: rtl {g} model {e}\nrtl {dec[max(0, i - 3):i + 3]}\nmodel {m.trace[max(0, i - 3):i + 3]}'
+    for i, (g, e) in enumerate(zip(zip(dec, curs), zip(m.trace, m.curs))):
+        assert g == e, (f'decision {i}: rtl {g} model {e}\nrtl   {list(zip(dec, curs))[max(0, i - 4):i + 3]}'
+                        f'\nmodel {list(zip(m.trace, m.curs))[max(0, i - 4):i + 3]}')
     assert len(dec) == len(m.trace), f'{len(dec)} decisions, model {len(m.trace)}'
     assert len(out) == len(m.out), f'{len(out)} words, model {len(m.out)}'
     for i, (g, e) in enumerate(zip(out, m.out)):
         assert g == e, f'word {i}: rtl {g} model {e}'
+    assert end[1] == m.cur
+    return m
 
 
-def test_dead_channel_switches():
-    """A stops after two fields while it is the current channel: B's lines are
-    dropped until A counts as dead (TIMEOUT), then everything comes from B."""
-    timeout = 60000                                      # 0.92 ms ~ 14 lines at 15.4 ns
-    a_full, b = stream('a', 1, {1: 0}), stream('b', 2, {1: 60})     # A clean, B snowy in field 1
-    a = a_full[:2 * (VBI + LINES) * 1716]
-    dec, out, end = run_sim(a, b, HERE / 'build' / 'tb_mixer_dead', [f'-Ptb_mixer.TIMEOUT={timeout}'])
-    assert end is not None and end[0] == 0
-    m = model(a, b)
-    n_paired = sum(1 for _, p, *_ in m.trace if p == 0b11)
-    # up to the moment A disappears the RTL matches the model
-    assert dec[:n_paired] == m.trace[:n_paired]
-    rest = dec[n_paired:]
-    assert m.cur == 0, 'scenario: A must be the current channel when it disappears'
-    assert rest and all(p == 0b10 for _, p, *_ in rest), rest      # only B lines left
-    dropped = [r for r in rest if r[0] == 0b00]
-    shown = [r for r in rest if r[0] == 0b10]
-    line_ns = 1716 * T_B
-    assert 1 <= len(dropped) <= timeout * 15.4 / line_ns + 3, f'{len(dropped)} lines dropped'
-    assert rest[-len(shown):] == shown, 'B lines must be shown once A is dead'
-    assert end[1] == 1, 'current channel should be B'
-    assert len(out) == 360 * sum(1 for u, *_ in dec if u), 'words for every shown line'
+# ---- what the trace must look like
+def out_fields(trace):
+    """Shown lines split the way the frame buffer splits them: [(F, [line, ...])]."""
+    fields = []
+    for use, _, f, line in trace:
+        if not use:
+            continue
+        if not fields or fields[-1][0] != f or line <= fields[-1][1][-1]:
+            fields.append((f, []))
+        fields[-1][1].append(line)
+    return fields
 
 
-def test_unlocked_decoder_loses():
-    """Decoder B reports no lock (I2C status): every paired line comes from A."""
-    a, b = stream('a', 1), stream('b', 2)
-    m = model(a, b, ext_bad=(False, True))
-    dec, out, end = run_sim(a, b, HERE / 'build' / 'tb_mixer_extb', ['-Ptb_mixer.EXT_B=1'])
-    assert dec == m.trace
-    assert out == m.out
-    paired = [u for u, p, *_ in dec if p == 0b11]
-    assert paired and all(u == ref.USE_A for u in paired), set(paired)
+def complete(trace, n_fields, lines=LINES):
+    got = out_fields(trace)
+    assert len(got) == n_fields, f'{len(got)} output fields, expected {n_fields}: {[(f, len(l)) for f, l in got]}'
+    for k, (_, ls) in enumerate(got):
+        assert ls == list(range(lines)), f'output field {k}: lines {ls}'
+
+
+def cur_changes(m):
+    return sum(1 for x, y in zip(m.curs, m.curs[1:]) if x != y)
+
+
+# ---- scenarios
+def test_in_step():
+    """Both receivers good. B gets an undecodable timing code in a blanking line, so its
+    next line counts as bad; A a broken EAV inside the picture, so one line exists only on B
+    and the next one is bad on A. In both places the metric alone would have picked the
+    damaged receiver. The picture must still be complete."""
+    a = Stream(1).field(0).field(1, amp={0: 60}).field(2, amp={12: 0}, hooks={VBI + 12: ('eav', BAD_XY)}).done()
+    b = Stream(2).field(0).field(1, amp={0: 0}, hooks={VBI - 1: ('sav', BAD_XY)}).field(2, amp={12: 60}).done()
+    m = check('tb_mixer', a, b)
+    kinds = {u for u, *_ in m.trace}
+    assert {ref.USE_A, ref.USE_B, ref.USE_BLEND} <= kinds, f'scenario too easy: {kinds}'
+    assert m.trace[LINES] == (ref.USE_A, 0b11, 1, 0), "B's bad line loses"
+    lone = [i for i, (_, p, *_) in enumerate(m.trace) if p != 0b11]
+    assert len(lone) == 1 and m.trace[lone[0]] == (ref.USE_B, 0b10, 0, 11), 'the gap is filled from B'
+    assert m.trace[lone[0] + 1] == (ref.USE_B, 0b11, 0, 12), "A's bad line loses"
+    complete(m.trace, 3)
+
+
+def test_random_damage():
+    """Undecodable timing codes at random places on both receivers (lines lost on one, on
+    both, next to each other, in blanking). What is shown must be in order, and a line is
+    missing only if neither receiver had it."""
+    rng = random.Random(7)
+
+    def hooks():
+        return {rng.randrange(VBI - 2, VBI + LINES): (rng.choice(('eav', 'sav')), BAD_XY) for _ in range(5)}
+    ha, hb = [hooks() for _ in range(3)], [hooks() for _ in range(3)]
+    ha[2][VBI + 20] = hb[2][VBI + 20] = ('eav', BAD_XY)             # line 19 lost on both
+    a, b = Stream(3), Stream(4)
+    for fld in range(3):
+        a.field(fld, hooks=ha[fld])
+        b.field(fld, hooks=hb[fld])
+    a, b = a.done(), b.done()
+    m = check('tb_mixer_damage', a, b)
+    have = [set(), set(), set()]
+    for data in (a, b):
+        fld, prev = 0, -1
+        for r in bt656.Receiver().feed(data):
+            fld += r.line_in_field <= prev
+            prev = r.line_in_field
+            have[fld].add(r.line_in_field)
+    got = out_fields(m.trace)
+    assert [sorted(ls) for _, ls in got] == [sorted(h) for h in have], 'every line that a receiver had is shown'
+    assert all(ls == sorted(ls) for _, ls in got) and 19 not in got[2][1]
+
+
+def test_current_channel_goes_silent():
+    """A is the current channel and stops in the middle of a field. B fills in at once
+    (the channels were in step) and takes over after N_STEP lines: no line is lost."""
+    a = bytes(Stream(1).field(0, amp=0).field(1, amp=0).data[:FIELD + (VBI + 10) * LINE + 4])
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).done()
+    m = check('tb_mixer_silent', a, b)
+    pairs = sum(1 for _, p, *_ in m.trace if p == 0b11)
+    assert pairs == LINES + 10 and {u for u, *_ in m.trace[:pairs]} == {ref.USE_A}
+    assert all(x[:2] == (ref.USE_B, 0b10) for x in m.trace[pairs:]), 'every lone B line is shown'
+    assert cur_changes(m) == 1 and m.curs.index(1) == pairs + 8 - 1, 'B takes over at its 8th lone line'
+    complete(m.trace, 3)
+
+
+def test_silence_rule_is_checked():
+    """Negative control for the comparison: with N_STEP = 4 in the RTL only, the takeover
+    comes earlier than in the model and the traces differ."""
+    a = bytes(Stream(1).field(0, amp=0).field(1, amp=0).data[:FIELD + (VBI + 10) * LINE + 4])
+    b = Stream(2).field(0, amp=25).field(1, amp=25).done()
+    with pytest.raises(AssertionError, match=f'decision {LINES + 10 + 3}'):
+        check('tb_mixer_nstep', a, b, {'N_STEP': 4})
+
+
+def test_channel_returns_with_wrong_line_numbers():
+    """A stops for 9 lines in the middle of a field and comes back counting from where it
+    stopped, so until the next vertical blanking its numbers lag B's by 8. Its lines arrive
+    next to B's but must not be shown: B took over when A went quiet. In the next field the
+    channels pair again. The output is read slowly here (every 8th cycle), so the mixer is
+    busy most of the time and resolves lone lines late; that must not change anything."""
+    s = Stream(1).field(0, amp=0)
+    for i in range(VBI + LINES):
+        if i == VBI + 6:
+            s.data += bytes([0xFF, 0, 0, bt656.xy(1, 0, 1)]) + bt656.blanking(9 * LINE - 4)
+        if not VBI + 6 <= i < VBI + 15:
+            s.line(1, 1 if i < VBI else 0, 1, i - VBI, 0)
+    a = s.field(2, amp=0).done()
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).done()
+    m = check('tb_mixer_return', a, b, {'POP_DIV': 8})
+    late = [(u, line) for u, p, _, line in m.trace if p == 0b01]
+    assert late == [(0, n) for n in range(7, 16)], "A's shifted lines are dropped"
+    assert sum(1 for _, p, *_ in m.trace if p == 0b11) == LINES + 6 + LINES, 'pairs again in field 2'
+    assert cur_changes(m) == 2, 'to B when A went quiet, back to the cleaner A in field 2'
+    complete(m.trace, 3)
+
+
+def test_unlocked_decoder_in_step_loses():
+    """Decoder B reports no lock the whole time (I2C status): every line comes from A."""
+    a = Stream(1).field(0).field(1).done()
+    b = Stream(2).field(0).field(1).done()
+    m = check('tb_mixer_extb', a, b, {'EXTB_ON': 0}, ext=lambda ev: (False, True))
+    assert all(u == ref.USE_A and p == 0b11 for u, p, *_ in m.trace), {(u, p) for u, p, *_ in m.trace}
+    complete(m.trace, 2)
+
+
+def test_decoder_loses_lock_and_recovers():
+    """Decoder A (current, the cleaner picture) reports no lock from the middle of field 0
+    to the middle of field 1. In between nothing comes from A; afterwards A is used again."""
+    a = Stream(1).field(0, amp=0).field(1, amp=0).field(2, amp=0).done()
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).done()
+    on = RST_NS + START_A + ((VBI + 12) * LINE + 858) * T_A
+    off = on + FIELD * T_A
+    m = check('tb_mixer_relock', a, b, {'EXTA_ON': on, 'EXTA_OFF': off}, ext=lambda ev: (window(ev, on, off), False))
+    uses = [u for u, *_ in m.trace]
+    assert set(uses[:12]) == {ref.USE_A} and set(uses[12:LINES + 12]) == {ref.USE_B}
+    assert set(uses[LINES + 12:]) == {ref.USE_A}, 'back to the clean receiver as soon as it is locked'
+    complete(m.trace, 3)
+
+
+@pytest.mark.parametrize('lag_lines, pop_div', [(5, 1), ((VBI + LINES) // 2, 8)])
+def test_unlocked_current_channel_out_of_step(lag_lines, pop_div):
+    """A is the current channel after reset, reports no lock and runs out of step with B
+    (ahead by some lines less a third of a line). B is good. When B has delivered eight good
+    lines while A's last eight were bad, B takes over; from then on every B line is shown and
+    no A line, also while B is in its blanking interval and only A delivers."""
+    a = Stream(1).field(0, amp=60).field(1, amp=60).field(2, amp=60).field(3, amp=60).done()
+    a = a[lag_lines * LINE:][:(3 * (VBI + LINES) + 1) * LINE]
+    b = Stream(2).field(0, amp=3).field(1, amp=3).field(2, amp=3).done()
+    kw = {'START_A': START_A + LINE_NS / 3}
+    m = check(f'tb_mixer_exta{lag_lines}', a, b, {'EXTA_ON': 0, 'POP_DIV': pop_div, **kw},
+              ev_kw={k.lower(): v for k, v in kw.items()}, ext=lambda ev: (True, False))
+    assert all(p != 0b11 for _, p, *_ in m.trace), 'the channels never pair'
+    k = m.curs.index(1)
+    assert sum(1 for _, p, *_ in m.trace[:k + 1] if p == 0b10) == 8, 'B takes over at its eighth line'
+    assert cur_changes(m) == 1
+    assert all(u == (ref.USE_B if p == 0b10 else 0) for u, p, *_ in m.trace[k:]), 'only B after the takeover'
+    assert [ls for _, ls in out_fields(m.trace[k:])] == [list(range(7, LINES)), list(range(LINES)), list(range(LINES))]
+
+
+def test_lagging_channel_is_not_shown_until_the_other_is_gone():
+    """Both receivers good, but B delivers every line five and a third lines late (two
+    decoders that disagree about where the picture is). While A delivers, the output is A's
+    lines and nothing else, and the current channel does not change in the blanking intervals.
+    Then A stops for good: B takes over after N_DEAD of its lines and starts a field of its own."""
+    a = Stream(1).field(0).field(1).done()
+    b = Stream(2).field(0).field(1).field(2).field(3).done()
+    kw = {'START_B': START_A + 5 * LINE_NS + LINE_NS / 3}
+    m = check('tb_mixer_lag', a, b, kw, ev_kw={k.lower(): v for k, v in kw.items()})
+    k = m.curs.index(1)
+    last_a = max(i for i, (_, p, *_) in enumerate(m.trace) if p == 0b01)
+    assert cur_changes(m) == 1 and sum(1 for _, p, *_ in m.trace[last_a:k + 1] if p == 0b10) == 40
+    assert all(u == (ref.USE_A if p == 0b01 else 0) for u, p, *_ in m.trace[:k]), 'only A while A delivers'
+    assert all(u == ref.USE_B for u, *_ in m.trace[k:])
+    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (1, list(range(9, LINES)))]
+
+
+def test_blanking_must_not_look_like_silence():
+    """Negative control for N_DEAD: two good receivers half a field apart, with N_DEAD = 16
+    (shorter than the blanking interval) in both RTL and model. Each channel then takes the
+    picture from the other in every blanking interval and the fields are cut up. With the
+    real N_DEAD the model leaves the same streams alone."""
+    a = Stream(1).field(0).field(1).done()
+    b = Stream(2).field(0).field(1).done()
+    kw = {'START_B': START_A + (VBI + LINES) // 2 * LINE_NS + LINE_NS / 3}
+    ev_kw = {k.lower(): v for k, v in kw.items()}
+    m = check('tb_mixer_ndead16', a, b, {'N_DEAD': 16, **kw}, ev_kw=ev_kw, n_dead=16)
+    assert cur_changes(m) == 3 and len(out_fields(m.trace)) == 4
+    good = model(events(a, b, **ev_kw))
+    assert cur_changes(good) == 0
+    complete(good.trace, 2)
+
+
+def test_f_bits_disagree():
+    """Decoder B holds F at 1 (as a TVP5150AM1 does when it takes the signal for
+    non-interlaced) while A alternates. Lines still pair by number, and the F bit of an
+    output field is the one its first line came with: A's in fields 0 and 1, B's in field 2
+    where B is the cleaner receiver."""
+    a = Stream(1).field(0, amp=0).field(1, amp=0).field(2, amp=60).done()
+    b = Stream(2).field(0, f=1, amp=25).field(1, f=1, amp=25).field(2, f=1, amp=25).done()
+    m = check('tb_mixer_fbits', a, b)
+    assert all(p == 0b11 for _, p, *_ in m.trace)
+    assert {u for u, *_ in m.trace[:2 * LINES]} == {ref.USE_A} and {u for u, *_ in m.trace[2 * LINES:]} == {ref.USE_B}
+    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (1, list(range(LINES)))]
+
+
+def test_f_stuck_on_both():
+    """Both decoders hold F at 1: fields are told apart by the line number alone."""
+    a = Stream(1).field(0, f=1).field(1, f=1).done()
+    b = Stream(2).field(0, f=1).field(1, f=1).done()
+    m = check('tb_mixer_fstuck', a, b)
+    assert all(p == 0b11 and f == 1 for _, p, f, _ in m.trace)
+    complete(m.trace, 2)
+
+
+def test_full_ntsc_field():
+    """Lines 1 to 300 of a real 525-line frame: 19 blanking lines, a field of 244 lines,
+    19 blanking lines with the F change inside, and the first 18 lines of the next field."""
+    def frame(seed, snow):
+        rng, out = random.Random(seed), bytearray()
+        for line in range(1, 301):
+            f, v = bt656.field_and_vblank('ntsc', line)
+            out += bt656.line_bytes('ntsc', line, None if v else active_bytes(f, line, rng.choice(snow), rng))
+        return bytes(out) + bytes([0xFF, 0, 0, bt656.xy(1, 0, 1)]) + bt656.blanking(64)
+    a, b = frame(1, (0, 3, 6)), frame(2, (0, 3, 25, 60, 60))
+    m = check('tb_mixer_ntsc', a, b)
+    assert all(p == 0b11 for _, p, *_ in m.trace)
+    assert out_fields(m.trace) == [(0, list(range(244))), (1, list(range(18)))]

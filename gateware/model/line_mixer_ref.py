@@ -1,17 +1,43 @@
 """Bit-exact reference for rtl/mix_chan.v + rtl/line_mixer.v.
 
-The decision rule is the integer form of mixer/line_mixer.py `mix()`:
+Paired lines. Two lines pair when they carry the same line number and arrived
+within T_PAIR of each other (the F bit is not compared: two decoders may
+disagree on it). The decision is the integer form of mixer/line_mixer.py `mix()`:
     blend   when |ea - eb| * 256 <  BLEND_Q8  * max(ea, eb)   (or both 0)
     switch  when |ea - eb| * 256 >  SWITCH_Q8 * max(ea, eb)   towards the cleaner one
 with BLEND_Q8 = 38 (0.1484 ~ 0.15) and SWITCH_Q8 = 64 (0.25 exactly), plus a
-sync/length check the prototype does not have: a bad line loses against a
-good one. Lines are paired by (field, line number); see line_mixer.v for the
-rules for unpaired lines. The model assumes both channels stay alive.
+check the prototype does not have: a bad line (undecodable timing code, wrong
+length, decoder unlocked) loses against a good one.
+
+Lone lines. A line whose partner has not arrived T_PAIR after it is resolved
+alone, oldest first. It is shown
+  * if it comes from the current channel, or
+  * to fill a gap: the channels are in step (a pair within the last N_STEP
+    resolutions), the line is good, and no line of the other channel (whatever
+    its number) arrived within T_PAIR of it.
+The current channel changes without a pair when
+  * health: its last 8 lines were all bad and the other channel's all good, or
+  * silence: it has delivered nothing for N_STEP lines of the other channel
+    if the channels were in step when it went quiet, else for N_DEAD lines
+    (N_DEAD is longer than a vertical blanking interval, so two channels that
+    are out of step do not steal `cur` from each other in their blanking).
+Nothing here depends on wall-clock silence: a blanking interval common to
+both channels produces no lines and therefore no decisions.
+
+Output order. Line numbers leave strictly increasing within a field. Each
+channel has a field counter (advanced when its own line number restarts); a
+line is admitted when it starts a new field or lies above the last line sent.
+The F bit of the output is latched from the first line of each output field.
+
+Time is in ns. The RTL measures ages in system-clock cycles from the moment a
+line's marker is stored; decisions that fall within a few cycles of T_PAIR can
+differ from this model, so tests keep clear of that boundary.
 """
 from collections import deque
 
 N_WORDS = 360
 USE_A, USE_B, USE_BLEND, USE_NONE = 0b01, 0b10, 0b11, 0b00
+T_PAIR_CYCLES = 1024
 
 
 def is_bad(rec, len_ntsc=1716, len_pal=1728, tol=2):
@@ -53,59 +79,174 @@ def blend_words(wa, wb):
     return out
 
 
-class Mixer:
-    """Feed completed line records per channel in arrival order; read `trace` and `out`."""
+class _Line:
+    __slots__ = ('rec', 't', 'bad', 'fc', 'peer_sick', 'self_well')
 
-    def __init__(self, near=8, ext_bad=(False, False), **kw):
-        self.q = (deque(), deque())
-        self.ext_bad = ext_bad    # decoder status says no lock (held for the whole run)
-        self.near = near
+    def __init__(self, rec, t, bad, fc, peer_sick, self_well):
+        self.rec, self.t, self.bad, self.fc = rec, t, bad, fc
+        self.peer_sick, self.self_well = peer_sick, self_well
+
+
+class Mixer:
+    """Feed completed line records with their arrival times: push(ch, rec, t_ns), in time
+    order, then finish(). Read `trace` [(use, pop, field, line)] and `out` [(field, line,
+    idx, data)].
+
+    ext_bad: per channel either a bool (held for the whole run) or a function t_ns -> bool
+    (decoder status "no lock", sampled when a line arrives). keep_words=False skips `out`.
+    """
+
+    def __init__(self, t_pair=T_PAIR_CYCLES * 15.4, n_step=8, n_dead=40, ext_bad=(False, False),
+                 keep_words=True, **kw):
+        self.t_pair, self.n_step, self.n_dead = t_pair, n_step, n_dead
+        self.ext_bad, self.keep_words = ext_bad, keep_words
         self.kw = kw
+        self.q = (deque(), deque())
+        self.hist = ([], [])          # bad flags of the last 8 arrived lines
+        self.fc = [0, 0]              # field counter (mod 4): advances when the line number restarts
+        self.prev = [None, None]      # (field, line) of the last arrived line
+        self.last_arr = [None, None]  # arrival time of the last line
         self.cur = 0
-        self.trace = []           # (use, pop, field, line)
-        self.out = []             # (field, line, idx, data)
+        self.step_valid = False       # a pair has happened
+        self.since_pair = 0           # lone resolutions since the last pair (saturates at n_step)
+        self.quiet = [0, 0]           # lone lines of the other channel since this one's last line
+        self.qfast = [False, False]   # the channels were in step when this one went quiet
+        self.o_valid = False          # output field state
+        self.o_line = 0
+        self.o_fbit = 0
+        self.o_fc = [0, 0]
+        self.join = [False, False]
+        self.trace = []               # (use, pop, field, line)
+        self.curs = []                # current channel after each decision
+        self.out = []                 # (field, line, idx, data)
         self.overflow = False
 
-    def push(self, ch, rec):
-        if len(self.q[ch]) == 4:
-            self.overflow = True
-        else:
-            self.q[ch].append(rec)
-        self.run()
+    # ---- per-channel bookkeeping at arrival
+    def _ext(self, ch, t):
+        e = self.ext_bad[ch]
+        return bool(e(t)) if callable(e) else bool(e)
 
-    def _emit(self, use, pop, f, l):
-        self.trace.append((use, pop, f, l))
+    def _sick(self, ch):
+        return len(self.hist[ch]) == 8 and all(self.hist[ch])
+
+    def _well(self, ch):
+        return len(self.hist[ch]) == 8 and not any(self.hist[ch])
+
+    def push(self, ch, rec, t):
+        self._advance(t)
+        bad = is_bad(rec, **self.kw) or self._ext(ch, t)
+        h = self.hist[ch]
+        h.append(bad)
+        del h[:-8]
+        p = self.prev[ch]
+        if p is not None and (rec.line_in_field <= p[1] or rec.field != p[0]):
+            self.fc[ch] = (self.fc[ch] + 1) & 3
+        self.prev[ch] = (rec.field, rec.line_in_field)
+        self.last_arr[ch] = t
+        if len(self.q[ch]) == 4:
+            self.overflow = True       # (the RTL also drops a line whose words were partly lost)
+            return
+        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], self._sick(1 - ch), self._well(ch)))
+        self._pairs()
+
+    def finish(self, t=float('inf')):
+        """Resolve every line whose pairing window has closed by time t."""
+        self._advance(t)
+
+    # ---- resolution
+    @property
+    def in_step(self):
+        return self.step_valid and self.since_pair < self.n_step
+
+    def _pairs(self):
         qa, qb = self.q
-        if use:
+        while (qa and qb and qa[0].rec.line_in_field == qb[0].rec.line_in_field
+               and abs(qa[0].t - qb[0].t) < self.t_pair):
+            self._pair()
+
+    def _advance(self, t):
+        """Lone lines whose window closed at or before t, oldest first (tie: A)."""
+        while True:
+            due = [(q[0].t + self.t_pair, ch) for ch, q in enumerate(self.q) if q and q[0].t + self.t_pair <= t]
+            if not due:
+                return
+            self._solo(min(due)[1])
+            self._pairs()
+
+    def _admit(self, ch, e, owner, step):
+        """May this line leave now? Updates the output field state when it may."""
+        f, l = e.rec.field, e.rec.line_in_field
+        if not self.o_valid:
+            ok = new = True
+        elif self.join[ch]:
+            if e.fc == self.o_fc[ch]:
+                ok, new = l > self.o_line, False
+            else:                                   # this channel has moved on to its next field
+                ok = new = owner or step
+        elif owner and not step:                    # the numbering owner changed out of step: start over
+            ok = new = True
+        else:
+            ok, new = l > self.o_line, False
+        if ok:
+            if new:
+                self.o_fbit = f
+                self.join = [False, False]
+            self.o_valid, self.o_line = True, l
+            self.join[ch] = True
+            self.o_fc[ch] = e.fc
+        return ok
+
+    def _emit(self, use, pop, field, line):
+        self.trace.append((use, pop, field, line))
+        self.curs.append(self.cur)
+        qa, qb = self.q
+        if use and self.keep_words:
             if use == USE_BLEND:
-                ws = blend_words(words(qa[0].active), words(qb[0].active))
+                ws = blend_words(words(qa[0].rec.active), words(qb[0].rec.active))
             else:
-                ws = words((qa if use == USE_A else qb)[0].active)
-            self.out += [(f, l, i, w) for i, w in enumerate(ws)]
+                ws = words((qa if use == USE_A else qb)[0].rec.active)
+            self.out += [(field, line, i, w) for i, w in enumerate(ws)]
         if pop & 1:
             qa.popleft()
         if pop & 2:
             qb.popleft()
 
-    def run(self):
-        qa, qb = self.q
-        while True:
-            if qa and qb and (qa[0].field, qa[0].line_in_field) == (qb[0].field, qb[0].line_in_field):
-                a, b = qa[0], qb[0]
-                use, self.cur = decide_pair(a.hf_energy, b.hf_energy, self.cur,
-                                            is_bad(a, **self.kw) or self.ext_bad[0],
-                                            is_bad(b, **self.kw) or self.ext_bad[1])
-                self._emit(use, 0b11, a.field, a.line_in_field)
-            elif qa and qb and qa[0].field == qb[0].field:
-                la, lb = qa[0].line_in_field, qb[0].line_in_field
-                near = abs(la - lb) < self.near
-                if la < lb:
-                    self._emit(USE_A if (self.cur == 0 or near) else USE_NONE, 0b01, qa[0].field, la)
-                else:
-                    self._emit(USE_B if (self.cur == 1 or near) else USE_NONE, 0b10, qb[0].field, lb)
-            elif len(qa) >= 3:
-                self._emit(USE_A if self.cur == 0 else USE_NONE, 0b01, qa[0].field, qa[0].line_in_field)
-            elif len(qb) >= 3:
-                self._emit(USE_B if self.cur == 1 else USE_NONE, 0b10, qb[0].field, qb[0].line_in_field)
-            else:
-                return
+    def _pair(self):
+        a, b = self.q[0][0], self.q[1][0]
+        use, self.cur = decide_pair(a.rec.hf_energy, b.rec.hf_energy, self.cur, a.bad, b.bad)
+        own = (a, b)[self.cur]
+        if self._admit(self.cur, own, owner=True, step=True):
+            other = 1 - self.cur
+            self.join[other] = True
+            self.o_fc[other] = (a, b)[other].fc
+            field = self.o_fbit
+        else:
+            use, field = USE_NONE, own.rec.field
+        self.step_valid, self.since_pair = True, 0
+        self.quiet = [0, 0]
+        self._emit(use, 0b11, field, own.rec.line_in_field)
+
+    def _solo(self, x):
+        e, other = self.q[x][0], 1 - x
+        step = self.in_step                          # as it was before this line
+        # silence and health of the current channel, seen from a lone line of the other one
+        if x != self.cur:
+            q = min(self.quiet[self.cur] + 1, self.n_dead)
+            fast = self.qfast[self.cur] if self.quiet[self.cur] else step
+            dead = q >= self.n_dead or (fast and q >= self.n_step)
+            if dead or (e.peer_sick and e.self_well):
+                self.cur = x
+        owner = x == self.cur
+        # gap fill: the other channel (the current one when this matters) delivered nothing
+        # within T_PAIR of this line; anything it delivers later comes after this resolution
+        p_last = self.last_arr[other]
+        gap_ok = step and not e.bad and (p_last is None or p_last <= e.t - self.t_pair)
+        show = (owner or gap_ok) and self._admit(x, e, owner, step)
+        # counters
+        if self.quiet[other] == 0:
+            self.qfast[other] = step
+        self.quiet[other] = min(self.quiet[other] + 1, self.n_dead)
+        self.quiet[x] = 0
+        self.since_pair = min(self.since_pair + 1, self.n_step)
+        self._emit((USE_B if x else USE_A) if show else USE_NONE, 0b10 if x else 0b01,
+                   self.o_fbit if show else e.rec.field, e.rec.line_in_field)
