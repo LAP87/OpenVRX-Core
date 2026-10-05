@@ -109,3 +109,40 @@ def test_lost_eav_keeps_line_numbers():
     recs = bt656.Receiver().feed(_field_lines(6, break_eav=2))
     assert [r.line_in_field for r in recs] == [0, 2, 3, 4, 5]
     assert recs[1].xy_bad == 1
+
+
+def _fields(n_fields, f_of_field, lines=5, vbi=2, v_glitch=None):
+    """Short fields of `vbi` blanking + `lines` active lines; f_of_field(k) is the F bit of
+    field k. v_glitch = (field, line): the EAV of that active line carries V = 1 (one code)."""
+    out = bytearray()
+    for k in range(n_fields):
+        f = f_of_field(k)
+        for i in range(vbi + lines):
+            v = 1 if i < vbi else 0
+            v_eav = 1 if v_glitch == (k, i - vbi) else v
+            act = bt656.blanking(1440) if v else bytes(b for x in range(720) for b in (0x80, 16 + (k * 31 + i * 7 + x) % 200))
+            out += (bytes([0xFF, 0, 0, bt656.xy(f, v_eav, 1)]) + bt656.blanking(1716 - 1448)
+                    + bytes([0xFF, 0, 0, bt656.xy(f, v, 0)]) + act)
+    return bytes(out) + bytes([0xFF, 0, 0, bt656.xy(f_of_field(n_fields - 1), 1, 1)]) + bt656.blanking(1716 - 1448)
+
+
+def test_line_numbers_restart_after_vertical_blanking_when_f_never_changes():
+    # non-interlaced source: a TVP5150AM1 forces F = 1 (SLES209E 3.21.20)
+    recs = bt656.Receiver().feed(_fields(3, lambda k: 1))
+    assert [r.line_in_field for r in recs] == [0, 1, 2, 3, 4] * 3
+    assert {r.field for r in recs} == {1}
+
+
+def test_f_change_without_vertical_blanking_does_not_restart():
+    # the F bit flips between two fields that have no blanking line between them: the
+    # numbering runs on, because only vertical blanking starts a field
+    recs = bt656.Receiver().feed(_fields(2, lambda k: k, vbi=0))
+    assert [r.line_in_field for r in recs] == list(range(10))
+    assert [r.field for r in recs] == [0] * 5 + [1] * 5
+
+
+def test_single_v_code_does_not_restart():
+    # negative control for the two-code rule: one timing code with V = 1 inside the picture
+    # (a corrupted bit that still passes the protection bits) must not start a new field
+    recs = bt656.Receiver().feed(_fields(1, lambda k: 0, lines=6, v_glitch=(0, 3)))
+    assert [r.line_in_field for r in recs] == [0, 1, 2, 3, 4, 5]

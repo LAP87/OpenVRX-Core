@@ -85,11 +85,16 @@ module bt656_rx (
     reg  [19:0] hf;
     reg  [7:0]  xy_corr_cnt, xy_bad_cnt;
     // line numbering counts line starts (see model/bt656.py): an active SAV, or an EAV with
-    // no SAV since the previous EAV when that previous EAV said the line was active
-    reg         ev_valid, ev_field;      // last line start
-    reg  [9:0]  ev_line;
+    // no SAV since the previous EAV when that previous EAV said the line was active.
+    // Numbering restarts at the first line start after vertical blanking (two valid timing
+    // codes in a row with V = 1), not on the F bit: a TVP5150AM1 forces F = 1 for
+    // non-interlaced sources (SLES209E 3.21.20).
+    reg         ev_valid;                // a line start has been seen
+    reg  [9:0]  ev_line;                 // number of the last line start
+    reg  [1:0]  v_run;                   // valid codes in a row with V = 1 (saturates)
+    reg         nf_pend;                 // vertical blanking seen since the last line start
     reg         sav_since_eav;
-    reg         last_eav_valid, last_eav_f, last_eav_v;
+    reg         last_eav_valid, last_eav_v;
 
     wire [15:0] pos_n = (pos == 16'hFFFF) ? pos : pos + 16'd1;
     wire [4:0]  dec   = xy_decode(d);
@@ -119,8 +124,8 @@ module bt656_rx (
             state <= 0; pos <= 0; seen_eav <= 0; in_active <= 0;
             dl_v <= 0; act_count <= 0; hf <= 0; have_prev_y <= 0; prev_y <= 0;
             xy_corr_cnt <= 0; xy_bad_cnt <= 0;
-            ev_valid <= 0; ev_field <= 0; ev_line <= 0; sav_since_eav <= 0;
-            last_eav_valid <= 0; last_eav_f <= 0; last_eav_v <= 0;
+            ev_valid <= 0; ev_line <= 0; sav_since_eav <= 0; v_run <= 0; nf_pend <= 0;
+            last_eav_valid <= 0; last_eav_v <= 0;
         end else begin
             pos <= pos_n;
             if (state == 2'd3) begin
@@ -151,14 +156,13 @@ module bt656_rx (
                             if (st == 2'd1) xy_corr_cnt <= xy_corr_cnt + 8'd1;
                             if (!sav_since_eav && last_eav_valid && !last_eav_v) begin
                                 // the line that began at the previous EAV lost its SAV: count it
-                                ev_line  <= (ev_valid && last_eav_f == ev_field) ? ev_line + 10'd1 : 10'd0;
-                                ev_field <= last_eav_f;
+                                ev_line  <= (ev_valid && !nf_pend) ? ev_line + 10'd1 : 10'd0;
                                 ev_valid <= 1'b1;
+                                nf_pend  <= 1'b0;
                             end
                         end
                         sav_since_eav  <= 1'b0;
                         last_eav_valid <= 1'b1;
-                        last_eav_f     <= f_d;
                         last_eav_v     <= v_d;
                         in_active <= 1'b0;
                         seen_eav  <= 1'b1;
@@ -172,12 +176,18 @@ module bt656_rx (
                         px_field    <= f_d;
                         sav_since_eav <= 1'b1;
                         if (!v_d) begin                             // an active line starts
-                            px_line  <= (ev_valid && f_d == ev_field) ? ev_line + 10'd1 : 10'd0;
-                            ev_line  <= (ev_valid && f_d == ev_field) ? ev_line + 10'd1 : 10'd0;
-                            ev_field <= f_d;
+                            px_line  <= (ev_valid && !nf_pend) ? ev_line + 10'd1 : 10'd0;
+                            ev_line  <= (ev_valid && !nf_pend) ? ev_line + 10'd1 : 10'd0;
                             ev_valid <= 1'b1;
+                            nf_pend  <= 1'b0;
                         end
                     end
+                    // vertical blanking detector; a line start above used the old nf_pend
+                    if (v_d) begin
+                        if (v_run != 2'd0) nf_pend <= 1'b1;
+                        if (v_run != 2'd3) v_run <= v_run + 2'd1;
+                    end else
+                        v_run <= 2'd0;
                 end
             end else begin
                 // ---- ordinary byte: preamble matcher ----

@@ -69,6 +69,14 @@ async def ntsc_first_field_start(dut):
     await run_vector(dut, 'ntsc_clean_frame', max_bytes=60000)
 
 
+@cocotb.test()
+async def f_stuck_fields(dut):
+    """Non-interlaced source (F never changes): numbering restarts after every vertical blanking."""
+    await run_vector(dut, 'f_stuck_fields')
+    expected = json.loads((VECTORS / 'f_stuck_fields.expected.json').read_text())
+    assert [e['line_in_field'] for e in expected] == [0, 1, 2, 3, 4, 5] * 3      # the vector tests what it claims
+
+
 def test_bt656_rx_matches_model():
     """pytest entry point: build with Icarus and run the cocotb tests above."""
     from cocotb_tools.runner import get_runner

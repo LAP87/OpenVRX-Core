@@ -81,7 +81,7 @@ def frame_bytes(standard, luma_fn=lambda line, x: 0x10 + (x * 219 // 720)):
 class LineRecord:
     """What `bt656_rx` + `line_metrics` must report for each active line."""
     field: int
-    line_in_field: int          # active line number within the field, counted on SAVs (see Receiver)
+    line_in_field: int          # active line number since vertical blanking, counted on line starts (see Receiver)
     length: int                 # bytes from the EAV before this line to the EAV ending it (0 if unknown)
     active_count: int           # bytes between SAV and EAV
     xy_corrected: int           # timing codes fixed by the protection bits
@@ -104,11 +104,15 @@ class Receiver:
         # Line numbers count line *starts*, not received lines, so a line lost to a broken
         # timing code does not shift the rest of the field: an active SAV starts a line, and
         # an EAV with no SAV since the previous EAV means that line's SAV was lost (counted
-        # if the previous EAV said the line was active). Numbering restarts at 0 when the
-        # field bit of a line start differs from the previous one.
+        # if the previous EAV said the line was active). Numbering restarts at 0 at the first
+        # line start after vertical blanking: two valid timing codes in a row with V = 1.
+        # The F bit plays no part, so a source whose F bit never changes (a TVP5150AM1 forces
+        # F = 1 for non-interlaced video, SLES209E 3.21.20) is numbered like any other.
         self.line_no = 0            # number of the line whose SAV was seen last
-        self.ev_field = None        # field / number of the last line start
-        self.ev_line = 0
+        self.ev_valid = False       # a line start has been seen
+        self.ev_line = 0            # number of the last line start
+        self.v_run = 0              # valid timing codes in a row with V = 1 (saturates at 3)
+        self.nf_pending = False     # vertical blanking seen since the last line start
         self.sav_since_eav = False
         self.last_eav_fv = None     # (F, V) of the last EAV
         self.xy_corrected = self.xy_bad = 0
@@ -122,9 +126,9 @@ class Receiver:
         self.xy_corrected = self.xy_bad = 0
         return rec
 
-    def _line_start(self, f):
-        n = 0 if (self.ev_field is None or f != self.ev_field) else self.ev_line + 1
-        self.ev_field, self.ev_line = f, n
+    def _line_start(self):
+        n = 0 if (not self.ev_valid or self.nf_pending) else self.ev_line + 1
+        self.ev_valid, self.ev_line, self.nf_pending = True, n, False
         return n
 
     def push(self, byte):
@@ -146,7 +150,7 @@ class Receiver:
                     # line already belongs to the next line and may carry the next field
                     self.records.append(self._record(self.line_field))
                 elif not self.sav_since_eav and self.last_eav_fv is not None and self.last_eav_fv[1] == 0:
-                    self._line_start(self.last_eav_fv[0])      # that line's SAV was lost
+                    self._line_start()                          # that line's SAV was lost
                 self.sav_since_eav = False
                 self.last_eav_fv = (f, v)
                 self.in_active = False
@@ -158,7 +162,14 @@ class Receiver:
                 self.line_field = f
                 self.sav_since_eav = True
                 if not v:
-                    self.line_no = self._line_start(f)
+                    self.line_no = self._line_start()
+            # vertical blanking detector (after the line start above, which used the old state)
+            if v:
+                if self.v_run >= 1:
+                    self.nf_pending = True
+                self.v_run = min(self.v_run + 1, 3)
+            else:
+                self.v_run = 0
             return
         if self.state == 0 and byte == 0xFF:
             self.state = 1

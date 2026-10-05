@@ -42,6 +42,17 @@ def cases():
     lines[5][3] = bad
     yield 'pal_lost_codes', b''.join(lines) + bt656.line_bytes('pal', 108)
 
+    # non-interlaced source: three short fields whose F bit never changes (a TVP5150AM1 forces
+    # F = 1 for such video); the numbering must restart after every vertical blanking
+    data = bytearray()
+    for fld in range(3):
+        for i in range(3 + 6):
+            v = 1 if i < 3 else 0
+            act = bt656.blanking(1440) if v else bytes(b for x in range(720) for b in (0x80, ramp(fld * 9 + i, x)))
+            data += (bytes([0xFF, 0, 0, bt656.xy(1, v, 1)]) + bt656.blanking(1716 - 1440 - 8)
+                     + bytes([0xFF, 0, 0, bt656.xy(1, v, 0)]) + act)
+    yield 'f_stuck_fields', bytes(data) + bytes([0xFF, 0, 0, bt656.xy(1, 1, 1)]) + bt656.blanking(1716 - 1440 - 8)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
