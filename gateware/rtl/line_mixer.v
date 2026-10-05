@@ -4,15 +4,11 @@
 // across fields), and average both when they are about equally clean. A line
 // with broken sync codes or a wrong length loses against a good one.
 //
-// Lines are paired by (field, line number). Unpaired lines:
-//   - both channels have lines of the same field but different numbers: the
-//     older one is resolved alone; it is shown if it comes from the current
-//     channel or the other channel is within NEAR lines (it skipped this one),
-//     otherwise dropped (channels not in step, e.g. two different sources);
-//   - one channel has 3 lines waiting: its oldest is resolved alone, shown
-//     only if it is the current channel.
-// If the current channel stops delivering lines and the other is alive, the
-// current channel switches.
+// Pair by (epoch, field, line), waiting at most PAIR_WAIT cycles for a missing
+// partner. Good solitary lines may be shown; bad or already emitted lines
+// are dropped on every path. Epochs prevent a late previous field from
+// masquerading as a new field. A returning channel can realign its epoch
+// only at matching, fresh heads; it cannot pull output backwards.
 //
 // Output: tagged words {field, line, idx, data} in the M2 frame buffer format,
 // written into a FIFO whenever o_room says there is space for 4 more.
@@ -23,7 +19,7 @@ module line_mixer #(
     parameter N_WORDS   = 360,
     parameter BLEND_Q8  = 38,             // |hfA-hfB| < 38/256 * max -> blend  (prototype 0.15)
     parameter SWITCH_Q8 = 64,             // switch when the other is > 64/256 better (prototype 0.25)
-    parameter NEAR      = 8
+    parameter PAIR_WAIT = 4096           // 63.2 us at 64.8 MHz (about one NTSC line)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -37,6 +33,8 @@ module line_mixer #(
     input  wire [19:0] hfa, hfb,
     input  wire        bada, badb,
     input  wire        alive_a, alive_b,
+    input  wire [7:0]  epoch_a, epoch_b,
+    input  wire [31:0] age_a, age_b,
 
     output reg         o_we,
     output reg  [51:0] o_data,
@@ -57,19 +55,30 @@ module line_mixer #(
     reg [9:0] ri;                         // next word to read
     reg       v1;                         // read issued last cycle
     reg [8:0] i1;
+    reg [7:0] offset_a, offset_b, last_epoch;
+    reg [9:0] last_line;
+    reg last_valid, resync_a, resync_b;
 
     assign rd_idx = ri[8:0];
     assign pop_a = (st == S_POP) && pop_r[0];
     assign pop_b = (st == S_POP) && pop_r[1];
 
     wire has_a = cnt_a != 3'd0, has_b = cnt_b != 3'd0;
-    wire same_key   = has_a && has_b && fa == fb && la == lb;
-    wire same_field = has_a && has_b && fa == fb && la != lb;
-    wire a_older    = la < lb;
-    wire [9:0] ldiff = a_older ? lb - la : la - lb;
+    wire [7:0] ea = epoch_a + offset_a, eb = epoch_b + offset_b;
+    // Unsigned modular comparisons: useful separations are < 128 fields.
+    wire [7:0] da = ea - last_epoch, db = eb - last_epoch, dab = ea - eb;
+    wire past_a = last_valid && (da[7] || (da == 0 && la <= last_line));
+    wire past_b = last_valid && (db[7] || (db == 0 && lb <= last_line));
+    wire raw_pair = has_a && has_b && fa == fb && la == lb;
+    wire fresh = age_a < PAIR_WAIT && age_b < PAIR_WAIT;
+    wire realign = raw_pair && fresh && (resync_a || resync_b);
+    wire same_key = raw_pair && (ea == eb || realign);
+    wire a_older = (ea == eb) ? la < lb : dab[7];
+    wire good_a = !bada && alive_a, good_b = !badb && alive_b;
+    wire anchor_b = resync_a && !resync_b ? 1'b1 :
+                    resync_b && !resync_a ? 1'b0 : cur;
 
     // metric decision (S_DEC; heads are stable while a line is waiting)
-    wire [20:0] d    = {1'b0, hfa} - {1'b0, hfb};       // > 0: A noisier
     wire        a_noisier = hfa > hfb;
     wire [19:0] absd = a_noisier ? hfa - hfb : hfb - hfa;
     wire [19:0] m    = a_noisier ? hfa : hfb;
@@ -87,12 +96,26 @@ module line_mixer #(
                         {avg(rd_a[31:24], rd_b[31:24]), avg(rd_a[23:16], rd_b[23:16]),
                          avg(rd_a[15:8], rd_b[15:8]), avg(rd_a[7:0], rd_b[7:0])};
 
-    task automatic decide(input [1:0] u, input [1:0] p, input f, input [9:0] l);
+    task automatic decide(input [1:0] u, input [1:0] p, input f, input [9:0] l, input [7:0] e);
         begin
             use_r <= u; pop_r <= p; k_field <= f; k_line <= l;
             dec_valid <= 1'b1; dec_use <= u; dec_pop <= p; dec_field <= f; dec_line <= l;
             ri <= 0;
             st <= (u == 2'b00) ? S_POP : S_EMIT;
+            if (u != 0) begin last_valid <= 1'b1; last_epoch <= e; last_line <= l; end
+        end
+    endtask
+
+    task automatic alone_a;
+        begin
+            decide(good_a ? 2'b01 : 2'b00, 2'b01, fa, la, ea);
+            if (good_a) cur <= 1'b0;
+        end
+    endtask
+    task automatic alone_b;
+        begin
+            decide(good_b ? 2'b10 : 2'b00, 2'b10, fb, lb, eb);
+            if (good_b) cur <= 1'b1;
         end
     endtask
 
@@ -100,26 +123,34 @@ module line_mixer #(
         dec_valid <= 1'b0;
         o_we <= 1'b0;
         v1 <= 1'b0;
+        if (!alive_a) resync_a <= 1'b1;
+        if (!alive_b) resync_b <= 1'b1;
         case (st)
         S_IDLE: begin
-            if (cur == 1'b0 && !alive_a && alive_b) cur <= 1'b1;
-            else if (cur == 1'b1 && !alive_b && alive_a) cur <= 1'b0;
-            else if (same_key) st <= S_DEC;
-            else if (same_field) begin
-                if (a_older) decide((cur == 1'b0 || ldiff < NEAR) ? 2'b01 : 2'b00, 2'b01, fa, la);
-                else         decide((cur == 1'b1 || ldiff < NEAR) ? 2'b10 : 2'b00, 2'b10, fb, lb);
+            if (same_key) begin
+                if (realign) begin
+                    if (anchor_b) offset_a <= eb - epoch_a;
+                    else offset_b <= ea - epoch_b;
+                    resync_a <= 1'b0; resync_b <= 1'b0;
+                end
+                st <= S_DEC;
             end
-            else if (cnt_a >= 3'd3) decide(cur == 1'b0 ? 2'b01 : 2'b00, 2'b01, fa, la);
-            else if (cnt_b >= 3'd3) decide(cur == 1'b1 ? 2'b10 : 2'b00, 2'b10, fb, lb);
+            else if (has_a && past_a) decide(0, 1, fa, la, ea);
+            else if (has_b && past_b) decide(0, 2, fb, lb, eb);
+            else if (has_a && has_b) begin
+                if (a_older) alone_a(); else alone_b();
+            end
+            else if (has_a && age_a >= PAIR_WAIT) alone_a();
+            else if (has_b && age_b >= PAIR_WAIT) alone_b();
         end
         S_DEC: begin
-            if (bada && !badb) begin cur <= 1'b1; decide(2'b10, 2'b11, fa, la); end
-            else if (badb && !bada) begin cur <= 1'b0; decide(2'b01, 2'b11, fa, la); end
-            else if (bada && badb) decide(cur ? 2'b10 : 2'b01, 2'b11, fa, la);
-            else if (blend) decide(2'b11, 2'b11, fa, la);
-            else if (cur == 1'b0 && to_b) begin cur <= 1'b1; decide(2'b10, 2'b11, fa, la); end
-            else if (cur == 1'b1 && to_a) begin cur <= 1'b0; decide(2'b01, 2'b11, fa, la); end
-            else decide(cur ? 2'b10 : 2'b01, 2'b11, fa, la);
+            if (past_a || past_b || (!good_a && !good_b)) decide(0, 3, fa, la, ea);
+            else if (!good_a) begin cur <= 1'b1; decide(2, 3, fa, la, ea); end
+            else if (!good_b) begin cur <= 1'b0; decide(1, 3, fa, la, ea); end
+            else if (blend) decide(3, 3, fa, la, ea);
+            else if (cur == 1'b0 && to_b) begin cur <= 1'b1; decide(2, 3, fa, la, ea); end
+            else if (cur == 1'b1 && to_a) begin cur <= 1'b0; decide(1, 3, fa, la, ea); end
+            else decide(cur ? 2 : 1, 3, fa, la, ea);
         end
         S_EMIT: begin
             if (ri != N_WORDS && o_room) begin
@@ -134,7 +165,11 @@ module line_mixer #(
         S_POP: st <= S_WAIT;              // counts update this edge
         default: st <= S_IDLE;            // S_WAIT: heads now show the next lines
         endcase
-        if (rst) begin st <= S_IDLE; cur <= 1'b0; dec_valid <= 1'b0; o_we <= 1'b0; v1 <= 1'b0; end
+        if (rst) begin
+            st <= S_IDLE; cur <= 0; dec_valid <= 0; o_we <= 0; v1 <= 0;
+            offset_a <= 0; offset_b <= 0; last_epoch <= 0; last_line <= 0;
+            last_valid <= 0; resync_a <= 1; resync_b <= 1;
+        end
     end
 endmodule
 `default_nettype wire

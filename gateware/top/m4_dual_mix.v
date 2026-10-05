@@ -2,9 +2,12 @@
 // -> line-by-line mixer -> SDRAM field triple buffer -> 720p60 on the onboard
 // HDMI. The decoders are brought up over I2C by the FPGA (tvp_ctrl).
 //
-// LEDs (active low): 0 heartbeat, 1 lines from A, 2 lines from B, 3 mixer
-// currently prefers B, 4 a field is being shown, 5 both decoders answered
-// on I2C and report horizontal + vertical lock.
+// Both RX5808 are kept on F4 5800 MHz (rx_tune.v, as in M3), so M4 works with
+// the same wiring as M3 and M6.
+//
+// LEDs (active low): 0 heartbeat, 1 decoder A locked, 2 decoder B locked.
+// The other three LED pins are signals on header J6 (as in M3/M6): led[3] =
+// decoder RESETB (J6-18), led[4] = RX5808 DATA (J6-17), led[5] = SEL (J6-16).
 `default_nettype none
 module m4_dual_mix #(
     parameter LOW_LATENCY = 0             // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
@@ -18,7 +21,7 @@ module m4_dual_mix #(
     inout  wire        i2c_scl,           // shared
     inout  wire        i2c_sda_a,         // one SDA per decoder: identical modules share an address
     inout  wire        i2c_sda_b,
-    output wire        tvp_resetb,
+    output wire        rx_spi_clk,        // RX5808 CLK (J5-18); DATA/SEL/RESETB leave on led[5:3]
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [5:0]  led,
@@ -37,7 +40,7 @@ module m4_dual_mix #(
     // ---- decoder bring-up (board clock) ----
     reg [2:0] rst_c;
     always @(posedge clk) rst_c <= {rst_c[1:0], rst_i};
-    wire scl_low, init_done;
+    wire scl_low, init_done, tvp_resetb;
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid;
     wire [15:0] st0, st1;
@@ -86,6 +89,13 @@ module m4_dual_mix #(
 
     reg [24:0] sec;
     always @(posedge clk) sec <= sec + 1'b1;
-    assign led = ~{locked_ok, have_video, cur, b_lines, a_lines, sec[24]};
+    wire lock_a = st_valid[0] && st0[1] && st0[2], lock_b = st_valid[1] && st1[1] && st1[2];
+    wire spi_data, spi_sel_n;
+    rx_tune tune (.clk(clk), .rst(rst_c[2]), .locked(lock_a | lock_b),
+                  .spi_clk(rx_spi_clk), .spi_data(spi_data), .spi_sel_n(spi_sel_n), .writes());
+    assign led[5] = spi_sel_n;
+    assign led[4] = spi_data;
+    assign led[3] = tvp_resetb;
+    assign led[2:0] = ~{lock_b, lock_a, sec[24]};
 endmodule
 `default_nettype wire

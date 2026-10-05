@@ -21,7 +21,8 @@ if [ -f "$here/boards/$top.cst" ]; then cat "$here/boards/$top.cst" >> "$top.cst
 out_fs="$top.fs"
 if [ -n "${PULL:-}" ]; then
   case "$PULL" in UP|DOWN) ;; *) echo "PULL must be UP or DOWN" >&2; exit 1 ;; esac
-  sed -i -E "/IO_PORT \"tvp[ab]_d\[/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$top.cst"
+  # not YOUT7: it is also the decoder's I2C address strap, sampled at reset
+  sed -i -E "/IO_PORT \"tvp[ab]_d\[[0-6]\]/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$top.cst"
   out_fs="${top}_pull$(echo "$PULL" | tr 'A-Z' 'a-z').fs"
 fi
 "$bin/yowasp-yosys" -q -l "$top.yosys.log" \
@@ -34,4 +35,11 @@ if [ -f "$here/boards/$top.sdc" ]; then cp "$here/boards/$top.sdc" "$top.sdc"; s
   --freq "${FREQ_MHZ:-75}" "${sdc[@]}" --log "$top.pnr.log" --quiet
 "$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$top.pnr.json"
 echo "built $out/$out_fs"
-grep -E "Max frequency for clock|Device utilisation|LUT4|DFF|OSER10|rPLL|BSRAM" "$top.pnr.log" | head -20 || true
+# nextpnr prints the clock table twice: an estimate after placement, then the result after routing. Show the last.
+grep -E '(LUT4|DFF|OSER10|rPLL|BSRAM):[[:space:]]+[0-9]+/' "$top.pnr.log" || true
+# Read the whole log: an early-exiting reader after tac can give SIGPIPE under
+# pipefail on larger designs, even though synthesis, routing and packing passed.
+awk '/Max frequency for clock/ {
+    if (!in_table) table="";
+    table=table $0 ORS; in_table=1; next
+} {in_table=0} END {printf "%s", table}' "$top.pnr.log"

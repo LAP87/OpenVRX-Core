@@ -42,6 +42,18 @@ def cases():
     lines[5][3] = bad
     yield 'pal_lost_codes', b''.join(lines) + bt656.line_bytes('pal', 108)
 
+    # Three 240p-like pictures: F stays 0, VBI must restart the line number.
+    # Losing the first active SAV of picture 2 must still reserve line 0.
+    data = bytearray()
+    for picture in range(3):
+        for line in range(-2, 4):
+            v = int(line < 0)
+            sav = bad if picture == 1 and line == 0 else bt656.xy(0, v, 0)
+            data += bytes([255, 0, 0, bt656.xy(0, v, 1)]) + bt656.blanking(1716 - 1448)
+            data += bytes([255, 0, 0, sav]) + bt656.blanking(1440)
+    data += bytes([255, 0, 0, bt656.xy(0, 1, 1)])
+    yield 'constant_f', bytes(data)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

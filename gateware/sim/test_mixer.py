@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+import pytest
 
 HERE = Path(__file__).resolve().parent
 GW = HERE.parent
@@ -83,8 +84,9 @@ def model(a, b, **kw):
     ev = [(t, 0, r) for t, r in records_with_times(a, START_A, T_A)]
     ev += [(t, 1, r) for t, r in records_with_times(b, START_B, T_B)]
     m = ref.Mixer(**kw)
-    for _, ch, r in sorted(ev, key=lambda e: e[0]):
-        m.push(ch, r)
+    for t, ch, r in sorted(ev, key=lambda e: e[0]):
+        m.push(ch, r, t)
+    m.advance(max(t for t, *_ in ev) + 300000)
     return m
 
 
@@ -139,25 +141,19 @@ def test_mixer_against_model():
 
 
 def test_dead_channel_switches():
-    """A stops after two fields while it is the current channel: B's lines are
-    dropped until A counts as dead (TIMEOUT), then everything comes from B."""
+    """A stops: healthy B need wait only the pairing window, not the health timeout."""
     timeout = 60000                                      # 0.92 ms ~ 14 lines at 15.4 ns
     a_full, b = stream('a', 1, {1: 0}), stream('b', 2, {1: 60})     # A clean, B snowy in field 1
     a = a_full[:2 * (VBI + LINES) * 1716]
     dec, out, end = run_sim(a, b, HERE / 'build' / 'tb_mixer_dead', [f'-Ptb_mixer.TIMEOUT={timeout}'])
     assert end is not None and end[0] == 0
-    m = model(a, b)
-    n_paired = sum(1 for _, p, *_ in m.trace if p == 0b11)
-    # up to the moment A disappears the RTL matches the model
-    assert dec[:n_paired] == m.trace[:n_paired]
-    rest = dec[n_paired:]
-    assert m.cur == 0, 'scenario: A must be the current channel when it disappears'
+    m = model(a, b, timeout_ns=timeout * 15.4)
+    assert dec == m.trace
+    assert out == m.out
+    rest = [r for r in dec if r[2] == 0 and r[3] >= 0][-(LINES - 1):]
     assert rest and all(p == 0b10 for _, p, *_ in rest), rest      # only B lines left
-    dropped = [r for r in rest if r[0] == 0b00]
     shown = [r for r in rest if r[0] == 0b10]
-    line_ns = 1716 * T_B
-    assert 1 <= len(dropped) <= timeout * 15.4 / line_ns + 3, f'{len(dropped)} lines dropped'
-    assert rest[-len(shown):] == shown, 'B lines must be shown once A is dead'
+    assert len(shown) == len(rest), 'healthy B must be shown within the pairing window'
     assert end[1] == 1, 'current channel should be B'
     assert len(out) == 360 * sum(1 for u, *_ in dec if u), 'words for every shown line'
 
@@ -170,4 +166,108 @@ def test_unlocked_decoder_loses():
     assert dec == m.trace
     assert out == m.out
     paired = [u for u, p, *_ in dec if p == 0b11]
-    assert paired and all(u == ref.USE_A for u in paired), set(paired)
+    assert ref.USE_A in paired and all(u in (ref.USE_NONE, ref.USE_A) for u in paired), set(paired)
+    assert all(not (u & ref.USE_B) for u, *_ in dec)
+
+
+def assert_picture_order(dec, fields):
+    shown = [(f, l) for u, _, f, l in dec if u]
+    assert shown
+    starts = 1 + sum(f != pf or l < pl for (pf, pl), (f, l) in zip(shown, shown[1:]))
+    assert starts == fields, f'{starts} backend field starts for {fields} source fields'
+    for (pf, pl), (f, l) in zip(shown, shown[1:]):
+        assert f != pf or l > pl, f'duplicate/backwards line: {(pf, pl)} -> {(f, l)}'
+
+
+@pytest.mark.parametrize('lag,forced', [(2, 'a'), (5, 'a'), (7, 'a'), (5, 'b'), (5, None)])
+def test_late_channel_cannot_replay_old_lines(monkeypatch, lag, forced):
+    monkeypatch.setitem(globals(), 'LINES', 24)
+    monkeypatch.setitem(globals(), 'VBI', 20)
+    monkeypatch.setitem(globals(), 'FIELDS', 3)
+    monkeypatch.setitem(globals(), 'START_B', START_A + lag * 1716 * T_A)
+    a, b = stream('a', 1), stream('b', 2)
+    bad = (forced == 'b', forced == 'a')
+    dec, out, end = run_sim(a, b, HERE / 'build' / f'tb_mixer_lag{lag}_{forced}',
+                           [f'-Ptb_mixer.START_B={START_B}', f'-Ptb_mixer.EXT_A={int(bad[0])}',
+                            f'-Ptb_mixer.EXT_B={int(bad[1])}'])
+    assert end[0] == 0
+    assert_picture_order(dec, FIELDS)
+    if forced:
+        forbidden = ref.USE_B if forced == 'a' else ref.USE_A
+        assert all(not (u & forbidden) for u, *_ in dec)
+    expected = model(a, b, ext_bad=bad)
+    # The line model omits emission/CDC pipeline cycles. Dropped decisions can
+    # interleave differently; every shown line and word still has to agree.
+    assert [r for r in dec if r[0]] == [r for r in expected.trace if r[0]]
+    assert out == expected.out
+
+
+def test_vbi_keeps_hysteresis(monkeypatch):
+    monkeypatch.setitem(globals(), 'VBI', 25)
+    a = stream('a', 1, {0: 60, 1: 20, 2: 20, 3: 20, 4: 20})
+    b = stream('b', 2, {0: 0, 1: 24, 2: 24, 3: 24, 4: 24})
+    expected = model(a, b)
+    dec, out, end = run_sim(a, b, HERE / 'build/tb_mixer_vbi25')
+    assert end[0] == 0
+    assert dec == expected.trace and out == expected.out
+
+
+def test_unpaired_final_lines_have_a_deadline(tmp_path):
+    a = stream('a', 1)
+    # B supplies no SAV/EAV at all. Every complete A line, including the last
+    # two, must be emitted during the 300 us tail without another arrival.
+    dec, out, end = run_sim(a, bytes([0x80]), tmp_path / 'sole_a')
+    records = records_with_times(a, START_A, T_A)
+    assert len([r for r in dec if r[0]]) == len([r for _, r in records if not ref.is_bad(r)])
+    assert len(out) == 360 * sum(bool(u) for u, *_ in dec)
+    timed = [line.split() for line in (tmp_path / 'sole_a/dec.txt').read_text().splitlines() if not line.startswith('end')]
+    last_marker_ns = records[-1][0]
+    assert float(timed[-1][4]) - last_marker_ns < 4096 * 15.4 + 1000
+
+
+def test_negative_control_order_checker():
+    # The old lag-5 trace exhibited both patterns. The acceptance check must
+    # reject each even if the final number of source fields looks plausible.
+    for broken in ([(1, 1, 0, 2), (1, 1, 0, 1)], [(1, 1, 0, 2), (1, 1, 0, 2)]):
+        with pytest.raises(AssertionError):
+            assert_picture_order(broken, 1)
+
+
+def test_channel_returns_after_missing_fields(monkeypatch):
+    monkeypatch.setitem(globals(), 'LINES', 8)
+    monkeypatch.setitem(globals(), 'VBI', 20)
+    monkeypatch.setitem(globals(), 'FIELDS', 7)
+    a, b = stream('a', 1), bytearray(stream('b', 2))
+    field_bytes = (VBI + LINES) * 1716
+    # Keep the EAV that closes field 1; no markers for fields 2..4. The missing
+    # period is longer than TIMEOUT and B's local epoch loses three boundaries.
+    b[2 * field_bytes + 4:5 * field_bytes] = bytes([0x80]) * (3 * field_bytes - 4)
+    b = bytes(b)
+    dec, out, end = run_sim(a, b, HERE / 'build/tb_mixer_return')
+    assert end[0] == 0
+    assert_picture_order(dec, FIELDS)
+    expected = model(a, b)
+    assert [r for r in dec if r[0]] == [r for r in expected.trace if r[0]]
+    assert out == expected.out
+    last = [u for u, p, *_ in dec[-LINES:] if p == 3]
+    assert last and any(u & ref.USE_B for u in last), 'returning B never rejoined the mix'
+
+
+def test_constant_f_mixer_pictures(monkeypatch):
+    monkeypatch.setitem(globals(), 'LINES', 6)
+    monkeypatch.setitem(globals(), 'FIELDS', 3)
+    def fixed_f(data):
+        data = bytearray(data)
+        for i in range(len(data) - 3):
+            if data[i:i + 3] == bytes([255, 0, 0]):
+                f, v, h, status = bt656.XY_TABLE[data[i + 3]]
+                if status != 'bad':
+                    data[i + 3] = bt656.xy(0, v, h)
+        return bytes(data)
+    a, b = fixed_f(stream('a', 1)), fixed_f(stream('b', 2))
+    dec, out, end = run_sim(a, b, HERE / 'build/tb_mixer_constant_f')
+    expected = model(a, b)
+    assert end[0] == 0 and dec == expected.trace and out == expected.out
+    shown = [(f, l) for u, _, f, l in dec if u]
+    assert {f for f, _ in shown} == {0}
+    assert sum(l == 0 for _, l in shown) == FIELDS

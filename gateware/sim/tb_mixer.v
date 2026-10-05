@@ -5,7 +5,8 @@
 `default_nettype none
 module tb_mixer;
     parameter N_A = 1, N_B = 1;               // stream lengths (bytes)
-    parameter TIMEOUT = 65536;                // mixer: cycles without lines = channel dead
+    parameter TIMEOUT = 262144, PAIR_WAIT = 4096;
+    parameter EXT_A = 0;
     parameter EXT_B = 0;                      // 1: decoder B reports no lock the whole time
     parameter real T_A = 37.0, T_B = 37.07, T_S = 15.4;
     parameter real START_A = 2000.0, START_B = 5300.0;
@@ -32,7 +33,7 @@ module tb_mixer;
     wire [51:0] out_data;
     wire [1:0]  dec_use, dec_pop;
     wire [9:0]  dec_line;
-    mixer2 #(.TIMEOUT(TIMEOUT)) dut (.a_clk(a_clk), .a_d(a_d), .b_clk(b_clk), .b_d(b_d), .sys_clk(sys_clk), .rst_async(rst), .ext_bad_a(1'b0), .ext_bad_b(EXT_B != 0),
+    mixer2 #(.TIMEOUT(TIMEOUT), .PAIR_WAIT(PAIR_WAIT)) dut (.a_clk(a_clk), .a_d(a_d), .b_clk(b_clk), .b_d(b_d), .sys_clk(sys_clk), .rst_async(rst), .ext_bad_a(EXT_A != 0), .ext_bad_b(EXT_B != 0),
                 .out_empty(out_empty), .out_data(out_data), .out_pop(!out_empty),
                 .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),

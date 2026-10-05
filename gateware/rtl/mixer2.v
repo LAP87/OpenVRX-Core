@@ -4,7 +4,7 @@
 `default_nettype none
 module mixer2 #(
     parameter LEN_NTSC = 1716, LEN_PAL = 1728, LEN_TOL = 2,
-    parameter TIMEOUT = 65536,
+    parameter TIMEOUT = 262144, PAIR_WAIT = 4096,
     parameter BLEND_Q8 = 38, SWITCH_Q8 = 64
 ) (
     input  wire        a_clk,
@@ -67,24 +67,38 @@ module mixer2 #(
     wire [2:0]  cnt_a, cnt_b;
     wire [9:0]  ha_l, hb_l;
     wire [19:0] ha_hf, hb_hf;
+    wire [7:0] ha_epoch, hb_epoch;
+    wire [31:0] ha_age, hb_age;
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT)) ch_a (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_a), .in_empty(fa_empty), .in_data(fa_data), .in_pop(fa_pop),
         .pop_line(pop_a), .rd_idx(rd_idx), .rd_data(rd_a), .count(cnt_a),
-        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .alive(alive_a), .overflow(ov_a));
+        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad),
+        .head_epoch(ha_epoch), .head_age(ha_age), .alive(alive_a), .overflow(ov_a));
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT)) ch_b (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
         .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b), .count(cnt_b),
-        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .alive(alive_b), .overflow(ov_b));
-    assign overflow = ov_a | ov_b;
+        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad),
+        .head_epoch(hb_epoch), .head_age(hb_age), .alive(alive_b), .overflow(ov_b));
+    // Include lost input FIFO entries, not only the completed-line rings.
+    reg input_ov_a, input_ov_b;
+    reg [1:0] input_ov_as, input_ov_bs;
+    always @(posedge a_clk) if (arst) input_ov_a <= 0; else if (ea_v && fa_full) input_ov_a <= 1;
+    always @(posedge b_clk) if (brst) input_ov_b <= 0; else if (eb_v && fb_full) input_ov_b <= 1;
+    always @(posedge sys_clk) begin
+        if (srst) begin input_ov_as <= 0; input_ov_bs <= 0; end
+        else begin input_ov_as <= {input_ov_as[0], input_ov_a}; input_ov_bs <= {input_ov_bs[0], input_ov_b}; end
+    end
+    assign overflow = ov_a | ov_b | input_ov_as[1] | input_ov_bs[1];
 
     wire        o_we;
     wire [51:0] o_data;
     wire [5:0]  o_wl, o_rl;
     wire        o_full;
-    line_mixer #(.BLEND_Q8(BLEND_Q8), .SWITCH_Q8(SWITCH_Q8)) mix (
+    line_mixer #(.BLEND_Q8(BLEND_Q8), .SWITCH_Q8(SWITCH_Q8), .PAIR_WAIT(PAIR_WAIT)) mix (
         .clk(sys_clk), .rst(srst), .pop_a(pop_a), .pop_b(pop_b), .rd_idx(rd_idx), .rd_a(rd_a), .rd_b(rd_b),
         .cnt_a(cnt_a), .cnt_b(cnt_b), .fa(ha_f), .fb(hb_f), .la(ha_l), .lb(hb_l), .hfa(ha_hf), .hfb(hb_hf),
         .bada(ha_bad), .badb(hb_bad), .alive_a(alive_a), .alive_b(alive_b),
+        .epoch_a(ha_epoch), .epoch_b(hb_epoch), .age_a(ha_age), .age_b(hb_age),
         .o_we(o_we), .o_data(o_data), .o_room(o_wl < 6'd28),
         .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop), .dec_field(dec_field), .dec_line(dec_line),
         .cur(cur));

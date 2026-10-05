@@ -10,10 +10,11 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status:** everything passes simulation against independent Python models
-(52 tests) and builds to bitstreams with timing met. **Nothing has run on
-hardware yet.** Most of this code was written with heavy AI assistance
-(Claude) and reviewed by the project owner; see the hub's
+**Status:** 78 automated tests cover reference-model video cases, faults and
+negative controls. **Nothing has run on hardware yet.** SDRAM timing and buffer
+ownership, genlock recovery and decoder power-loss recovery still need work;
+passing this suite does not certify the complete receiver. Most of this code
+was written with AI assistance and reviewed by the project owner; see the hub's
 [REVIEW.md](https://github.com/LAP87/OpenVRX/blob/main/REVIEW.md) for what to
 attack first.
 
@@ -27,7 +28,7 @@ attack first.
 | `gateware/sim/` | cocotb testbenches |
 | `gateware/model/` | Python reference models (BT.656, line mixer, channel table, font) and vector generator |
 | `gateware/vectors/` | Generated BT.656 test vectors with expected results |
-| `gateware/tools/` | `snowlog.py` (UART log to CSV) and an Apicula packing guard test |
+| `gateware/tools/` | UART log to CSV, shared-pin role checks and Apicula packing guards |
 | `mixer/` | Original floating-point mixer prototype (Python, OpenCV) |
 | `tests/latency/` | Glass-to-glass latency analysis from a high-speed video |
 

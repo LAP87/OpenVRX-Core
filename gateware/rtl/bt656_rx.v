@@ -176,7 +176,7 @@ module bt656_rx (
                             ev_line  <= (ev_valid && f_d == ev_field) ? ev_line + 10'd1 : 10'd0;
                             ev_field <= f_d;
                             ev_valid <= 1'b1;
-                        end
+                        end else ev_valid <= 1'b0;                  // VBI also delimits constant-F (240p/288p) pictures
                     end
                 end
             end else begin

@@ -105,7 +105,8 @@ class Receiver:
         # timing code does not shift the rest of the field: an active SAV starts a line, and
         # an EAV with no SAV since the previous EAV means that line's SAV was lost (counted
         # if the previous EAV said the line was active). Numbering restarts at 0 when the
-        # field bit of a line start differs from the previous one.
+        # field bit changes or a vertical-blanking SAV was seen. The latter
+        # also delimits progressive analog sources whose F bit stays fixed.
         self.line_no = 0            # number of the line whose SAV was seen last
         self.ev_field = None        # field / number of the last line start
         self.ev_line = 0
@@ -159,6 +160,8 @@ class Receiver:
                 self.sav_since_eav = True
                 if not v:
                     self.line_no = self._line_start(f)
+                else:
+                    self.ev_field = None
             return
         if self.state == 0 and byte == 0xFF:
             self.state = 1

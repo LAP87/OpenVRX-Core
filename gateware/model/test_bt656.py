@@ -109,3 +109,10 @@ def test_lost_eav_keeps_line_numbers():
     recs = bt656.Receiver().feed(_field_lines(6, break_eav=2))
     assert [r.line_in_field for r in recs] == [0, 2, 3, 4, 5]
     assert recs[1].xy_bad == 1
+
+
+def test_constant_f_restarts_on_vbi_and_reserves_a_lost_first_sav():
+    data = _field_lines(6, f=0) + _field_lines(6, f=0, break_sav=0) + _field_lines(6, f=0)
+    recs = bt656.Receiver().feed(data)
+    assert [r.line_in_field for r in recs] == list(range(6)) + list(range(1, 6)) + list(range(6))
+    assert {r.field for r in recs} == {0}

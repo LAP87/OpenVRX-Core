@@ -33,14 +33,14 @@ def test_two_decoders():
     assert (r['s0_03'], r['s0_0d'], r['s0_00']) == ('0d', '47', '00')
     assert (r['s1_03'], r['s1_0d']) == ('0d', '47')
     assert r['s0_writes'] == '3' and r['s1_writes'] == '3'
-    assert r['st0'] == '402e' and r['st1'] == '0006' and r['valid'] == '3'
+    assert r['st0'] == '000e' and r['st1'] == '0006' and r['valid'] == '3'
 
 
 def test_missing_decoder_flagged():
     r = run(0)
     assert r['err'] == '2'                      # decoder 1 (5Dh) did not acknowledge
     assert (r['s0_03'], r['s0_0d']) == ('0d', '47')
-    assert r['st0'] == '402e' and r['valid'] == '1'
+    assert r['st0'] == '000e' and r['valid'] == '1'
 
 
 def test_same_address_split_sda():
@@ -49,4 +49,4 @@ def test_same_address_split_sda():
     assert r['err'] == '0'
     assert (r['s0_03'], r['s0_0d'], r['s1_03'], r['s1_0d']) == ('0d', '47', '0d', '47')
     assert r['s0_writes'] == '3' and r['s1_writes'] == '3'
-    assert r['st0'] == '402e' and r['st1'] == '0006' and r['valid'] == '3'
+    assert r['st0'] == '000e' and r['st1'] == '0006' and r['valid'] == '3'

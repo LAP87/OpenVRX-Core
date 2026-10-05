@@ -35,7 +35,7 @@ python tests/latency/analyze_latency.py klipp.mp4 --capture-fps 240 --led 410,62
 
 - `--capture-fps 240` behövs om mobilen sparar slowmotion som 30 fps (vanligt). Utan det blir allt 8× för långt.
 - Flera `--screen` går att ange om två skärmar syns i samma klipp.
-- **Parning:** först hittas kedjans totala fördröjning genom att korskorrelera LED:ens slumpmässiga på/av-mönster med skärmens. Sedan paras varje blinkning bara med en skärmblinkning inom ±20 ms (`--tolerance-ms`) från den fördröjningen. Det gör att även fördröjningar längre än blinkperioden mäts rätt. Om mönstret är tvetydigt (t.ex. regelbunden blinkning) avbryts analysen i stället för att ge en felaktig siffra. Sökområde: upp till 1 000 ms (`--max-delay-ms`). *(Rättat 2026-10-01: tidigare parades varje blinkning med "nästa" skärmblinkning, vilket gav 148 ms för en verklig fördröjning på 500 ms — hittat av Astra.)*
+- **Parning:** först hittas kedjans totala fördröjning genom att korskorrelera LED:ens slumpmässiga på/av-mönster med skärmens. Sedan paras varje blinkning med högst en skärmblinkning inom ±20 ms (`--tolerance-ms`) från den fördröjningen. Varje skärmkant får användas en gång och kan inte ligga före LED-kanten. Det gör att även fördröjningar längre än blinkperioden mäts rätt. Om mönstret är tvetydigt (t.ex. regelbunden blinkning) avbryts analysen i stället för att ge en felaktig siffra. Sökområde: upp till 1 000 ms (`--max-delay-ms`).
 - Namnlösa `--screen` får namnen screen1, screen2 …; dubbla namn avvisas.
 - Tiden räknas vid **halv ljusstyrka** i rutan (interpolerat mellan bildrutor), vilket motsvarar ungefär "första ljusa fält" snarare än "första ljusa pixel".
 
@@ -48,3 +48,5 @@ python tests/latency/analyze_latency.py klipp.mp4 --capture-fps 240 --led 410,62
 ## Tester
 
 `python -m pytest -q tests/latency` genererar syntetiska klipp med känd fördröjning (25, 50 och 500 ms) och kontrollerar att analysen hittar dem inom ±1 ms, inklusive slowmotion-fallet, två namnlösa skärmar och att regelbunden blinkning flaggas som tvetydig.
+
+500 ms-fallet rättades 2026-10-01 efter Astras motexempel. En-till-en-parning och avvisad negativ fördröjning tillkom 2026-10-05; ett test låter två LED-kanter konkurrera om samma skärmkant.

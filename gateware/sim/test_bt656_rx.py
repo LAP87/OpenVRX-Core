@@ -64,6 +64,12 @@ async def pal_lost_codes(dut):
 
 
 @cocotb.test()
+async def constant_f_pictures(dut):
+    """Vertical blanking, including a lost first SAV, delimits constant-F pictures."""
+    await run_vector(dut, 'constant_f')
+
+
+@cocotb.test()
 async def ntsc_first_field_start(dut):
     """First 60 000 bytes of a clean NTSC frame (vertical blanking + first active lines)."""
     await run_vector(dut, 'ntsc_clean_frame', max_bytes=60000)

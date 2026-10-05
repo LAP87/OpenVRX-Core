@@ -28,7 +28,7 @@ module rx5808_spi #(
 
     always @(posedge clk) begin
         if (rst) begin
-            busy <= 1'b0; spi_clk <= 1'b0; spi_data <= 1'b0; spi_sel_n <= 2'b11; t <= 0;
+            busy <= 1'b0; spi_clk <= 1'b0; spi_data <= 1'b1; spi_sel_n <= 2'b11; t <= 0;
         end else if (!busy) begin
             if (start) begin
                 busy <= 1'b1; mask <= sel_mask;
@@ -42,8 +42,8 @@ module rx5808_spi #(
             t <= 0;
             if (guard) begin
                 guard <= 1'b0;
-                if (bitn == 5'd25) begin                // trailing guard: release SEL, idle low
-                    spi_sel_n <= 2'b11; spi_clk <= 1'b0; spi_data <= 1'b0; busy <= 1'b0;
+                if (bitn == 5'd25) begin                // trailing guard: release SEL; DATA idles high
+                    spi_sel_n <= 2'b11; spi_clk <= 1'b0; spi_data <= 1'b1; busy <= 1'b0;   // (its pin is an active-low LED)
                 end
             end else begin
                 ph <= ph + 1'b1;

@@ -5,13 +5,14 @@
 // longer a reset button; reset comes from the PLLs locking at power-up.
 // See puck_ui.v for the screen and design/PUCK_2027_KONCEPT.md for the idea.
 //
-// LEDs (active low): 0 heartbeat, 1 lines from A, 2 lines from B, 3 both
-// decoders answered on I2C and report horizontal + vertical lock.
-// led[4] and led[5] are not LEDs here: their pins (19, 20) are also header
-// J6-17 / J6-16 and carry the RX5808 SPI DATA and SEL. Every ordinary GPIO on
-// the headers is taken by the two decoders, and the free pins 52-56 are FPGA
-// configuration pins (52 = SSPI SCLK, 53 = DOUT), so they are avoided. The two
-// LEDs flicker briefly when a channel is written.
+// LEDs (active low): 0 heartbeat, 1 decoder A locked, 2 decoder B locked.
+// led[3..5] are not LEDs here: their pins (18, 19, 20) are also header J6-18,
+// J6-17 and J6-16 and carry the decoder RESETB, RX5808 SPI DATA and SEL.
+// Every ordinary GPIO on the headers is taken by the two decoders. RESETB is
+// not on pin 25 (HDMI bank: a 3.3 V output there changes how the TMDS clock
+// pair is packed, and the pin is the HDMI CEC line), and SPI is not on 52/53
+// (SSPI configuration pins and the HDMI DDC lines). LED4 is off while idle
+// (DATA idles high) and the LEDs flicker when a channel is written.
 `default_nettype none
 module m6_puck_proto (
     input  wire        clk,
@@ -25,7 +26,6 @@ module m6_puck_proto (
     inout  wire        i2c_scl,           // shared
     inout  wire        i2c_sda_a,         // one SDA per decoder: identical modules share an address
     inout  wire        i2c_sda_b,
-    output wire        tvp_resetb,
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [5:0]  led,
@@ -46,7 +46,7 @@ module m6_puck_proto (
     reg [2:0] rst_c;
     reg [3:0] por = 4'hF;                 // power-on reset for the board-clock logic
     always @(posedge clk) begin por <= {por[2:0], 1'b0}; rst_c <= {rst_c[1:0], por[3]}; end
-    wire scl_low, init_done;
+    wire scl_low, init_done, tvp_resetb;
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid;
     wire [15:0] st0, st1;
@@ -142,6 +142,10 @@ module m6_puck_proto (
 
     reg [24:0] sec;
     always @(posedge clk) sec <= sec + 1'b1;
-    assign led = {sel_n[0], spi_data, ~{locked_ok, b_lines, a_lines, sec[24]}};   // [5] SEL (J6-16), [4] DATA (J6-17)
+    wire lock_a = st_valid[0] && st0[1] && st0[2], lock_b = st_valid[1] && st1[1] && st1[2];
+    assign led[5] = sel_n[0];              // SEL J6-16
+    assign led[4] = spi_data;              // DATA J6-17
+    assign led[3] = tvp_resetb;            // RESETB J6-18
+    assign led[2:0] = ~{lock_b, lock_a, sec[24]};
 endmodule
 `default_nettype wire

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -42,4 +43,27 @@ def test_integer_rule_matches_prototype():
 def test_bad_line_loses():
     assert ref.decide_pair(10, 99999, 1, bad_a=False, bad_b=True) == (ref.USE_A, 0)
     assert ref.decide_pair(10, 99999, 0, bad_a=True, bad_b=False) == (ref.USE_B, 1)
-    assert ref.decide_pair(10, 99999, 1, bad_a=True, bad_b=True) == (ref.USE_B, 1)
+    assert ref.decide_pair(10, 99999, 1, bad_a=True, bad_b=True) == (ref.USE_NONE, 1)
+
+
+def good_line():
+    return SimpleNamespace(field=0, line_in_field=0, active_count=1440,
+                           length=1716, xy_bad=0, hf_energy=0, active=bytes(1440))
+
+
+def test_fault_at_capture_survives_recovery():
+    mixer = ref.Mixer(ext_bad=(True, False))
+    mixer.push(0, good_line(), 0)
+    mixer.ext_bad[0] = False
+    mixer.advance(mixer.pair_wait + 1)
+    assert mixer.trace == [(ref.USE_NONE, 1, 0, 0)]
+    assert not mixer.out
+
+
+def test_new_fault_blocks_waiting_good_line():
+    mixer = ref.Mixer()
+    mixer.push(0, good_line(), 0)
+    mixer.ext_bad[0] = True
+    mixer.advance(mixer.pair_wait + 1)
+    assert mixer.trace == [(ref.USE_NONE, 1, 0, 0)]
+    assert not mixer.out
