@@ -26,8 +26,8 @@ module tb_probe;
     always @(posedge ca) begin da <= mem[ia]; ia <= (ia + 1 == n_bytes) ? 0 : ia + 1; end
     always @(posedge cb) begin db <= (mem[ib] & 8'hDF) | 8'h04; ib <= (ib + 1 == n_bytes) ? 0 : ib + 1; end
 
-    wire scl, sda_a, sda_b, txd, resetb, spi_clk;
-    wire [5:0] led;
+    wire scl, sda_a, sda_b, txd, resetb, spi_clk, spi_data, spi_sel_n;
+    wire [2:0] led;
     pullup (scl); pullup (sda_a); pullup (sda_b);
     wire s_a, s_b;
     assign sda_a = s_a ? 1'b0 : 1'bz;
@@ -39,7 +39,8 @@ module tb_probe;
     m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1)) dut (
         .clk(clk), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
         .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
-        .rx_spi_clk(spi_clk), .led(led), .uart_txd(txd));
+        .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n), .led(led), .uart_txd(txd));
+    always @(led) $display("LED %0d %b", $time, led);
 
     // UART receiver, DIV clocks per bit
     integer ub_t = 0, ub_n = 0; reg [7:0] ub_sh; reg ub_on = 0;
@@ -51,9 +52,9 @@ module tb_probe;
             if (ub_t == DIV + DIV / 2 + DIV * 8) begin ub_on <= 0; $display("U %02x", ub_sh); end
         end
     end
-    // RX5808 frame at start-up: count SPI clocks while SEL (led[5]) is low
+    // RX5808 frame at start-up: count SPI clocks while SEL is low
     integer spi_n = 0;
-    always @(posedge spi_clk) if (!led[5]) spi_n = spi_n + 1;
+    always @(posedge spi_clk) if (!spi_sel_n) spi_n = spi_n + 1;
 
     initial begin
         #(5 * WINDOW * 37 + 500_000);

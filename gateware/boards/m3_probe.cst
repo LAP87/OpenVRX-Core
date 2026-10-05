@@ -8,7 +8,10 @@
 //            J5-12 PIN49, J5-13 PIN86, J5-14 PIN79, J5-17 PIN72.
 // I2C: SCL J6-3 PIN75 shared; SDA decoder A J6-4 PIN85, SDA decoder B J5-9 PIN51 (separate lines, because two
 //      identical modules both answer at B8h). 2.2-4.7 k pull-ups to 3.3 V on the modules or added.
-// RESETB J6-10 PIN25 to both decoders (the common red module has no reset pin: solder a wire to TVP pin 8).
+// RESETB J6-18 PIN18 to both decoders (the common red module has no reset pin: solder a wire to TVP pin 8).
+// PIN18 is LED3's pin (the LED lights during the 2 ms reset pulse). Not PIN25: an output there puts
+// bank 5 at 3.3 V in Apicula's packer and changes the fuses of the TMDS clock pair on 33/34 (M4, M6);
+// PIN25 also goes to HDMI CEC through 100 ohm.
 // The configuration pins 52-56 are deliberately not used.
 IO_LOC  "tvpa_sclk" 77;
 IO_PORT "tvpa_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
@@ -54,11 +57,15 @@ IO_LOC  "i2c_sda_a" 85;
 IO_PORT "i2c_sda_a" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC  "i2c_sda_b" 51;
 IO_PORT "i2c_sda_b" IO_TYPE=LVCMOS33 PULL_MODE=UP;
-IO_LOC  "tvp_resetb" 25;
+IO_LOC  "tvp_resetb" 18;
 IO_PORT "tvp_resetb" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-// RX5808 SPI CLK (as M6); DATA and SEL are led[4] PIN19 = J6-17 and led[5] PIN20 = J6-16 (tangnano20k.cst)
+// RX5808 SPI (as M6): CLK J5-18 PIN71, DATA J6-17 PIN19 (LED4's pin), SEL J6-16 PIN20 (LED5's pin)
 IO_LOC  "rx_spi_clk" 71;
 IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_data" 19;
+IO_PORT "rx_spi_data" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_sel_n" 20;
+IO_PORT "rx_spi_sel_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 // onboard BL616 USB-UART RX (as M6)
 IO_LOC  "uart_txd" 69;
 IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

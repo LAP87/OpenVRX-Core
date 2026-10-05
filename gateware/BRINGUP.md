@@ -8,7 +8,7 @@ Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa l�
 
 **TVP5150-modulernas spänning.** Mät stift 10 (IO_DVDD) på TVP-kretsen när modulen är strömsatt. Visar den 3,3 V går datasignalerna direkt till Tang-kortet. Visar den 1,8 V läser Tang-kortet dem inte säkert, och då behövs nivåomvandlare (TXS0108E, två per modul). Mata modulen enligt dess egen märkning.
 
-**Reset.** Den röda modulen saknar resetstift. Löd en tråd från TVP-kretsens stift 8 (RESETB) till J6-10, eller låt den sitta på modulens egen reset om den har en sådan krets.
+**Reset.** Den röda modulen saknar resetstift. Löd en tråd från TVP-kretsens stift 8 (RESETB) till J6-18, eller låt den sitta på modulens egen reset om den har en sådan krets.
 
 ## 1. Koppling
 
@@ -32,7 +32,9 @@ Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa l�
 | YOUT2 | J5-6 (PIN41) | | YOUT7 | J5-17 (PIN72) |
 | YOUT3 | J5-10 (PIN48) | | SDA | J5-9 (PIN51) |
 
-**Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-10 (PIN25). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
+**Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-18 (PIN18, lysdiod 3). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
+
+J6-10 (PIN25) används inte. En utgång där ligger i samma bank som HDMI-klockparet och ändrar hur Apicula packar det (avsnitt 5).
 
 Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen SDA.
 
@@ -46,7 +48,14 @@ Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen S
 | 5 V, GND | separat 5 V, gemensam GND |
 | Video ut | TVP-modulens videoingång (A respektive B) |
 
-DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 4 och 5 blinkar kort när en kanal skrivs.
+RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 3 blinkar till vid start (resetpulsen, 2 ms). Lysdiod 4 och 5 blinkar kort när en kanal skrivs.
+
+**Lysdioder** (tre är kvar som lysdioder):
+
+| Bitström | Lysdiod 0 | Lysdiod 1 | Lysdiod 2 |
+|---|---|---|---|
+| M3 | hjärtslag 1 Hz | SCLK från A | SCLK från B |
+| M4, M6 | hjärtslag: 1 Hz när båda dekodrarna är låsta, 4 Hz annars | rader från A | rader från B |
 
 **OLED (M6):** SCL J6-3, SDA J6-4 (samma buss som dekoder A), 3,3 V, GND.
 
@@ -123,7 +132,8 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 | Stift | Vår signal | Också kopplat till | Risk |
 |---|---|---|---|
 | 26 | YOUT2 A | HDMI hot-plug (spänningsdelare från 5 V) | Låg: dekodern driver mot ett motstånd när en skärm sitter i |
-| 25 | RESETB | HDMI CEC (100 Ω, 27 kΩ pull-up) | Låg: en resetpuls syns som en CEC-puls hos skärmen |
+| 18 | RESETB | lysdiod 3 (510 Ω till 3,3 V) | Före konfigurering hålls RESETB inte låg, se nedan |
+| 19, 20 | RX5808 DATA, SEL | lysdiod 4 och 5 (510 Ω till 3,3 V) | Ofarligt: lysdioderna blinkar när en kanal skrivs |
 | 76 | YOUT0 B | BL616 SPI MOSI | **Kontrollera:** om BL616 driver stiftet blir bit 0 fel. Proben visar det. |
 | 86 | YOUT5 B | BL616 SPI DIR | **Kontrollera,** samma |
 | 75 | SCL | BL616 SPI MISO | Låg (ingång på BL616) |
@@ -131,5 +141,9 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 | 79 | YOUT6 B | WS2812 RGB-lysdiodens data | Ofarligt: RGB-lysdioden blinkar i slumpfärger |
 | 80, 85 | SCLK B, SDA A | microSD med 10 kΩ pull-up | Ofarligt |
 | 51 | SDA B | ljudförstärkarens SD_MODE | Ofarligt: förstärkaren slås av och på |
+
+**RESETB före konfigurering.** Lysdiod 3 och dess 510 Ω drar stift 18 mot 3,3 V, så RESETB hålls inte låg medan FPGA:n laddas. Enligt SLES209E avsnitt 3.18 är dekoderns utgångar odefinierade tills den har fått en resetpuls. Det skadar inget: dekoderns utgångar går till stift som är ingångar i FPGA:n, och `tvp_ctrl` ger en hel resetpuls (20 ms väntan, 2 ms låg) efter konfigureringen. Efter pulsen är YOUT avstängda tills register 03h skrivs.
+
+**Inga utgångar på stift 25–42.** Bank 4 och 5 bär HDMI-paren. Apicula 0.32 sätter `BANK_VCCIO` för hela banken efter bankens första vanliga utgång, och då packas HDMI-klockparet annorlunda än i M0. RESETB låg tidigare på stift 25 (som dessutom går till HDMI-CEC genom 100 Ω) och är därför flyttad till stift 18. Dekodrarnas databitar på 26–31, 41 och 42 är ingångar och påverkar inte packningen (`tools/test_lvds_bank_inputs.py`).
 
 Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15). Ändringen görs i `boards/*.cst` och `top/*.v`.

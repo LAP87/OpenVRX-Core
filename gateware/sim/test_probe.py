@@ -14,7 +14,8 @@ HERE = Path(__file__).resolve().parent
 GW = HERE.parent
 PROJECT = GW.parent
 WINDOW = 270_000
-LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4})$')
+CLK_HZ = 2_700_000                  # what tb_probe.v tells the probe (scales its timers)
+LINE =re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4})$')
 
 
 def run():
@@ -72,3 +73,15 @@ def test_probe_reports():
     _, f_dead, body, _, _ = fields(b[3])
     assert body.strip() == 'no SCLK' and int(f_dead) < WINDOW // 2, b[3]
     assert fields(a[3])[2].startswith('tog FF hi FF'), a[3]
+
+    # LEDs, printed as 'led2 led1 led0', 0 = lit. LED1 / LED2: SCLK A / B seen in the last window.
+    leds = [(int(t), v) for t, v in re.findall(r'^LED (\d+) (\S{3})$', log, re.M)]
+
+    def led_at(t):
+        return [v for when, v in leds if when <= t][-1]
+    win = WINDOW * 37
+    assert led_at(win + 100_000)[:2] == '00', leds          # after window 1: both clocks run
+    assert led_at(4 * win + 100_000)[:2] == '10', leds      # B's clock stopped during window 4: LED2 dark
+    # LED0 is the heartbeat: it changes every CLK_HZ / 2 clocks, once in this run
+    beats = [t for (t, v), (_, prev) in zip(leds[1:], leds) if prev[2] in '01' and v[2] != prev[2]]
+    assert len(beats) == 1 and abs(beats[0] - CLK_HZ // 2 * 37) < 20 * 37, beats

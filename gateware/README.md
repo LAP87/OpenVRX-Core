@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (52 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (55 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -132,12 +132,14 @@ Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radma
 | YOUT0–7 | PIN27, 28, 26, 29, 30, 31, 73, 74 (J6-8, 9, 11, 12, 13, 14, 1, 2) | PIN76, 42, 41, 48, 49, 86, 79, 72 (J5-3, 5, 6, 10, 12, 13, 14, 17) |
 | I2C SDA | PIN85 (J6-4) | PIN51 (J5-9) |
 | I2C SCL | PIN75 (J6-3), gemensam | |
-| RESETB | PIN25 (J6-10), gemensam — den röda modulen saknar reset-stift: löd en tråd till TVP stift 8 | |
+| RESETB | PIN18 (J6-18, lysdiod 3), gemensam — den röda modulen saknar reset-stift: löd en tråd till TVP stift 8 | |
 | Jord | J6-20 / J5-2, J5-15 | |
 
 Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per dekoder. Kontrollera modulernas matning och IO-nivå (3,3 V) innan inkoppling. Stift 52–56 (konfigurationsstift) används inte.
 
-Lysdioder (tänd = sant): LED0 hjärtslag, LED1 rader från A, LED2 rader från B, LED3 mixern föredrar B, LED4 halvbild visas, LED5 båda dekodrarna svarar på I2C och rapporterar H- och V-lås.
+RESETB låg på PIN25 (J6-10) till 2026-10-05. Stift 25–42 (bank 4 och 5) bär HDMI-paren, och en vanlig utgång där ändrar hur Apicula packar klockparet: se [BRINGUP.md](BRINGUP.md) avsnitt 5. Stiften till lysdiod 3–5 används därför som stiftlistestift (J6-18, J6-17, J6-16), och toppmodulerna M3, M4 och M6 har bara tre lysdioder.
+
+Lysdioder (tänd = sant): LED0 hjärtslag, 1 Hz när båda dekodrarna svarar på I2C och rapporterar H- och V-lås, annars 4 Hz. LED1 rader från A, LED2 rader från B. Testat i simulering av hela toppmodulen (`sim/test_top_pins.py`).
 
 ## M5 alt. C — Moneagle → 1080p60 → LT8618SX → XR-glasögon
 
@@ -163,7 +165,7 @@ Var hittar man en LT8618SX att koppla till? Ingen färdig breakout är verifiera
 
 ## M6 — puckprototyp steg 1 (M4 + meny, RX5808, OLED)
 
-> Koppling, uppstartsordning och felsökning steg för steg: [BRINGUP.md](BRINGUP.md). Ändrat 2026-10-04: SPI DATA och SEL flyttade från PIN53/52 (konfigurationsstift och HDMI-DDC på kortet) till lysdiodsstiften 19/20. Lysdioderna i M6 är nu fyra: LED0 hjärtslag, LED1 rader från A, LED2 rader från B, LED3 båda dekodrarna låsta.
+> Koppling, uppstartsordning och felsökning steg för steg: [BRINGUP.md](BRINGUP.md). Ändrat 2026-10-04: SPI DATA och SEL flyttade från PIN53/52 (konfigurationsstift och HDMI-DDC på kortet) till lysdiodsstiften 19/20. Ändrat 2026-10-05: RESETB flyttad från PIN25 till lysdiodsstift 18 (se M4). Lysdioderna i M6 är tre, samma som i M4: LED0 hjärtslag (1 Hz när båda dekodrarna är låsta, annars 4 Hz), LED1 rader från A, LED2 rader från B.
 
 `top/m6_puck_proto.v` → `build/m6_puck_proto.fs`. Allt från M4 plus:
 
@@ -238,7 +240,7 @@ Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i
 
 ## M3 — uppstartsprob
 
-`top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar och statusregister. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe`. Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
+`top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar och statusregister. Lysdioder: LED0 hjärtslag 1 Hz, LED1 SCLK från A, LED2 SCLK från B. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe`. Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
 
 ## Formella bevis
 

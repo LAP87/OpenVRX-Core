@@ -2,12 +2,16 @@
 // -> line-by-line mixer -> SDRAM field triple buffer -> 720p60 on the onboard
 // HDMI. The decoders are brought up over I2C by the FPGA (tvp_ctrl).
 //
-// LEDs (active low): 0 heartbeat, 1 lines from A, 2 lines from B, 3 mixer
-// currently prefers B, 4 a field is being shown, 5 both decoders answered
-// on I2C and report horizontal + vertical lock.
+// LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
+// report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
+// from B. The pins of LED 3-5 are header pins: RESETB leaves on 18 (J6-18).
+// It must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for a
+// whole bank from its first single-ended output, and that changes the IOB
+// fuses of the TMDS pairs there.
 `default_nettype none
 module m4_dual_mix #(
-    parameter LOW_LATENCY = 0             // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
+    parameter LOW_LATENCY = 0,            // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
+    parameter CLK_HZ = 27_000_000         // board clock; a testbench shortens the millisecond timers with it
 ) (
     input  wire        clk,
     input  wire        rst_i,
@@ -18,10 +22,10 @@ module m4_dual_mix #(
     inout  wire        i2c_scl,           // shared
     inout  wire        i2c_sda_a,         // one SDA per decoder: identical modules share an address
     inout  wire        i2c_sda_b,
-    output wire        tvp_resetb,
+    output wire        tvp_resetb,        // PIN18 = J6-18 (LED3's pin)
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
-    output wire [5:0]  led,
+    output wire [2:0]  led,
     output wire        O_sdram_clk, O_sdram_cke, O_sdram_cs_n, O_sdram_cas_n, O_sdram_ras_n, O_sdram_wen_n,
     output wire [3:0]  O_sdram_dqm,
     output wire [10:0] O_sdram_addr,
@@ -36,12 +40,14 @@ module m4_dual_mix #(
 
     // ---- decoder bring-up (board clock) ----
     reg [2:0] rst_c;
-    always @(posedge clk) rst_c <= {rst_c[1:0], rst_i};
+    reg [3:0] por = 4'hF;                 // power-on reset for the board-clock logic
+    always @(posedge clk) begin por <= {por[2:0], 1'b0}; rst_c <= {rst_c[1:0], rst_i | por[3]}; end
     wire scl_low, init_done;
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid;
     wire [15:0] st0, st1;
-    tvp_ctrl #(.SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (.clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
+    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (
+                   .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
                    .hold(1'b0), .active());
@@ -84,8 +90,15 @@ module m4_dual_mix #(
                       .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
-    reg [24:0] sec;
-    always @(posedge clk) sec <= sec + 1'b1;
-    assign led = ~{locked_ok, have_video, cur, b_lines, a_lines, sec[24]};
+    // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B
+    localparam [24:0] BEAT_SLOW = CLK_HZ / 2 - 1, BEAT_FAST = CLK_HZ / 8 - 1;
+    reg [24:0] beat_t;
+    reg        beat;
+    always @(posedge clk) begin
+        if (beat_t >= (locked_ok ? BEAT_SLOW : BEAT_FAST)) begin beat_t <= 0; beat <= ~beat; end
+        else beat_t <= beat_t + 1'b1;
+        if (rst_c[2]) begin beat_t <= 0; beat <= 1'b0; end
+    end
+    assign led = ~{b_lines, a_lines, beat};
 endmodule
 `default_nettype wire

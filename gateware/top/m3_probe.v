@@ -14,8 +14,9 @@
 //
 // Both RX5808 are tuned to F4 5800 MHz at start (same SPI pins as M6), so
 // receiver video reaches the decoders without the menu.
-// LEDs (active low): 0 heartbeat, 1 SCLK A, 2 SCLK B, 3 both decoders answer on I2C; led[4]/led[5] carry the
-// RX5808 SPI DATA/SEL (pins 19/20 = J6-17/J6-16; pins 52/53 are configuration and HDMI DDC pins).
+// LEDs (active low): 0 heartbeat, 1 SCLK A, 2 SCLK B. The pins of LED 3-5 are header pins and carry
+// RESETB (18 = J6-18) and the RX5808 SPI SEL and DATA (20 = J6-16, 19 = J6-17), as in M4 and M6
+// (pin 25 shares its bank with the TMDS clock pair; pins 52/53 are configuration and HDMI DDC pins).
 // Pull test (find open joints without a meter): PULL=UP or PULL=DOWN gateware/build.sh m3_probe
 // adds weak pulls on the data pins; a bit that follows the pull is not driven by the decoder.
 `default_nettype none
@@ -33,9 +34,11 @@ module m3_probe #(
     inout  wire        i2c_scl,
     inout  wire        i2c_sda_a,
     inout  wire        i2c_sda_b,
-    output wire        tvp_resetb,
-    output wire        rx_spi_clk,        // RX5808 DATA and SEL leave on led[4] (J6-17), led[5] (J6-16), as in M6
-    output wire [5:0]  led,
+    output wire        tvp_resetb,        // PIN18 = J6-18 (LED3's pin)
+    output wire        rx_spi_clk,
+    output wire        rx_spi_data,       // PIN19 = J6-17 (LED4's pin)
+    output wire        rx_spi_sel_n,      // PIN20 = J6-16 (LED5's pin)
+    output wire [2:0]  led,
     output wire        uart_txd
 );
     `include "vtx_channels.vh"
@@ -66,10 +69,10 @@ module m3_probe #(
     reg  spi_go, spi_done;
     wire spi_busy;
     wire [1:0] sel_n;
-    wire       spi_data;
     rx5808_spi #(.HALF(CLK_HZ / 1_000_000 > 0 ? CLK_HZ / 1_000_000 : 1)) spi (
         .clk(clk), .rst(rst), .start(spi_go), .sel_mask(2'b11), .addr(4'h1), .data(f4[19:0]),
-        .busy(spi_busy), .spi_clk(rx_spi_clk), .spi_data(spi_data), .spi_sel_n(sel_n));
+        .busy(spi_busy), .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(sel_n));
+    assign rx_spi_sel_n = sel_n[0];
     always @(posedge clk) begin
         spi_go <= 1'b0;
         if (!rst && !spi_done && !spi_busy && !spi_go) begin spi_go <= 1'b1; spi_done <= 1'b1; end
@@ -199,9 +202,14 @@ module m3_probe #(
         if (rst) begin phase <= 0; ack_last <= 0; fresh <= 0; oi <= 0; end
     end
 
-    // ---- LEDs
-    reg [24:0] beat;
-    always @(posedge clk) beat <= beat + 1'b1;
-    assign led = {sel_n[0], spi_data, ~{init_done && dev_err == 2'b00, fresh[1], fresh[0], beat[24]}};
+    // ---- LEDs: heartbeat 1 Hz, SCLK A seen, SCLK B seen (the decoders' I2C state is in the report)
+    localparam [24:0] BEAT_HALF = CLK_HZ / 2 - 1;
+    reg [24:0] beat_t;
+    reg        beat;
+    always @(posedge clk) begin
+        if (beat_t == BEAT_HALF) begin beat_t <= 0; beat <= ~beat; end else beat_t <= beat_t + 1'b1;
+        if (rst) begin beat_t <= 0; beat <= 1'b0; end
+    end
+    assign led = ~{fresh[1], fresh[0], beat};
 endmodule
 `default_nettype wire
