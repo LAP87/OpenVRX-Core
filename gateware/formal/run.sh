@@ -42,7 +42,15 @@ must_fail async_fifo_never_full fifo_props 20 "" "$work/never_full.v" "$here/fif
 sed 's/^    assign empty = .*/    assign empty = 1'"'"'b0;/' "$fifo" > never_empty.v
 must_fail async_fifo_never_empty fifo_props 20 "" "$work/never_empty.v" "$here/fifo_props.v" || status=1
 FLOW="chformal -lower;" prove genlock_timing genlock_props 130 "" "$here/../rtl/genlock_timing.v" "$here/genlock_props.v" || status=1
-# negative control: without the wait limit a frame can stall forever while locked
-sed 's/wait_n == MAX_WAIT) begin/1'"'"'b0) begin/' "$here/../rtl/genlock_timing.v" > genlock_nolimit.v
+# negative controls: without the wait limit a frame can stall forever while locked; with two back-porch
+# lines skipped a frame is shorter than V_TOTAL - 1; without the hold-off two cut frames can follow each other
+sed 's/wait_n == MAX_WAIT);/1'"'"'b0);/' "$here/../rtl/genlock_timing.v" > genlock_nolimit.v
+grep -q "1'b0);" genlock_nolimit.v
 FLOW="chformal -lower;" must_fail genlock_no_wait_limit genlock_props 130 "" "$work/genlock_nolimit.v" "$here/genlock_props.v" || status=1
+sed "s/vc <= vc + 12'd2; /vc <= vc + 12'd3; /" "$here/../rtl/genlock_timing.v" > genlock_short.v
+grep -q "vc + 12'd3" genlock_short.v
+FLOW="chformal -lower;" must_fail genlock_short_frame genlock_props 130 "" "$work/genlock_short.v" "$here/genlock_props.v" || status=1
+sed 's/early_n == JUMP_AFTER - 1 \&\& hold == 0/early_n == JUMP_AFTER - 1/' "$here/../rtl/genlock_timing.v" > genlock_nohold.v
+! grep -q "hold == 0" genlock_nohold.v
+FLOW="chformal -lower;" must_fail genlock_no_holdoff genlock_props 130 "" "$work/genlock_nohold.v" "$here/genlock_props.v" || status=1
 exit $status

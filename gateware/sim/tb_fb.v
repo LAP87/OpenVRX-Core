@@ -13,6 +13,7 @@ module tb_fb;
     parameter LL = 0;                         // 1: low-latency mode
     parameter V_TOTAL = 40, V_ACTIVE = 36, V_FP = 1, V_SYNC = 1;
     parameter BOB = 1, RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270, LL_EQ = 1;
+    parameter JUMP_AFTER = 3, HOLD = 32;
     parameter real T_S = 15.4, T_P = 13.4;
     parameter real TAIL = 2000000.0;          // ns to run after the last line
 
@@ -52,7 +53,7 @@ module tb_fb;
     wire de, hsync, vsync, have_video, sdram_ready;
     fb_backend #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .SDRAM_FREQ(5_000_000),
                  .BOB(BOB), .RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT),
-                 .LL_EQ(LL_EQ)) dut (
+                 .LL_EQ(LL_EQ), .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD)) dut (
         .sd_clk(sd_clk), .sd_clk_shift(~sd_clk), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(LL != 0),
         .f_empty(f_empty), .f_data(f_data), .f_pop(f_pop),
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe), .SDRAM_nRAS(nras),

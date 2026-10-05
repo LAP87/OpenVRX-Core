@@ -1,6 +1,6 @@
 """Formal proofs (gateware/formal/run.sh): async FIFO and genlock timing by
 k-induction in yosys, each with negative controls that must produce a real
-counterexample. About 15 s."""
+counterexample. About a minute."""
 import subprocess
 from pathlib import Path
 
@@ -16,4 +16,4 @@ def test_formal_proofs():
     lines = r.stdout.splitlines()
     assert r.returncode == 0, r.stdout + r.stderr
     assert sum(l.startswith('PROVEN') for l in lines) == 3, lines
-    assert sum(l.startswith('CONTROL OK') for l in lines) == 3, lines
+    assert sum(l.startswith('CONTROL OK') for l in lines) == 5, lines

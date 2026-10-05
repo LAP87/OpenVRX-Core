@@ -388,3 +388,30 @@ def test_low_latency_field_without_its_reference_line():
     lens = lengths(frames[k:k + 7])
     assert max(lens) in (51, 52) and min(lens) == 47 and lens[-1] in (48, 49), lens
 
+
+def test_low_latency_false_field_start_does_not_cut_the_frame():
+    """The line numbers restart in the middle of field 7 (as when the mixer changes to a
+    receiver that is out of step): a frame trigger in the middle of the output frame. It is
+    ignored; no frame is shorter than 47 lines and the fields after it are shown intact.
+    Negative control (JUMP_AFTER = 1, as it used to be): the frame is cut short."""
+    src = [(t, f, n if (tag != 8 or n < 5) else n - 5, tag)
+           for t, f, n, tag in source(14, period=P_LL, lines=9, vbi=4, interlaced=True)]
+    trig, frames, lens = ll_run('tb_fb_ll_false', src, **LL_V)
+    ll_picture(frames, 5, 7)
+    ll_picture(frames, 9, 13)
+    assert min(lens) >= 47, lens
+    trig1, frames1, lens1 = ll_run('tb_fb_ll_false1', src, JUMP_AFTER=1, **LL_V)
+    assert min(lens1) < 40, lens1
+
+
+def test_low_latency_source_moves():
+    """From field 7 on every field comes 0.4 field periods later (another camera, a receiver
+    that locked elsewhere). The first early triggers are ignored; after the third the output
+    realigns with one short frame, and the fields after that are shown intact."""
+    field = 13.5 * P_LL
+    src = [(t + (round(0.4 * field) if tag >= 8 else 0), f, n, tag)
+           for t, f, n, tag in source(16, period=P_LL, lines=9, vbi=4, interlaced=True)]
+    trig, frames, lens = ll_run('tb_fb_ll_move', src, **LL_V)
+    ll_picture(frames, 5, 7)
+    ll_picture(frames, 12, 15)
+    assert sum(1 for n in lens if n < 47) <= 1 and max(lens) <= 47 + 8, lens

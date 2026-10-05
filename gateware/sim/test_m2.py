@@ -214,7 +214,8 @@ async def m2_low_latency(dut):
                 x, out_y = 0, out_y + 1
     await feeder
 
-    # genlock: from field 3 on, one frame per field, starting 0..2 output lines after line 1
+    # genlock: the output realigns at the third field at the latest (genlock_timing.v ignores two
+    # early triggers); from field 3 on, one frame per field, starting 0..2 output lines after line 1
     out_line = H_TOTAL * PIX_NS
     lags = []
     for t in line1_done[3:]:

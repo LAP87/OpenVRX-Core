@@ -7,7 +7,7 @@ module genlock_props (
     wire [11:0] x, y;
     wire de, hs, vs, fs;
     genlock_timing #(.H_ACTIVE(4), .H_FP(1), .H_SYNC(1), .H_BP(1), .H_FP_ALT(3),
-                     .V_ACTIVE(4), .V_FP(1), .V_SYNC(1), .V_BP(2), .MAX_WAIT(3)) dut (
+                     .V_ACTIVE(4), .V_FP(1), .V_SYNC(1), .V_BP(2), .MAX_WAIT(3), .JUMP_AFTER(2), .HOLD(2)) dut (
         .clk(clk), .rst(rst), .lock(lock), .trig(trig), .h_alt(h_alt),
         .x(x), .y(y), .de(de), .hsync(hs), .vsync(vs), .frame_start(fs));
 endmodule
