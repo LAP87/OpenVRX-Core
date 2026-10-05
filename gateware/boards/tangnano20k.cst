@@ -12,6 +12,8 @@ IO_LOC  "led[1]" 16;
 IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "led[2]" 17;
 IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// m3_probe, m4_dual_mix and m6_puck_proto have led[2:0] only and use the pins of LED 3-5 as header pins
+// (J6-18, J6-17, J6-16), constrained in their own files; nextpnr skips the entries below for them.
 IO_LOC  "led[3]" 18;
 IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "led[4]" 19;

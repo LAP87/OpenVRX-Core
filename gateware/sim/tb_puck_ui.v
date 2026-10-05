@@ -22,9 +22,12 @@ module tb_puck_ui;
     always #100_000_000 tg = ~tg;
     wire osd_show, txd;
     wire [6:0] osd_char;
-    puck_ui #(.CLK_HZ(1_000_000), .DEBOUNCE_MS(3), .OSD_MS(150), .BAUD(50_000)) ui (
+    reg  [1:0] dec_locked = 2'b01;                // decoder A locked, B not
+    // RX5808: first write 5 ms after reset, repeats every 40 ms while no decoder is locked
+    puck_ui #(.CLK_HZ(1_000_000), .DEBOUNCE_MS(3), .OSD_MS(150), .BAUD(50_000),
+              .RX_FIRST_MS(5), .RX_REPEAT_MS(40)) ui (
         .clk(clk), .rst(rst), .btn_ok(btn_ok), .btn_next(btn_next), .view_b(view_b),
-        .dec_present(2'b11), .dec_locked(2'b01), .force_bad(force_bad),
+        .dec_present(2'b11), .dec_locked(dec_locked), .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
         .rx_spi_clk(sclk), .rx_spi_data(sdat), .rx_spi_sel_n(sel_n),
@@ -51,14 +54,17 @@ module tb_puck_ui;
         if (other_active && oled.i2c.busy) collisions <= collisions + 1;
     end
 
-    // SPI decoder: bits on rising clock edges while SEL is low
+    // SPI decoder: bits on rising clock edges while SEL is low; printed with the time SEL rose
     reg [24:0] spi_bits;
     integer    spi_n = 0;
     always @(posedge sclk) if (sel_n != 2'b11) begin spi_bits[spi_n] <= sdat; spi_n <= spi_n + 1; end
     always @(posedge sel_n[0]) begin
-        if (spi_n > 0) $display("SPI %0d %07x", spi_n, spi_bits);
+        if (spi_n > 0) $display("SPI %0d %07x %0d", spi_n, spi_bits, $time);
         spi_n = 0;
     end
+    // between frames: CLK low and DATA high (DATA shares its pin with an active-low LED)
+    integer spi_idle_bad = 0;
+    always @(posedge clk) if (!rst && sel_n == 2'b11 && (sclk !== 1'b0 || sdat !== 1'b1)) spi_idle_bad = spi_idle_bad + 1;
 
     // UART receiver (20 clocks per bit): print every received byte
     integer ub_t = 0, ub_n = 0; reg [7:0] ub_sh; reg ub_on = 0;
@@ -112,7 +118,13 @@ module tb_puck_ui;
         press(1);                                 // page -> meter
         wait_frames(2);
         $display("MARK meter page=%0d", page);
-        $display("RESULT collisions=%0d nack=%0d", collisions, nack_error);
+        dec_locked = 2'b00;                       // both decoders lose lock: the channel is written again
+        $display("MARK unlock %0d", $time);
+        #130_000_000;                             // three repeats, 40 ms apart
+        dec_locked = 2'b10;                       // B locks: no more repeats (the next was due after 30 ms)
+        $display("MARK relock %0d", $time);
+        #70_000_000;
+        $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d", collisions, nack_error, spi_idle_bad);
         $finish;
     end
     initial begin #5_000_000_000 $display("RESULT timeout"); $finish; end

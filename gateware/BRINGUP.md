@@ -4,11 +4,13 @@ Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa l�
 
 ## 0. Innan något kopplas in
 
-**Kortrevision.** Läs revisionen på Tang-kortets undersida (t.ex. "3923"). Stiftplanen förutsätter rev 3923. På rev 3921 och 3850 är stift 71–76 och 86 kopplade till BL616-kretsens HSPI-buss (Sipeeds schema), och då kan BL616 driva samma stift som dekodrarna. M3-proben avslöjar det (se felsökning), men vet revisionen först.
+**Kortrevision.** Läs revisionen på Tang-kortets undersida (t.ex. "3923"). Stiftplanen förutsätter rev 3923 och **fungerar inte på rev 3921**. Där går stift 75, som är SCL, till BL616-kretsens BOOT-strapp med 10 kΩ till jord (Sipeeds 3921-schema rev 1.22 och 1.30, bladet USB_JTAG: SPI_DIR är samma nät som BL616_BOOT, R22). En pull-up på SCL håller BOOT hög när kortet får ström. BL616 startar då i sitt programmeringsläge, och kortet har varken USB-JTAG eller USB-UART, så inte heller M3-proben kommer i gång. Detta är läst ur schemat, inte provat. På 3921 går dessutom stift 76 och 86 till BL616 (SPI_DAT och SPI_CS). Rev 3850 är inte kontrollerad.
+
+**Knapparna vid start.** S1 och S2 sitter på FPGA:ns MODE0 och MODE1 (stift 88 och 87, Sipeeds schema). Håll ingen av dem intryckt när kortet får ström: då väljs ett annat konfigurationsläge och bitströmmen laddas inte från flash. Inte provat.
 
 **TVP5150-modulernas spänning.** Mät stift 10 (IO_DVDD) på TVP-kretsen när modulen är strömsatt. Visar den 3,3 V går datasignalerna direkt till Tang-kortet. Visar den 1,8 V läser Tang-kortet dem inte säkert, och då behövs nivåomvandlare (TXS0108E, två per modul). Mata modulen enligt dess egen märkning.
 
-**Reset.** Den röda modulen saknar resetstift. Löd en tråd från TVP-kretsens stift 8 (RESETB) till J6-10, eller låt den sitta på modulens egen reset om den har en sådan krets.
+**Reset.** Den röda modulen saknar resetstift. Löd en tråd från TVP-kretsens stift 8 (RESETB) till J6-18, eller låt den sitta på modulens egen reset om den har en sådan krets.
 
 ## 1. Koppling
 
@@ -32,11 +34,13 @@ Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa l�
 | YOUT2 | J5-6 (PIN41) | | YOUT7 | J5-17 (PIN72) |
 | YOUT3 | J5-10 (PIN48) | | SDA | J5-9 (PIN51) |
 
-**Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-10 (PIN25). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
+**Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-18 (PIN18, lysdiod 3). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
+
+J6-10 (PIN25) används inte. En utgång där ligger i samma bank som HDMI-klockparet och ändrar hur Apicula packar det (avsnitt 5).
 
 Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen SDA.
 
-**RX5808 (båda parallellt, efter SPI-moden):**
+**RX5808 (båda parallellt, efter SPI-moden; samma koppling i M3, M4 och M6):**
 
 | RX5808 | Tang |
 |---|---|
@@ -46,11 +50,20 @@ Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen S
 | 5 V, GND | separat 5 V, gemensam GND |
 | Video ut | TVP-modulens videoingång (A respektive B) |
 
-DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 4 och 5 blinkar kort när en kanal skrivs.
+RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 3 blinkar till vid start (resetpulsen, 2 ms). Lysdiod 4 och 5 blinkar till när en kanal skrivs (0,1 ms) och är släckta däremellan.
+
+**Lysdioder** (tre är kvar som lysdioder):
+
+| Bitström | Lysdiod 0 | Lysdiod 1 | Lysdiod 2 |
+|---|---|---|---|
+| M3 | hjärtslag 1 Hz | SCLK från A | SCLK från B |
+| M4, M6 | hjärtslag: 1 Hz när båda dekodrarna är låsta, 4 Hz annars | rader från A | rader från B |
 
 **OLED (M6):** SCL J6-3, SDA J6-4 (samma buss som dekoder A), 3,3 V, GND.
 
-**Sändaren LST-S4:** ställ den på NTSC (blå lysdiod enligt manualen) och band F, kanal 4 (5800 MHz). M3 och M6 ställer mottagarna på F4 vid start.
+**Sändaren LST-S4:** ställ den på NTSC (blå lysdiod enligt manualen) och band F, kanal 4 (5800 MHz). M3 och M4 ställer mottagarna på F4. M6 ställer dem på menyns kanal, som är F4 vid start.
+
+**När kanalen skrivs** (`rtl/rx5808_tune.v`): 0,5 s efter start, och sedan varannan sekund så länge ingen dekoder är låst. En mottagare som får ström efter FPGA:n, eller tappar den, står på sin startkanal (5865 MHz enligt RTC6715-databladet) och ställs om inom 2 s. Så länge en dekoder är låst skrivs kanalen inte om, eftersom det inte är provat om en omskrivning stör bilden. I M6 skrivs kanalen dessutom direkt vid varje band- eller kanalbyte.
 
 ## 2. Stegen
 
@@ -58,7 +71,7 @@ DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlist
 |---|---|---|---|
 | M0 | `m0_testpattern` | bara Tang + HDMI | testbilden syns på skärmen |
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
-| M4 | `m4_dual_mix` | samma | kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
+| M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
 | M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, mätloggen kommer över USB |
 
 ```bash
@@ -77,7 +90,7 @@ stty -F /dev/ttyUSB1 115200 raw -echo && cat /dev/ttyUSB1
 En rad per dekoder och sekund. Frisk NTSC:
 
 ```
-A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E
+A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 000E ri 00
 ```
 
 | Fält | Friskt | Betyder |
@@ -89,8 +102,22 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 40
 | `ln` | ca 14 500 | aktiva rader per sekund |
 | `fld` | `060` (PAL `050`) | fältbyten per sekund |
 | `xe` | `0000` | synkord med bitfel som inte gick att rätta |
-| `i2c` | `OK` | dekodern svarar |
-| `st` | låsbitar satta | statusregister 89h,88h (se TVP5150AM1-databladet) |
+| `i2c` | `OK` | dekodern svarade på den senaste I2C-frågan (`NA`: inget svar, `--`: uppstarten är inte klar) |
+| `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan |
+| `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |
+
+**Statusregistren** (TI SLES209E avsnitt 3.21.49 och 3.21.50). De två sista siffrorna i `st` är register 88h:
+
+| Bit i 88h | Hex | Betyder |
+|---|---|---|
+| 1, 2, 3 | `02`, `04`, `08` | H-lås, V-lås, färglås. Alla tre ger `E` som sista siffra |
+| 5 | `20` | fältfrekvens: 0 = 60 Hz, 1 = 50 Hz |
+| 6 | `40` | färgen växlar radvis (PAL) |
+| 0, 4, 7 | `01`, `10`, `80` | får variera på en frisk signal: VCR-läge, lås tappat sedan förra läsningen, toppvitt |
+
+Frisk NTSC läser alltså `0E` och frisk PAL `6E`. De två första siffrorna är register 89h. Bit 6 (`40`) betyder svag signal och ska vara 0. Bit 4 (`10`) följer fältet och bit 5 (`20`) är PAL-växeln, så `00` och `10` är lika friska, för PAL också `20` och `30`. `sim/tvp_status.py` har samma tabell som kod, och `sim/test_probe.py` kontrollerar exemplet ovan mot den.
+
+`ri` räknas upp när register 03h inte läser tillbaka 0Dh. Det händer när dekodern har återställts av en spänningsdipp eller en störning på RESETB. Då är dess utgångar avstängda, och FPGA:n skriver uppstartsregistren igen utan att röra den andra dekodern. Samma sak sker i M4 och M6, men bara M3 visar räknaren.
 
 Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot en dekoder med fasta bitar.
 
@@ -105,7 +132,10 @@ Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot 
 | `len ---------`, `ln 00000` | inga synkord: en databit fel räcker. Titta på `tog`/`hi` först |
 | `len` varierar, `xe` stiger | brus eller fel samplingsflank: korta trådarna, jord mellan signalerna |
 | `i2c NA` | SDA eller SCL, pull-up saknas, eller fel adress (YOUT7-strappning) |
-| `i2c OK` men låsbitarna i `st` är nollor | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `i2c OK` men låsbitarna i `st` är nollor (sista siffran inte `E`) | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `st` börjar på `4`–`7` (t.ex. `400E`) | dekodern flaggar svag signal: antenn, avstånd, eller mottagaren på fel kanal |
+| `ri` stiger då och då | dekodern återställs under drift: glapp i matningen eller på RESETB-tråden |
+| `ri` går till `FF` på några sekunder, `st 0000` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
 
 **Pull-testet** hittar glapp utan mätinstrument:
 
@@ -116,6 +146,11 @@ PULL=DOWN gateware/build.sh m3_probe    # -> build/m3_probe_pulldown.fs
 
 Ett svagt internt pull-motstånd kan inte flytta ett stift som dekodern verkligen driver. En bit som följer pull-up/pull-down (syns i `hi` och `tog`) drivs alltså inte: glapp eller fel stift. Idén kommer från otanl/CVBS2HDMI.
 
+Två begränsningar:
+
+- Bit 7 får ingen pull. YOUT7 är dekoderns adresstrapp (I2CSEL), som läses vid reset. En pull-up mot modulens eget strappmotstånd kan flytta dekodern till adress BAh, och då visar proben `i2c NA` för en dekoder som är rätt kopplad. Bit 7 kontrolleras i stället med `tog` och `hi` i den vanliga bitströmmen.
+- Tre stift har motstånd på kortet som är starkare än FPGA:ns pull (Sipeeds scheman 3921 och 3923): stift 26 (YOUT2 A) har cirka 7 kΩ mot jord genom HDMI hot-plug-delaren, stift 79 (YOUT6 B) cirka 5 kΩ mot jord vid RGB-lysdioden, och stift 49 (YOUT4 B) 27 kΩ mot 3,3 V vid bakbelysningskretsen. En odriven bit där följer kortets motstånd, inte pull-testet.
+
 ## 5. Delade stift på Tang Nano 20K (rev 3923)
 
 Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är också kopplade till annat på kortet (Sipeeds schema rev 1.3, enligt [openfpga-deck:s kortbeskrivning](https://github.com/Yash-Kamat/openfpga-deck/pull/11)):
@@ -123,13 +158,28 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 | Stift | Vår signal | Också kopplat till | Risk |
 |---|---|---|---|
 | 26 | YOUT2 A | HDMI hot-plug (spänningsdelare från 5 V) | Låg: dekodern driver mot ett motstånd när en skärm sitter i |
-| 25 | RESETB | HDMI CEC (100 Ω, 27 kΩ pull-up) | Låg: en resetpuls syns som en CEC-puls hos skärmen |
+| 18 | RESETB | lysdiod 3 (510 Ω till 3,3 V) | Före konfigurering hålls RESETB inte låg, se nedan |
+| 19, 20 | RX5808 DATA, SEL | lysdiod 4 och 5 (510 Ω till 3,3 V) | Ofarligt: båda vilar höga, lysdioderna blinkar till när en kanal skrivs |
 | 76 | YOUT0 B | BL616 SPI MOSI | **Kontrollera:** om BL616 driver stiftet blir bit 0 fel. Proben visar det. |
 | 86 | YOUT5 B | BL616 SPI DIR | **Kontrollera,** samma |
-| 75 | SCL | BL616 SPI MISO | Låg (ingång på BL616) |
+| 75 | SCL | BL616 SPI MISO | Låg om stiftet är ingång på BL616. Inte kontrollerat: är BL616 SPI-slav driver den MISO, och då visar proben `i2c NA` |
+| 88, 87 | S1, S2 (knappar) | FPGA:ns MODE0 och MODE1 (1 kΩ till jord, knappen drar mot 3,3 V) | Intryckt knapp vid start hindrar laddning från flash. Släpp knapparna innan kortet får ström |
 | 48, 49 | YOUT3/4 B | LCD DE, LCD-bakbelysningens drivkrets (LP3320 EN) | Bakbelysningsomvandlaren slås av och på i bildtakt utan last. Lyssna och mät snö med M6. |
 | 79 | YOUT6 B | WS2812 RGB-lysdiodens data | Ofarligt: RGB-lysdioden blinkar i slumpfärger |
 | 80, 85 | SCLK B, SDA A | microSD med 10 kΩ pull-up | Ofarligt |
 | 51 | SDA B | ljudförstärkarens SD_MODE | Ofarligt: förstärkaren slås av och på |
 
-Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15). Ändringen görs i `boards/*.cst` och `top/*.v`.
+**RESETB före konfigurering.** Lysdiod 3 och dess 510 Ω drar stift 18 mot 3,3 V, så RESETB hålls inte låg medan FPGA:n laddas. Enligt SLES209E avsnitt 3.18 är dekoderns utgångar odefinierade tills den har fått en resetpuls. Det skadar inget: dekoderns utgångar går till stift som är ingångar i FPGA:n, och `tvp_ctrl` ger en hel resetpuls (20 ms väntan, 2 ms låg) efter konfigureringen. Efter pulsen är YOUT avstängda tills register 03h skrivs.
+
+**Inga utgångar på stift 25–42.** Bank 4 och 5 bär HDMI-paren. Apicula 0.32 sätter `BANK_VCCIO` för hela banken efter bankens första vanliga utgång, och då packas HDMI-klockparet annorlunda än i M0. RESETB låg tidigare på stift 25 (som dessutom går till HDMI-CEC genom 100 Ω) och är därför flyttad till stift 18. Dekodrarnas databitar på 26–31, 41 och 42 är ingångar och påverkar inte packningen (`tools/test_lvds_bank_inputs.py`).
+
+`tools/test_tmds_bank_outputs.py` vaktar regeln: det läser toppmodulernas portar mot cst-filerna, och det bygger små testdesigner som visar att en utgång på stift 18 lämnar HDMI-parens IOB-fuses orörda medan en på stift 25 eller 41 ändrar dem. Efter ett bygge jämför `tools/tmds_fuses.py` de färdiga bitströmmarnas HDMI-par mot M0:
+
+```bash
+gateware/build.sh m0_testpattern && gateware/build.sh m4_dual_mix && gateware/build.sh m6_puck_proto
+.venv/bin/python gateware/tools/tmds_fuses.py
+```
+
+I byggena från 2026-10-05 har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0. Klockparet har 18 satta; med RESETB på stift 25 var det 16 i M4 och M6. Om en skärm bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
+
+Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15; lysdiod 2 försvinner då). Ändringen görs i `boards/*.cst` och `top/*.v`.
