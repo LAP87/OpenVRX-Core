@@ -28,7 +28,10 @@ module tb_m5c (
         .lines_arriving(lines_arriving), .have_video(have_video), .sdram_ready(sdram_ready));
     bt1120_tx #(.H_ACTIVE(1920), .H_TOTAL(2200), .V_ACTIVE(36), .V_TOTAL(40), .LAT(6)) bt (
         .clk(pix_clk), .x(tx), .y(ty), .yy(yo), .cb(cbo), .cr(cro), .out_y(bt_y), .out_c(bt_c));
-    sdram_model #(.AW(21)) mem (.clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
-                                .ba(ba), .a(a), .dqm(dqm), .dq(dq));
+    // SDRAM_FREQ above shortens the controller's 200 us power-up wait to 1000 clocks, so the model is told
+    // 15 us (the real wait is checked in tb_sdram). Refresh is checked over 8 refreshes instead of 4096.
+    sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8)) mem (
+        .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
+        .ba(ba), .a(a), .dqm(dqm), .dq(dq));
 endmodule
 `default_nettype wire

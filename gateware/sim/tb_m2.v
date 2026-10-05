@@ -23,7 +23,10 @@ module tb_m2 (
         .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hsync), .vsync(vsync),
         .lines_arriving(lines_arriving), .have_video(have_video), .sdram_ready(sdram_ready));
-    sdram_model #(.AW(21)) mem (.clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
-                                .ba(ba), .a(a), .dqm(dqm), .dq(dq));
+    // SDRAM_FREQ above shortens the controller's 200 us power-up wait to 1000 clocks, so the model is told
+    // 15 us (the real wait is checked in tb_sdram). Refresh is checked over 8 refreshes instead of 4096.
+    sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8)) mem (
+        .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
+        .ba(ba), .a(a), .dqm(dqm), .dq(dq));
 endmodule
 `default_nettype wire
