@@ -5,6 +5,8 @@ tb_sdram (controller + model, SDRAM clock 225 degrees late):
                        refresh keeps up (>= 4096 per 64 ms equivalent); no protocol error in the model.
   one_burst            one burst on benches built with other board delays: the limits of the read
                        window and of the command timing, each from both sides.
+  sample_point_sweep   the run-time sample point: one clock early reads the word before, the default
+                       reads the burst, one clock late reads the word after.
 tb_sdram_model (the model alone, pins driven from here):
   model_*              its read timing, a legal command sequence with no error, and one negative
                        control per rule: every deliberate violation must be counted, and nothing else.
@@ -42,6 +44,7 @@ def model_errors(mem):
 async def start(dut):
     cocotb.start_soon(Clock(dut.clk, CLK_PS, unit='ps').start())
     dut.resetn.value = 0
+    dut.rd_sample.value = 0              # the controller's default sample point
     dut.req_valid.value = 0
     dut.req_write.value = 0
     dut.req_addr.value = 0
@@ -141,6 +144,27 @@ async def one_burst(dut):
         assert not any(v.is_resolvable for v in got) and errs == {}, (got, errs)
     else:
         assert set(errs) == {expect}, errs
+
+
+@cocotb.test()
+async def sample_point_sweep(dut):
+    """rd_sample with the bench's default delays (6 ns round trip). T_RCD + CAS = 4 is the first value
+    the controller accepts; 5 is its default."""
+    await start(dut)
+    words = [0x01010101 * (k + 1) for k in range(8)]
+    await write_burst(dut, 0x1230, words)
+
+    async def read_at(rs):
+        dut.rd_sample.value = rs
+        got = await read_burst(dut, 0x1230, raw=True)
+        return [int(v) if v.is_resolvable else None for v in got]
+
+    assert await read_at(4) == [None] + words[:7]         # one clock early: outputs turning on, then the word before
+    assert await read_at(5) == words
+    assert await read_at(6) == words[1:] + [None]         # one clock late: the next word, then a released bus
+    for other in (0, 3, 8, 31):                           # not usable: the default is taken
+        assert await read_at(other) == words, other
+    assert model_errors(dut.mem) == {}
 
 
 # ---------------------------------------------------------------- the model alone
@@ -630,6 +654,10 @@ def _run(toplevel, test_filter, parameters=None, tag='', expect=''):
 
 def test_sdram_burst():
     _run('tb_sdram', r'\.bursts_round_trip$')
+
+
+def test_sdram_sample_point_sweep():
+    _run('tb_sdram', r'\.sample_point_sweep$')
 
 
 PHASE_PS = CLK_PS * 10 // 16           # the SDRAM clock is 225 degrees late

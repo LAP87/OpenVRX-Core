@@ -30,13 +30,18 @@
 // which wdata_take is high (8 cycles, starting T_RCD cycles after the request
 // was accepted). Reads: 8 rdata_valid pulses.
 //
-// RD_SAMPLE: cycle (counted from ACTIVATE = 0) at whose end word 0 is sampled.
-// The default is CAS+1 clocks after READ, as upstream. With the 225-degree
-// clock that is 0.375 period (5.8 ns) after the SDRAM clock edge at which the
-// word is valid. The word is at the controller's flip-flops then if the
-// delay of the clock to the SDRAM plus that of the data back is between 3.3
-// and 15.2 ns (sim/test_sdram.py checks both limits). Outside that window
-// the read is shifted by a word or broken: change RD_SAMPLE or the phase.
+// Read sample point: the cycle (counted from ACTIVATE = 0) at whose end word 0
+// is sampled. The default, parameter RD_SAMPLE, is CAS+1 clocks after READ, as
+// upstream. With the 225-degree clock that is 0.375 period (5.8 ns) after the
+// SDRAM clock edge at which the word is valid. The word is at the controller's
+// flip-flops then if the delay of the clock to the SDRAM plus that of the data
+// back is between 3.3 and 15.2 ns (sim/test_sdram.py checks both limits).
+// Outside that window the read is shifted by a word or broken, and another
+// sample point or another clock phase is needed.
+//
+// rd_sample selects the sample point at run time, per read: it is taken when
+// the request is accepted. T_RCD+CAS .. T_RCD+CAS+3 are used as given; any
+// other value, such as a port tied to 0, means RD_SAMPLE.
 `default_nettype none
 
 module sdram_burst #(
@@ -47,7 +52,7 @@ module sdram_burst #(
     parameter [3:0]   T_RP = 4'd2,            // clocks (15.43 ns each): precharge to the next command
     parameter [3:0]   T_RCD= 4'd2,            // clocks: ACTIVATE to READ/WRITE
     parameter [3:0]   T_RC = 4'd6,            // clocks: refresh to the next command
-    parameter [4:0]   RD_SAMPLE = 5'd5,       // = T_RCD + CAS + 1
+    parameter [4:0]   RD_SAMPLE = 5'd5,       // default read sample point = T_RCD + CAS + 1
     parameter         REFRESH_EVERY = 480     // cycles (~7.4 us at 64.8 MHz; spec: 4096 per 64 ms)
 ) (
     inout  wire [31:0] SDRAM_DQ,
@@ -64,6 +69,7 @@ module sdram_burst #(
     input  wire        clk,
     input  wire        clk_sdram,             // clk shifted 225 degrees (clocks_sdram.v)
     input  wire        resetn,
+    input  wire [4:0]  rd_sample,             // read sample point, 0 = RD_SAMPLE (see the header)
 
     input  wire        req_valid,
     input  wire        req_write,
@@ -94,6 +100,8 @@ module sdram_burst #(
     reg        refresh_due;
     reg [11:0] refresh_cnt;
     reg        cfg_now;
+    reg [4:0]  rs;                            // sample point of the read in progress
+    wire       rs_usable = (rd_sample >= T_RCD + CAS) && (rd_sample <= T_RCD + CAS + 3);
 
     assign req_ready = (state == IDLE) && !refresh_due;
 
@@ -132,6 +140,7 @@ module sdram_burst #(
                 SDRAM_BA <= req_addr[20:19];
                 SDRAM_A  <= req_addr[18:8];
                 addr_buf <= req_addr;
+                rs <= rs_usable ? rd_sample : RD_SAMPLE;
                 state <= req_write ? WRITE : READ;
                 cycle <= 5'd1;
                 if (req_write && T_RCD == 4'd1) wdata_take <= 1'b1;    // word 0 is latched next cycle
@@ -164,11 +173,11 @@ module sdram_burst #(
                 SDRAM_A[9:0] <= {2'b00, addr_buf[7:3], 3'b000};
                 SDRAM_DQM <= 4'b0000;
             end
-            if (cycle >= RD_SAMPLE && cycle < RD_SAMPLE + 8) begin
+            if (cycle >= rs && cycle < rs + 8) begin
                 rdata <= SDRAM_DQ;
                 rdata_valid <= 1'b1;
             end
-            if (cycle == RD_SAMPLE + 8 + T_RP) state <= IDLE;
+            if (cycle == rs + 8 + T_RP) state <= IDLE;
         end
 
         REFRESH: if (cycle == T_RC) state <= IDLE;
