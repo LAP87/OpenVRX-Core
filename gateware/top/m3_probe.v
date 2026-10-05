@@ -2,7 +2,7 @@
 // No video out. Once a second it prints one line per decoder over the
 // onboard USB-UART (PIN69, 115200 8N1):
 //
-//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E
+//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E ri 00
 //
 //   sclk  SCLK frequency in Hz (resolution 256 Hz); "no SCLK" ends the line when the decoder clock is absent
 //   tog   data bits YOUT7..0 that toggled (FF = all wired); hi = bits ever 1 (stuck-low bit: tog 0, hi 0)
@@ -10,7 +10,9 @@
 //   ln    active lines this second (NTSC about 14 500, PAL about 14 400)
 //   fld   field changes this second (60 or 50)
 //   xe    timing codes with uncorrectable bit errors
-//   i2c   OK / NA (no acknowledge) / -- (start-up not finished); st = status registers 89h,88h (---- = none yet)
+//   i2c   OK / NA (the last transaction was not acknowledged) / -- (start-up not finished)
+//   st    status registers 89h,88h (---- = none yet)
+//   ri    times the decoder was found reset (03h not 0Dh) and brought up again, hex, stops at FF
 //
 // Both RX5808 are tuned to F4 5800 MHz 0.5 s after start (same SPI pins as M6), so
 // receiver video reaches the decoders without the menu. The write is repeated
@@ -58,11 +60,12 @@ module m3_probe #(
     wire scl_low, init_done;
     wire [1:0] sda_low, dev_err, st_valid;
     wire [15:0] st0, st1;
+    wire [7:0]  ri0, ri1;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C), .POWER_MS(POWER_MS)) ctrl (
         .clk(clk), .rst(rst), .tvp_resetb(tvp_resetb),
         .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
         .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-        .hold(1'b0), .active());
+        .reinit0(ri0), .reinit1(ri1), .hold(1'b0), .active());
     assign i2c_scl   = scl_low    ? 1'b0 : 1'bz;
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
@@ -110,7 +113,7 @@ module m3_probe #(
     end
 
     // ---- report: after each window, wait for the acks, convert six numbers per channel, print two lines
-    localparam LEN = 84;
+    localparam LEN = 90;
     function [7:0] hexc(input [3:0] v); hexc = (v < 10) ? 8'h30 + v : 8'h37 + v; endfunction
     function [15:0] hex2(input [7:0] v); hex2 = {hexc(v[7:4]), hexc(v[3:0])}; endfunction
     function [31:0] hex4(input [15:0] v); hex4 = {hex2(v[15:8]), hex2(v[7:0])}; endfunction
@@ -139,6 +142,7 @@ module m3_probe #(
     wire [15:0] stv     = ch ? st1 : st0;
     wire        stok    = ch ? st_valid[1] : st_valid[0];
     wire        err     = ch ? dev_err[1] : dev_err[0];
+    wire [7:0]  ri      = ch ? ri1 : ri0;
     wire        fr      = ch ? fresh[1] : fresh[0];
     always @* case (ci)
         3'd0: conv_in = {f_sel, 8'd0};
@@ -157,10 +161,11 @@ module m3_probe #(
     wire [31:0] st_s   = stok ? hex4(stv) : "----";
     wire [LEN*8-1:0] line_ok = {ch ? "B" : "A", " sclk ", sclk_s, " tog ", hex2(tog_sel), " hi ", hex2(hi_sel),
                                 " len ", len_s, " ln ", dg(b3[19:16]), d4(b3), " fld ", dg(b4[11:8]), dg(b4[7:4]),
-                                dg(b4[3:0]), " xe ", d4(b5), " i2c ", i2c_s, " st ", st_s, 16'h0D0A};
+                                dg(b4[3:0]), " xe ", d4(b5), " i2c ", i2c_s, " st ", st_s, " ri ", hex2(ri),
+                                16'h0D0A};
     // no SCLK: the probe values are stale, print only the frequency and I2C
     wire [LEN*8-1:0] line_dead = {ch ? "B" : "A", " sclk ", sclk_s, " no SCLK", {44{" "}}, " i2c ", i2c_s,
-                                  " st ", st_s, 16'h0D0A};
+                                  " st ", st_s, " ri ", hex2(ri), 16'h0D0A};
 
     reg  [LEN*8-1:0] out;
     reg  [6:0]  oi;

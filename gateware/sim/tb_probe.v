@@ -1,7 +1,8 @@
 // M3 probe: decoder A plays a clean NTSC frame; decoder B plays the same bytes
 // with YOUT5 stuck low and YOUT2 stuck high (so no timing code survives), on a
 // slightly faster clock that stops at STOP_B. Both I2C buses have a TVP5150
-// model. The UART output is printed byte by byte ("U xx").
+// model; B's is reset once, and both stop reporting lock late in the run.
+// The UART output is printed byte by byte ("U xx").
 `timescale 1ns/1ps
 `default_nettype none
 module tb_probe;
@@ -65,10 +66,13 @@ module tb_probe;
     // between frames: CLK low and DATA high, so that LED4 (on DATA's pin) stays dark
     always @(posedge clk) if (spi_sel_n === 1'b1 && (spi_clk !== 1'b0 || spi_data !== 1'b1)) spi_idle_bad = spi_idle_bad + 1;
 
-    // both decoders report lock from the start (the model's default) and lose it at UNLOCK
-    localparam UNLOCK = 32_000_000;
+    // both decoders report lock from the start (the model's default) and lose it at UNLOCK;
+    // decoder B is reset once at B_RESET (its registers fall back to their defaults)
+    localparam B_RESET = 12_000_000, UNLOCK = 32_000_000;
     initial begin
-        #(UNLOCK);
+        #(B_RESET);
+        tvp_b.tvp_reset;
+        #(UNLOCK - B_RESET);
         tvp_a.regs[8'h88] = 8'h00; tvp_b.regs[8'h88] = 8'h00;
         $display("UNLOCK %0d", $time);
     end

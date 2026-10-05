@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (58 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (62 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -40,7 +40,7 @@ Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gatew
 | `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer (val/blandning med hysteres) → ordström | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln mot Python-prototypen i `model/test_line_mixer_ref.py` |
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
 | `rx5808_spi.v`, `rx5808_tune.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI) och när kanalen skrivs (0,5 s efter start, vid kanalbyte, varannan sekund utan lås), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_rx5808_tune.py`: skrivtidpunkterna mot en modell av regeln; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
-| `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/03h/0Dh) och pollning av status 88h/89h | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder) |
+| `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/04h/0Dh/03h; 04h maskar SECAM ur autoswitchen), pollning av status 88h/89h, och ny uppstart av en dekoder som har återställts (03h läses tillbaka vid varje pollning, räknare per dekoder) | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder, återställd dekoder, dekoder som inte tar emot skrivningar, SDA kortsluten låg, dekoder som kommer in sent) |
 
 ## Verktyg (allt i projektmappen, inget på systemet)
 

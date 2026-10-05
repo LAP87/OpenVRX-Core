@@ -88,7 +88,7 @@ stty -F /dev/ttyUSB1 115200 raw -echo && cat /dev/ttyUSB1
 En rad per dekoder och sekund. Frisk NTSC:
 
 ```
-A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E
+A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E ri 00
 ```
 
 | Fält | Friskt | Betyder |
@@ -100,8 +100,11 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 40
 | `ln` | ca 14 500 | aktiva rader per sekund |
 | `fld` | `060` (PAL `050`) | fältbyten per sekund |
 | `xe` | `0000` | synkord med bitfel som inte gick att rätta |
-| `i2c` | `OK` | dekodern svarar |
+| `i2c` | `OK` | dekodern svarade på den senaste I2C-frågan (`NA`: inget svar, `--`: uppstarten är inte klar) |
 | `st` | låsbitar satta | statusregister 89h,88h (se TVP5150AM1-databladet) |
+| `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |
+
+`ri` räknas upp när register 03h inte läser tillbaka 0Dh. Det händer när dekodern har återställts av en spänningsdipp eller en störning på RESETB. Då är dess utgångar avstängda, och FPGA:n skriver uppstartsregistren igen utan att röra den andra dekodern. Samma sak sker i M4 och M6, men bara M3 visar räknaren.
 
 Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot en dekoder med fasta bitar.
 
@@ -117,6 +120,8 @@ Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot 
 | `len` varierar, `xe` stiger | brus eller fel samplingsflank: korta trådarna, jord mellan signalerna |
 | `i2c NA` | SDA eller SCL, pull-up saknas, eller fel adress (YOUT7-strappning) |
 | `i2c OK` men låsbitarna i `st` är nollor | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `ri` stiger då och då | dekodern återställs under drift: glapp i matningen eller på RESETB-tråden |
+| `ri` går till `FF` på några sekunder, `st 0000` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
 
 **Pull-testet** hittar glapp utan mätinstrument:
 

@@ -24,7 +24,7 @@ import vtx_channels as vc  # noqa: E402
 
 WINDOW = 270_000
 CLK_HZ = 2_700_000                  # what tb_probe.v tells the probe (scales its timers)
-LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4})$')
+LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4}) ri ([0-9A-F]{2})$')
 
 
 def run():
@@ -50,7 +50,7 @@ def test_probe_reports():
     text = ''.join(chr(int(h, 16)) for h in re.findall(r'^U (\w\w)$', log, re.M))
     raw = text.split('\r\n')
     lines = [l for l in raw[:-1] if l]                     # the run may end inside a line
-    assert all(len(l) == 82 for l in lines), [len(l) for l in lines]   # 84 bytes with CR LF
+    assert all(len(l) == 88 for l in lines), [len(l) for l in lines]   # 90 bytes with CR LF
     a = [l for l in lines if l.startswith('A')]
     b = [l for l in lines if l.startswith('B')]
     assert len(a) == len(b) >= 4, lines
@@ -68,20 +68,25 @@ def test_probe_reports():
 
     # windows 2 and 3: A healthy, B with its stuck bits and no timing codes
     for l in a[1:3]:
-        _, _, body, i2c, st = fields(l)
+        _, _, body, i2c, st, _ = fields(l)
         assert body.startswith('tog FF hi FF len 1716-1716 ln '), l
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
         assert i2c == 'OK' and st == '402E', l
     for l in b[1:3]:
-        _, _, body, i2c, st = fields(l)
+        _, _, body, i2c, st, _ = fields(l)
         assert body.startswith('tog DB hi DF len --------- ln 00000 fld 000 xe 0000'), l
         assert i2c == 'OK' and st == '402E', l
 
     # B's clock has stopped: the line says so instead of repeating stale values
-    _, f_dead, body, _, _ = fields(b[3])
+    _, f_dead, body, _, _, _ = fields(b[3])
     assert body.strip() == 'no SCLK' and int(f_dead) < WINDOW // 2, b[3]
     assert fields(a[3])[2].startswith('tog FF hi FF'), a[3]
+
+    # ri: decoder B's registers fell back to their defaults at 12 ms (during window 2) and were
+    # written again; decoder A was never touched
+    assert [fields(l)[5] for l in a] == ['00'] * len(a), a
+    assert [fields(l)[5] for l in b] == ['00'] + ['01'] * (len(b) - 1), b
 
     # LEDs, printed as 'led2 led1 led0', 0 = lit. LED1 / LED2: SCLK A / B seen in the last window.
     leds = [(int(t), v) for t, v in re.findall(r'^LED (\d+) (\S{3})$', log, re.M)]
