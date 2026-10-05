@@ -19,6 +19,10 @@
 //  * The phase is a tuning knob. Gowin's own controller guide says so
 //    (IPUG279: "the phase of I_sdram_clk can be adjusted to meet the setup
 //    and hold time requirements of read and write signals").
+//    top/m2a_memtest.v shows on the board which sample point reads correctly.
+//    To try another phase without editing this file:
+//    SDRAM_PHASE=<0..15> gateware/build.sh <top> defines SDRAM_PHASE, in
+//    sixteenths of a period (8 = 180, 10 = 225, 12 = 270 degrees).
 `default_nettype none
 module clocks_sdram (
     input  wire clk_27,
@@ -28,12 +32,20 @@ module clocks_sdram (
 );
     wire gnd = 1'b0;
     wire unused_d, unused_d3;
+`ifdef SDRAM_PHASE
+    localparam [3:0] PHASE = `SDRAM_PHASE;
+`endif
     rPLL #(
         .FCLKIN("27"),
         .DYN_IDIV_SEL("false"), .IDIV_SEL(4),
         .DYN_FBDIV_SEL("false"), .FBDIV_SEL(11),
         .DYN_ODIV_SEL("false"), .ODIV_SEL(8),
-        .PSDA_SEL("1010"), .DYN_DA_EN("false"), .DUTYDA_SEL("1000"),
+`ifdef SDRAM_PHASE
+        .PSDA_SEL(PHASE),             // four bits, read like the string below
+`else
+        .PSDA_SEL("1010"),
+`endif
+        .DYN_DA_EN("false"), .DUTYDA_SEL("1000"),
         .CLKOUT_FT_DIR(1'b1), .CLKOUTP_FT_DIR(1'b1),
         .CLKOUT_DLY_STEP(0), .CLKOUTP_DLY_STEP(0),
         .CLKFB_SEL("internal"),

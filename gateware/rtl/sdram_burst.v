@@ -37,7 +37,8 @@
 // flip-flops then if the delay of the clock to the SDRAM plus that of the data
 // back is between 3.3 and 15.2 ns (sim/test_sdram.py checks both limits).
 // Outside that window the read is shifted by a word or broken, and another
-// sample point or another clock phase is needed.
+// sample point or another clock phase is needed. top/m2a_memtest.v shows on
+// the board which sample point reads correctly.
 //
 // rd_sample selects the sample point at run time, per read: it is taken when
 // the request is accepted. T_RCD+CAS .. T_RCD+CAS+3 are used as given; any
