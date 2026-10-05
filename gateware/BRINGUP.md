@@ -4,7 +4,9 @@ Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa l�
 
 ## 0. Innan något kopplas in
 
-**Kortrevision.** Läs revisionen på Tang-kortets undersida (t.ex. "3923"). Stiftplanen förutsätter rev 3923. På rev 3921 och 3850 är stift 71–76 och 86 kopplade till BL616-kretsens HSPI-buss (Sipeeds schema), och då kan BL616 driva samma stift som dekodrarna. M3-proben avslöjar det (se felsökning), men vet revisionen först.
+**Kortrevision.** Läs revisionen på Tang-kortets undersida (t.ex. "3923"). Stiftplanen förutsätter rev 3923 och **fungerar inte på rev 3921**. Där går stift 75, som är SCL, till BL616-kretsens BOOT-strapp med 10 kΩ till jord (Sipeeds 3921-schema rev 1.22 och 1.30, bladet USB_JTAG: SPI_DIR är samma nät som BL616_BOOT, R22). En pull-up på SCL håller BOOT hög när kortet får ström. BL616 startar då i sitt programmeringsläge, och kortet har varken USB-JTAG eller USB-UART, så inte heller M3-proben kommer i gång. Detta är läst ur schemat, inte provat. På 3921 går dessutom stift 76 och 86 till BL616 (SPI_DAT och SPI_CS). Rev 3850 är inte kontrollerad.
+
+**Knapparna vid start.** S1 och S2 sitter på FPGA:ns MODE0 och MODE1 (stift 88 och 87, Sipeeds schema). Håll ingen av dem intryckt när kortet får ström: då väljs ett annat konfigurationsläge och bitströmmen laddas inte från flash. Inte provat.
 
 **TVP5150-modulernas spänning.** Mät stift 10 (IO_DVDD) på TVP-kretsen när modulen är strömsatt. Visar den 3,3 V går datasignalerna direkt till Tang-kortet. Visar den 1,8 V läser Tang-kortet dem inte säkert, och då behövs nivåomvandlare (TXS0108E, två per modul). Mata modulen enligt dess egen märkning.
 
@@ -69,7 +71,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 |---|---|---|---|
 | M0 | `m0_testpattern` | bara Tang + HDMI | testbilden syns på skärmen |
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
-| M4 | `m4_dual_mix` | samma | kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
+| M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
 | M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, mätloggen kommer över USB |
 
 ```bash
@@ -160,7 +162,8 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 | 19, 20 | RX5808 DATA, SEL | lysdiod 4 och 5 (510 Ω till 3,3 V) | Ofarligt: båda vilar höga, lysdioderna blinkar till när en kanal skrivs |
 | 76 | YOUT0 B | BL616 SPI MOSI | **Kontrollera:** om BL616 driver stiftet blir bit 0 fel. Proben visar det. |
 | 86 | YOUT5 B | BL616 SPI DIR | **Kontrollera,** samma |
-| 75 | SCL | BL616 SPI MISO | Låg (ingång på BL616) |
+| 75 | SCL | BL616 SPI MISO | Låg om stiftet är ingång på BL616. Inte kontrollerat: är BL616 SPI-slav driver den MISO, och då visar proben `i2c NA` |
+| 88, 87 | S1, S2 (knappar) | FPGA:ns MODE0 och MODE1 (1 kΩ till jord, knappen drar mot 3,3 V) | Intryckt knapp vid start hindrar laddning från flash. Släpp knapparna innan kortet får ström |
 | 48, 49 | YOUT3/4 B | LCD DE, LCD-bakbelysningens drivkrets (LP3320 EN) | Bakbelysningsomvandlaren slås av och på i bildtakt utan last. Lyssna och mät snö med M6. |
 | 79 | YOUT6 B | WS2812 RGB-lysdiodens data | Ofarligt: RGB-lysdioden blinkar i slumpfärger |
 | 80, 85 | SCLK B, SDA A | microSD med 10 kΩ pull-up | Ofarligt |
@@ -177,6 +180,6 @@ gateware/build.sh m0_testpattern && gateware/build.sh m4_dual_mix && gateware/bu
 .venv/bin/python gateware/tools/tmds_fuses.py
 ```
 
-Om en skärm faktiskt bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
+I byggena från 2026-10-05 har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0. Klockparet har 18 satta; med RESETB på stift 25 var det 16 i M4 och M6. Om en skärm bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
 
-Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15). Ändringen görs i `boards/*.cst` och `top/*.v`.
+Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15; lysdiod 2 försvinner då). Ändringen görs i `boards/*.cst` och `top/*.v`.
