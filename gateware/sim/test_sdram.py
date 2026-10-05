@@ -1,10 +1,10 @@
 """cocotb: sdram_burst against the timing-aware SDRAM model, and the model's own checks.
 
-tb_sdram (controller + model):
+tb_sdram (controller + model, SDRAM clock 225 degrees late):
   bursts_round_trip    random 8-word bursts to random rows and banks, read back in another order;
-                       refresh keeps up (>= 4096 per 64 ms equivalent); the model's protocol checks.
-  next_word_at_zero_delay  negative control of the read timing: with the board delays set to zero the
-                       same sample point must read the following word of the burst.
+                       refresh keeps up (>= 4096 per 64 ms equivalent); no protocol error in the model.
+  one_burst            one burst on benches built with other board delays: the limits of the read
+                       window and of the command timing, each from both sides.
 tb_sdram_model (the model alone, pins driven from here):
   model_*              its read timing, a legal command sequence with no error, and one negative
                        control per rule: every deliberate violation must be counted, and nothing else.
@@ -120,25 +120,27 @@ async def bursts_round_trip(dut):
     refreshes = int(dut.mem.refreshes.value) - refresh0
     needed = (t1 - t0) / 64e6 * 4096          # 4096 refreshes per 64 ms
     assert refreshes >= needed, f'{refreshes} refreshes in {t1 - t0:.0f} ns, need {needed:.1f}'
-    errs = model_errors(dut.mem)
-    # The controller's 1/1/4 cycles are 15.4 ns for tRCD and tRP at 64.8 MHz; the -6 grade wants 18 ns.
-    # The model reports that on each of the 128 bursts (tRCD) and once in the start-up sequence (tRP),
-    # and nothing else.
-    assert errs == {'e_trcd': 128, 'e_trp': 1}, errs
+    assert model_errors(dut.mem) == {}
     dut._log.info(f'64 bursts written and read back; {refreshes} refreshes in {(t1 - t0) / 1000:.1f} us')
 
 
 @cocotb.test()
-async def next_word_at_zero_delay(dut):
-    """Bench built with the board delays at zero: each word leaves the bus 2.5 ns after the SDRAM clock
-    edge and the next is valid 6 ns after it, so the controller's sample point (half a period, 7.7 ns,
-    after that edge) gets the following word, and nothing defined after the last one."""
+async def one_burst(dut):
+    """One burst written and read back on a bench built with other board delays. SDRAM_EXPECT says what
+    must come of it: clean data and no error, undefined data, or a set-up or hold error in the model."""
+    expect = os.environ['SDRAM_EXPECT']
     await start(dut)
     words = [0x01010101 * (k + 1) for k in range(8)]
     await write_burst(dut, 0x1230, words)
     got = await read_burst(dut, 0x1230, raw=True)
-    assert [int(v) for v in got[:7]] == words[1:], got
-    assert not got[7].is_resolvable, got[7]
+    errs = model_errors(dut.mem)
+    clean = all(v.is_resolvable for v in got) and [int(v) for v in got] == words
+    if expect == 'clean':
+        assert clean and errs == {}, (got, errs)
+    elif expect == 'undefined':
+        assert not any(v.is_resolvable for v in got) and errs == {}, (got, errs)
+    else:
+        assert set(errs) == {expect}, errs
 
 
 # ---------------------------------------------------------------- the model alone
@@ -612,7 +614,7 @@ async def model_strict_violation(dut):
 
 # ---------------------------------------------------------------- pytest
 
-def _run(toplevel, test_filter, parameters=None, tag=''):
+def _run(toplevel, test_filter, parameters=None, tag='', expect=''):
     from cocotb_tools.runner import get_runner
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
@@ -623,15 +625,40 @@ def _run(toplevel, test_filter, parameters=None, tag=''):
             hdl_toplevel=toplevel, build_dir=build, always=True, timescale=('1ns', '1ps'),
             parameters=parameters or {})
     r.test(hdl_toplevel=toplevel, test_module='test_sdram', test_dir=HERE, build_dir=build,
-           test_filter=test_filter)
+           test_filter=test_filter, extra_env={'SDRAM_EXPECT': expect})
 
 
 def test_sdram_burst():
     _run('tb_sdram', r'\.bursts_round_trip$')
 
 
-def test_sdram_read_depends_on_board_delay():
-    _run('tb_sdram', r'\.next_word_at_zero_delay$', {'T_CLK_DLY_PS': 0, 'T_DQ_DLY_PS': 0, 'T_OUT_DLY_PS': 0}, '_d0')
+PHASE_PS = CLK_PS * 10 // 16           # the SDRAM clock is 225 degrees late
+T_IS, T_IH = 1500, 1000                # ps, as in sdram_model.v
+
+
+def test_sdram_read_window():
+    """The sample point is CAS+1 clocks after READ, which is one period less the phase (5.8 ns) after the
+    SDRAM clock edge at which a word is valid. Seen from that edge at the SDRAM, the word is there from
+    tAC - one period until tOH. So reads are clean while the delay of the clock out plus the data back is
+    between 3.29 and 15.22 ns, and undefined 0.1 ns outside either limit."""
+    sample = CLK_PS - PHASE_PS
+    lo, hi = sample - T_OH, sample + CLK_PS - T_AC
+    assert (lo, hi) == (3287, 15219)
+    clk_dly = 3000                     # the model's default; the data delay makes up the rest
+    for total, expect in ((lo - 100, 'undefined'), (lo + 100, 'clean'), (hi - 100, 'clean'), (hi + 100, 'undefined')):
+        _run('tb_sdram', r'\.one_burst$', {'T_DQ_DLY_PS': total - clk_dly}, f'_rt{total}', expect)
+
+
+def test_sdram_command_window():
+    """Commands and write data against the SDRAM clock: set-up is the phase plus the clock's delay less the
+    commands' delay, hold is the rest of the period. Each limit from both sides."""
+    setup_limit = PHASE_PS - T_IS                 # commands may be this much slower than the clock: 8.1 ns
+    hold_limit = CLK_PS - PHASE_PS - T_IH         # the clock may be this much slower than the commands: 4.8 ns
+    assert (setup_limit, hold_limit) == (8145, 4787)
+    for clk_dly, out_dly, expect in ((3000, 3000 + setup_limit - 100, 'clean'), (3000, 3000 + setup_limit + 100, 'e_setup'),
+                                     (hold_limit - 100, 0, 'clean'), (hold_limit + 100, 0, 'e_hold')):
+        _run('tb_sdram', r'\.one_burst$', {'T_CLK_DLY_PS': clk_dly, 'T_OUT_DLY_PS': out_dly, 'T_DQ_DLY_PS': 6000 - clk_dly},
+             f'_c{clk_dly}_o{out_dly}', expect)
 
 
 def test_sdram_model_checks():

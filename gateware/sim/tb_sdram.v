@@ -1,5 +1,5 @@
 // Benches for test_sdram.py:
-//   tb_sdram        sdram_burst + the SDRAM model, SDRAM clock = inverted controller clock
+//   tb_sdram        sdram_burst + the SDRAM model, SDRAM clock = controller clock shifted 225 degrees
 //   tb_sdram_model  the model alone with its pins driven by the test (negative controls of its checks)
 `timescale 1ns/1ps
 `default_nettype none
@@ -7,7 +7,9 @@ module tb_sdram #(
     parameter T_CLK_DLY_PS = 3000,       // board delays: the model's assumed defaults
     parameter T_DQ_DLY_PS  = 3000,
     parameter T_OUT_DLY_PS = 3000,
-    parameter RD_SAMPLE    = 4
+    parameter CLK_PS       = 15432,      // the period of the clock that test_sdram.py drives
+    parameter PHASE16      = 10,         // SDRAM clock phase in sixteenths of a period, as PSDA_SEL
+    parameter RD_SAMPLE    = 5
 ) (
     input  wire        clk,
     input  wire        resetn,
@@ -26,10 +28,12 @@ module tb_sdram #(
     wire [1:0]  ba;
     wire [3:0]  dqm;
     wire ncs, nwe, nras, ncas, sclk, cke;
+    reg  clk_shift = 1'b0;               // what the PLL's CLKOUTP gives: the same clock, later
+    always @(clk) clk_shift <= #(PHASE16 * CLK_PS / 16000.0) clk;
     sdram_burst #(.RD_SAMPLE(RD_SAMPLE)) ctrl (  // FREQ as on the board: the real 200 us power-up wait
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe),
         .SDRAM_nRAS(nras), .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
-        .clk(clk), .clk_sdram(~clk), .resetn(resetn),
+        .clk(clk), .clk_sdram(clk_shift), .resetn(resetn),
         .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
         .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid), .init_done(init_done));
     // REF_WINDOW 8: the refresh check looks at 8 refreshes (125 us) instead of 4096 (64 ms)

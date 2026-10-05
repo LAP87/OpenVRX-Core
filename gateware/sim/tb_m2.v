@@ -1,4 +1,5 @@
 // M2 core + behavioural SDRAM, short display frame (40 lines, 36 active) for speed.
+`timescale 1ns/1ps
 `default_nettype none
 module tb_m2 (
     input  wire       tvp_clk,
@@ -16,8 +17,12 @@ module tb_m2 (
     wire [1:0]  ba;
     wire [3:0]  dqm;
     wire ncs, nwe, nras, ncas, sclk, cke;
+    // SDRAM clock as from clocks_sdram.v: sd_clk shifted 225 degrees, 0.625 of the 15.4 ns period the
+    // test drives
+    reg sd_clk_shift = 1'b0;
+    always @(sd_clk) sd_clk_shift <= #9.625 sd_clk;
     m2_core #(.V_TOTAL(40), .V_ACTIVE(36), .V_FP(1), .V_SYNC(1), .SDRAM_FREQ(5_000_000)) core (
-        .tvp_clk(tvp_clk), .tvp_d(tvp_d), .tvp_hs(1'b0), .tvp_vs(1'b0), .tvp_avid(1'b0), .sd_clk(sd_clk), .sd_clk_shift(~sd_clk), .pix_clk(pix_clk),
+        .tvp_clk(tvp_clk), .tvp_d(tvp_d), .tvp_hs(1'b0), .tvp_vs(1'b0), .tvp_avid(1'b0), .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(pix_clk),
         .rst_async(rst), .ll_mode(ll_mode),
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe), .SDRAM_nRAS(nras),
         .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
@@ -25,7 +30,8 @@ module tb_m2 (
         .lines_arriving(lines_arriving), .have_video(have_video), .sdram_ready(sdram_ready));
     // SDRAM_FREQ above shortens the controller's 200 us power-up wait to 1000 clocks, so the model is told
     // 15 us (the real wait is checked in tb_sdram). Refresh is checked over 8 refreshes instead of 4096.
-    sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8)) mem (
+    // STRICT: a protocol error ends the simulation, so the test fails.
+    sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8), .STRICT(1)) mem (
         .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
         .ba(ba), .a(a), .dqm(dqm), .dq(dq));
 endmodule
