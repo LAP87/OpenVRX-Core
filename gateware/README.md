@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (55 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (58 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -39,7 +39,7 @@ Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gatew
 | `m2_core.v` | M2: en TVP (BT.656 eller separata synkar) → `fb_backend` | `sim/test_m2.py` |
 | `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer (val/blandning med hysteres) → ordström | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln mot Python-prototypen i `model/test_line_mixer_ref.py` |
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
-| `rx5808_spi.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
+| `rx5808_spi.v`, `rx5808_tune.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI) och när kanalen skrivs (0,5 s efter start, vid kanalbyte, varannan sekund utan lås), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_rx5808_tune.py`: skrivtidpunkterna mot en modell av regeln; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
 | `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/03h/0Dh) och pollning av status 88h/89h | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder) |
 
 ## Verktyg (allt i projektmappen, inget på systemet)
@@ -133,9 +133,12 @@ Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radma
 | I2C SDA | PIN85 (J6-4) | PIN51 (J5-9) |
 | I2C SCL | PIN75 (J6-3), gemensam | |
 | RESETB | PIN18 (J6-18, lysdiod 3), gemensam — den röda modulen saknar reset-stift: löd en tråd till TVP stift 8 | |
+| RX5808 SPI CLK / DATA / SEL | PIN71 (J5-18) / PIN19 (J6-17, lysdiod 4) / PIN20 (J6-16, lysdiod 5), till båda mottagarna | |
 | Jord | J6-20 / J5-2, J5-15 | |
 
 Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per dekoder. Kontrollera modulernas matning och IO-nivå (3,3 V) innan inkoppling. Stift 52–56 (konfigurationsstift) används inte.
+
+M4 ställer själv båda mottagarna på F4 5800 MHz (`rtl/rx5808_tune.v`, samma stift som M3 och M6): 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst. Testat mot en modell av regeln i `sim/test_rx5808_tune.py`.
 
 RESETB låg på PIN25 (J6-10) till 2026-10-05. Stift 25–42 (bank 4 och 5) bär HDMI-paren, och en vanlig utgång där ändrar hur Apicula packar klockparet: se [BRINGUP.md](BRINGUP.md) avsnitt 5. Stiften till lysdiod 3–5 används därför som stiftlistestift (J6-18, J6-17, J6-16), och toppmodulerna M3, M4 och M6 har bara tre lysdioder.
 
@@ -187,7 +190,7 @@ Skärmen (exakt 21 tecken per rad; `>` visar valt fält):
  A LOCK    B NOSIG
  SE BAND OK
 ```
-OK byter fält (band → kanal → läge → latens → sida), NEXT stegar värdet. `BUF`/`LOW` är videovägen: `BUF` går via SDRAM-bildbufferten, `LOW` är låglatensläget (se nedan). Bandbyte och kanalbyte programmerar om båda mottagarna direkt. Läge MIX låter mixern välja; A eller B tvingar en mottagare. Kanaler utanför 5725–5875 MHz visar `!OUTSIDE SE BAND`. Start: F4 5800 MHz.
+OK byter fält (band → kanal → läge → latens → sida), NEXT stegar värdet. `BUF`/`LOW` är videovägen: `BUF` går via SDRAM-bildbufferten, `LOW` är låglatensläget (se nedan). Bandbyte och kanalbyte programmerar om båda mottagarna direkt. Kanalen skrivs också 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst (`rtl/rx5808_tune.v`). Läge MIX låter mixern välja; A eller B tvingar en mottagare. Kanaler utanför 5725–5875 MHz visar `!OUTSIDE SE BAND`. Start: F4 5800 MHz.
 
 **Mätarsidan ("snö-mätare")**: OK till femte fältet (markören hamnar på rad 4), NEXT växlar sida.
 ```

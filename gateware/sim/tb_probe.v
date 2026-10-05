@@ -35,8 +35,10 @@ module tb_probe;
     i2c_slave_model #(.ADDR(7'h5C)) tvp_a (.scl(scl), .sda(sda_a), .sda_low(s_a));
     i2c_slave_model #(.ADDR(7'h5C)) tvp_b (.scl(scl), .sda(sda_b), .sda_low(s_b));
 
-    // CLK_HZ only scales the millisecond timers (I2C start-up, UART) so the run stays short
-    m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1)) dut (
+    // CLK_HZ only scales the millisecond timers (I2C start-up, UART, RX5808 writes) so the run stays
+    // short: one probe millisecond is 0.1 ms here. RX5808: first write after 2 ms, repeats 5 ms apart.
+    m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1),
+               .RX_FIRST_MS(20), .RX_REPEAT_MS(50)) dut (
         .clk(clk), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
         .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
         .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n), .led(led), .uart_txd(txd));
@@ -52,13 +54,28 @@ module tb_probe;
             if (ub_t == DIV + DIV / 2 + DIV * 8) begin ub_on <= 0; $display("U %02x", ub_sh); end
         end
     end
-    // RX5808 frame at start-up: count SPI clocks while SEL is low
-    integer spi_n = 0;
-    always @(posedge spi_clk) if (!spi_sel_n) spi_n = spi_n + 1;
+    // RX5808 frames: bits on rising clock edges while SEL is low, printed when SEL rises
+    reg [24:0] spi_bits;
+    integer    spi_n = 0, spi_idle_bad = 0;
+    always @(posedge spi_clk) if (!spi_sel_n) begin spi_bits[spi_n] <= spi_data; spi_n <= spi_n + 1; end
+    always @(posedge spi_sel_n) begin
+        if (spi_n > 0) $display("SPI %0d %0d %07x", $time, spi_n, spi_bits);
+        spi_n = 0;
+    end
+    // between frames: CLK low and DATA high, so that LED4 (on DATA's pin) stays dark
+    always @(posedge clk) if (spi_sel_n === 1'b1 && (spi_clk !== 1'b0 || spi_data !== 1'b1)) spi_idle_bad = spi_idle_bad + 1;
+
+    // both decoders report lock from the start (the model's default) and lose it at UNLOCK
+    localparam UNLOCK = 32_000_000;
+    initial begin
+        #(UNLOCK);
+        tvp_a.regs[8'h88] = 8'h00; tvp_b.regs[8'h88] = 8'h00;
+        $display("UNLOCK %0d", $time);
+    end
 
     initial begin
         #(5 * WINDOW * 37 + 500_000);
-        $display("RESULT spi=%0d", spi_n);
+        $display("RESULT spi_idle_bad=%0d", spi_idle_bad);
         $finish;
     end
 endmodule

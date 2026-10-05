@@ -6,8 +6,9 @@
 //
 // The decoders report no lock until T_LOCK_NS (0 = never). +pll_stop_ns=<t>
 // stops the PLL outputs and the decoder clocks at t, so the rest of the run
-// only costs the board-clock logic. Every change of RESETB and of the LEDs is
-// printed for sim/test_top_pins.py; the video path has its own tests.
+// only costs the board-clock logic. Every change of RESETB and of the LEDs and
+// every RX5808 frame is printed for sim/test_top_pins.py; the video path has
+// its own tests.
 `timescale 1ns/1ps
 `default_nettype none
 module tb_top_pins;
@@ -64,13 +65,11 @@ module tb_top_pins;
             m4_dual_mix #(.CLK_HZ(CLK_HZ)) dut (
                 .clk(clk), .rst_i(1'b0), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
                 .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
+                .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n),
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led),
                 .O_sdram_clk(), .O_sdram_cke(), .O_sdram_cs_n(), .O_sdram_cas_n(), .O_sdram_ras_n(),
                 .O_sdram_wen_n(), .O_sdram_dqm(), .O_sdram_addr(), .O_sdram_ba(), .IO_sdram_dq(dq));
-            assign spi_clk = 1'b0;
-            assign spi_data = 1'b1;
-            assign spi_sel_n = 1'b1;
         end else begin : g
             wire s_oled, txd;
             assign sda_a = s_oled ? 1'b0 : 1'bz;
@@ -98,10 +97,13 @@ module tb_top_pins;
         if (spi_n > 0) $display("SPI %0d %0d %07x", $time, spi_n, spi_bits);
         spi_n = 0;
     end
+    // between frames: CLK low and DATA high, so that LED4 (on DATA's pin) and LED5 (SEL) stay dark
+    integer spi_idle_bad = 0;
+    always @(posedge clk) if (spi_sel_n === 1'b1 && (spi_clk !== 1'b0 || spi_data !== 1'b1)) spi_idle_bad = spi_idle_bad + 1;
 
     initial begin
         #(T_END_NS);
-        $display("RESULT done");
+        $display("RESULT done spi_idle_bad=%0d", spi_idle_bad);
         $finish;
     end
 endmodule

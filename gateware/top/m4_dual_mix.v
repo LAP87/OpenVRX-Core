@@ -1,12 +1,15 @@
 // M4: two of our own TVP5150AM1 decoders (two receivers on the same channel)
 // -> line-by-line mixer -> SDRAM field triple buffer -> 720p60 on the onboard
-// HDMI. The decoders are brought up over I2C by the FPGA (tvp_ctrl).
+// HDMI. The decoders are brought up over I2C by the FPGA (tvp_ctrl). Both
+// RX5808 are tuned to F4 5800 MHz 0.5 s after start, and again every 2 s for
+// as long as no decoder is locked (rx5808_tune.v, same SPI pins as M3 and M6).
 //
 // LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
-// from B. The pins of LED 3-5 are header pins: RESETB leaves on 18 (J6-18).
-// It must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for a
-// whole bank from its first single-ended output, and that changes the IOB
+// from B. The pins of LED 3-5 are header pins: RESETB leaves on 18 (J6-18),
+// the RX5808 SPI DATA on 19 (J6-17) and SEL on 20 (J6-16).
+// RESETB must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for
+// a whole bank from its first single-ended output, and that changes the IOB
 // fuses of the TMDS pairs there.
 `default_nettype none
 module m4_dual_mix #(
@@ -23,6 +26,9 @@ module m4_dual_mix #(
     inout  wire        i2c_sda_a,         // one SDA per decoder: identical modules share an address
     inout  wire        i2c_sda_b,
     output wire        tvp_resetb,        // PIN18 = J6-18 (LED3's pin)
+    output wire        rx_spi_clk,        // both RX5808 modules (same channel)
+    output wire        rx_spi_data,       // PIN19 = J6-17 (LED4's pin)
+    output wire        rx_spi_sel_n,      // PIN20 = J6-16 (LED5's pin)
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
@@ -32,6 +38,7 @@ module m4_dual_mix #(
     output wire [1:0]  O_sdram_ba,
     inout  wire [31:0] IO_sdram_dq
 );
+    `include "vtx_channels.vh"
     wire clk_serial, clk_pixel, pix_locked;
     clocks_720p clocks (.clk_27(clk), .clk_serial(clk_serial), .clk_pixel(clk_pixel), .locked(pix_locked));
     wire sd_clk, sd_clk_shift, sd_locked;
@@ -56,6 +63,16 @@ module m4_dual_mix #(
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
     wire locked_ok = init_done && dev_err == 2'b00 && st_valid == 2'b11 &&
                      st0[1] && st0[2] && st1[1] && st1[2];
+
+    // ---- RX5808: F4 5800 MHz, as in M3 (board clock) ----
+    wire [41:0] f4 = vtx_channel(6'd27);
+    wire [1:0]  sel_n;
+    wire        any_locked = (st_valid[0] && !dev_err[0] && st0[1] && st0[2]) ||
+                             (st_valid[1] && !dev_err[1] && st1[1] && st1[2]);
+    rx5808_tune #(.CLK_HZ(CLK_HZ)) rx (
+        .clk(clk), .rst(rst_c[2]), .synth(f4[19:0]), .write_now(1'b0), .any_locked(any_locked),
+        .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(sel_n));
+    assign rx_spi_sel_n = sel_n[0];       // both modules share one SEL line
 
     // ---- mixer (SDRAM clock domain) ----
     wire        m_empty, m_pop, a_lines, b_lines, alive_a, alive_b, cur, overflow;

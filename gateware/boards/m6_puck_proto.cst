@@ -1,4 +1,4 @@
-// M6 puck prototype = M4 pins + RX5808 SPI on J5-18 / J6-17 / J6-16 + S2 button; OLED shares SCL/SDA_A.
+// M6 puck prototype = M4 pins (RX5808 SPI on J5-18 / J6-17 / J6-16) + S2 button + USB-UART; OLED shares SCL/SDA_A.
 // M4: two TVP5150AM1 modules (our own) on headers J6 (decoder A) and J5 (decoder B).
 // Pin functions from apicula chipdb (GW2AR-18C QFN88); header positions from the v3921 schematic.
 // Decoder A: SCLK J6-5 PIN77 (GCLKT_1); YOUT0..7 = J6-8 PIN27, J6-9 PIN28, J6-11 PIN26, J6-12 PIN29,

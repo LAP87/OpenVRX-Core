@@ -1,5 +1,5 @@
-// M3 bring-up probe: the decoder, I2C and reset pins of M4 (m4_dual_mix.cst), plus the RX5808 SPI and
-// USB-UART pins of M6 (m6_puck_proto.cst). Keep in step with those two files.
+// M3 bring-up probe: the decoder, I2C, reset and RX5808 SPI pins of M4 (m4_dual_mix.cst), plus the
+// USB-UART pin of M6 (m6_puck_proto.cst). Keep in step with those two files.
 // M4: two TVP5150AM1 modules (our own) on headers J6 (decoder A) and J5 (decoder B).
 // Pin functions from apicula chipdb (GW2AR-18C QFN88); header positions from the v3921 schematic.
 // Decoder A: SCLK J6-5 PIN77 (GCLKT_1); YOUT0..7 = J6-8 PIN27, J6-9 PIN28, J6-11 PIN26, J6-12 PIN29,
@@ -59,7 +59,7 @@ IO_LOC  "i2c_sda_b" 51;
 IO_PORT "i2c_sda_b" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC  "tvp_resetb" 18;
 IO_PORT "tvp_resetb" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-// RX5808 SPI (as M6): CLK J5-18 PIN71, DATA J6-17 PIN19 (LED4's pin), SEL J6-16 PIN20 (LED5's pin)
+// RX5808 SPI (as M4 and M6): CLK J5-18 PIN71, DATA J6-17 PIN19 (LED4's pin), SEL J6-16 PIN20 (LED5's pin)
 IO_LOC  "rx_spi_clk" 71;
 IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "rx_spi_data" 19;

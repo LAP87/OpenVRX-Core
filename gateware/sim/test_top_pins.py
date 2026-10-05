@@ -6,8 +6,8 @@ tops' millisecond timers. The PLL outputs and the decoder clocks stop after
 0.6 ms, when both decoders have delivered lines, so that the rest of the run is
 cheap. The decoder models report no lock until T_LOCK.
 
-Negative control: in a run where the decoders never lock, the check of LED0's
-slow rate must fail.
+Negative control: in a run where the decoders never lock, the checks that LED0
+slows down and that the RX5808 writes stop must fail.
 
 Run: .venv/bin/python -m pytest -q gateware/sim/test_top_pins.py"""
 import functools
@@ -53,7 +53,7 @@ def run(top, locks=True):
     vec = GW / 'vectors' / 'ntsc_clean_frame.hex'
     log = subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={vec}', f'+pll_stop_ns={VIDEO_STOP}'], cwd=work, env=env,
                          check=True, capture_output=True, text=True).stdout
-    assert 'RESULT done' in log, log[-2000:]
+    assert 'RESULT done spi_idle_bad=0' in log, log[-2000:]         # SPI CLK low, DATA high between frames
     return dict(cfg,
                 resetb=[(int(t), v) for t, v in re.findall(r'^RESETB (\d+) (\S)$', log, re.M)],
                 led=[(int(t), v) for t, v in re.findall(r'^LED (\d+) (\S{3})$', log, re.M)],
@@ -111,28 +111,47 @@ def f4_word():
     return sum(bit << i for i, bit in enumerate(vc.spi_frame(reg)))
 
 
-def test_m4_pins():
-    r = run(4)
+def check_rx_frames(r):
+    """F4 on the SPI pins 0.5 s after start and every 2 s until a decoder locks (rx5808_tune.v)."""
+    ms = r['clk_hz'] // 1000 * T_CLK
+    first, repeat = 500 * ms, 2000 * ms
+    assert r['spi'] and all((n, bits) == (25, f4_word()) for _, n, bits in r['spi']), r['spi']
+    early = [t for t, _, _ in r['spi'] if t < r['t_lock']]
+    assert len(early) >= 2 and abs(early[0] - first) < repeat / 100, (first, early)
+    assert all(abs((b - a) - repeat) < repeat / 100 for a, b in zip(early, early[1:])), (repeat, early)
+
+
+def check_rx_stops(r):
+    """No write once the lock has been read: the status poll may take up to 3.5 ms here."""
+    late = [t for t, _, _ in r['spi'] if t > r['t_lock'] + 3_500_000]
+    assert not late, (r['t_lock'], late)
+
+
+def check_all(r):
     check_resetb(r)
     check_line_leds(r)
     check_led0_fast(r, r['t_lock'])
     check_led0_slow_at_end(r)
+    check_rx_frames(r)
+    check_rx_stops(r)
+
+
+def test_m4_pins():
+    check_all(run(4))
 
 
 def test_m6_pins():
-    r = run(6)
-    check_resetb(r)
-    check_line_leds(r)
-    check_led0_fast(r, r['t_lock'])
-    check_led0_slow_at_end(r)
-    # the RX5808 frame leaves on the three SPI pins: F4, 25 bits
-    assert r['spi'] and all((n, bits) == (25, f4_word()) for _, n, bits in r['spi']), r['spi']
+    check_all(run(6))
 
 
-def test_led0_stays_fast_without_lock():
-    """Negative control: the decoders never report lock, so LED0 must not slow down."""
+def test_without_lock_led0_stays_fast_and_writes_go_on():
+    """Negative control: the decoders never report lock."""
     r = run(4, locks=False)
     check_resetb(r)
+    check_line_leds(r)
     check_led0_fast(r, r['t_end'])
+    check_rx_frames(r)
     with pytest.raises(AssertionError):
         check_led0_slow_at_end(r)
+    with pytest.raises(AssertionError):
+        check_rx_stops(r)

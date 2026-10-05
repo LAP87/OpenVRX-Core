@@ -38,7 +38,7 @@ J6-10 (PIN25) används inte. En utgång där ligger i samma bank som HDMI-klockp
 
 Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen SDA.
 
-**RX5808 (båda parallellt, efter SPI-moden):**
+**RX5808 (båda parallellt, efter SPI-moden; samma koppling i M3, M4 och M6):**
 
 | RX5808 | Tang |
 |---|---|
@@ -48,7 +48,7 @@ Båda modulerna svarar på samma I2C-adress, därför har varje modul sin egen S
 | 5 V, GND | separat 5 V, gemensam GND |
 | Video ut | TVP-modulens videoingång (A respektive B) |
 
-RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 3 blinkar till vid start (resetpulsen, 2 ms). Lysdiod 4 och 5 blinkar kort när en kanal skrivs.
+RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på stiftlisterna används av dekodrarna. Stift 52/53 är konfigurationsstift och dessutom HDMI-DDC och fungerar inte. Lysdiod 3 blinkar till vid start (resetpulsen, 2 ms). Lysdiod 4 och 5 blinkar till när en kanal skrivs (0,1 ms) och är släckta däremellan.
 
 **Lysdioder** (tre är kvar som lysdioder):
 
@@ -59,7 +59,9 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 
 **OLED (M6):** SCL J6-3, SDA J6-4 (samma buss som dekoder A), 3,3 V, GND.
 
-**Sändaren LST-S4:** ställ den på NTSC (blå lysdiod enligt manualen) och band F, kanal 4 (5800 MHz). M3 och M6 ställer mottagarna på F4 vid start.
+**Sändaren LST-S4:** ställ den på NTSC (blå lysdiod enligt manualen) och band F, kanal 4 (5800 MHz). M3 och M4 ställer mottagarna på F4. M6 ställer dem på menyns kanal, som är F4 vid start.
+
+**När kanalen skrivs** (`rtl/rx5808_tune.v`): 0,5 s efter start, och sedan varannan sekund så länge ingen dekoder är låst. En mottagare som får ström efter FPGA:n, eller tappar den, står på sin startkanal (5865 MHz enligt RTC6715-databladet) och ställs om inom 2 s. Så länge en dekoder är låst skrivs kanalen inte om, eftersom det inte är provat om en omskrivning stör bilden. I M6 skrivs kanalen dessutom direkt vid varje band- eller kanalbyte.
 
 ## 2. Stegen
 
@@ -133,7 +135,7 @@ Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är oc
 |---|---|---|---|
 | 26 | YOUT2 A | HDMI hot-plug (spänningsdelare från 5 V) | Låg: dekodern driver mot ett motstånd när en skärm sitter i |
 | 18 | RESETB | lysdiod 3 (510 Ω till 3,3 V) | Före konfigurering hålls RESETB inte låg, se nedan |
-| 19, 20 | RX5808 DATA, SEL | lysdiod 4 och 5 (510 Ω till 3,3 V) | Ofarligt: lysdioderna blinkar när en kanal skrivs |
+| 19, 20 | RX5808 DATA, SEL | lysdiod 4 och 5 (510 Ω till 3,3 V) | Ofarligt: båda vilar höga, lysdioderna blinkar till när en kanal skrivs |
 | 76 | YOUT0 B | BL616 SPI MOSI | **Kontrollera:** om BL616 driver stiftet blir bit 0 fel. Proben visar det. |
 | 86 | YOUT5 B | BL616 SPI DIR | **Kontrollera,** samma |
 | 75 | SCL | BL616 SPI MISO | Låg (ingång på BL616) |

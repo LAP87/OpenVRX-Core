@@ -3,8 +3,10 @@
 //   OK   (short press) -> select the next field: band, channel, mode, latency, page
 //   NEXT (short press) -> step the selected field (page: main <-> meter)
 //
-// Band/channel changes reprogram both RX5808 modules (rx5808_spi) with the
-// synth register from vtx_channels.vh; the first write happens after reset.
+// Band/channel changes reprogram both RX5808 modules at once with the synth
+// register from vtx_channels.vh. The first write comes 0.5 s after reset, and
+// the channel is written again every 2 s for as long as no decoder is locked
+// (rx5808_tune.v).
 // Mode MIX lets the line mixer choose; A or B forces one receiver by marking
 // the other one "bad" (same input the decoder lock status uses).
 // Latency BUF shows the video through the SDRAM field buffer; LOW bypasses it
@@ -30,7 +32,9 @@ module puck_ui #(
     parameter [2:0] DEF_CH = 3'd3,        // 4th channel -> F4 5800 MHz (legal in Sweden)
     parameter DEF_LOW_LAT = 0,            // start in the low-latency mode
     parameter OSD_MS = 5000,              // OSD visible this long after a button press
-    parameter BAUD = 115200
+    parameter BAUD = 115200,
+    parameter RX_FIRST_MS = 500,          // RX5808 channel write after reset, and its repeat while
+    parameter RX_REPEAT_MS = 2000         // no decoder is locked (rx5808_tune.v)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -101,27 +105,18 @@ module puck_ui #(
     wire [12:0] freq = chan[32:20];
     wire [19:0] synth = chan[19:0];
 
-    reg  spi_start, pending;
-    wire spi_busy;
-    rx5808_spi #(.HALF(CLK_HZ / 1_000_000 > 0 ? CLK_HZ / 1_000_000 : 1)) spi (
-        .clk(clk), .rst(rst), .start(spi_start), .sel_mask(2'b11), .addr(4'h1), .data(synth),
-        .busy(spi_busy), .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(rx_spi_sel_n));
-
     always @(posedge clk) begin
-        spi_start <= 1'b0;
         if (ev_ok) field <= (field == 3'd4) ? 3'd0 : field + 1'b1;
         if (ev_next) case (field)
-            3'd0: begin band <= (band == 3'd5) ? 3'd0 : band + 1'b1; pending <= 1'b1; end
-            3'd1: begin ch <= ch + 1'b1; pending <= 1'b1; end                   // 3 bits wrap 8 -> 1
+            3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
+            3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
             3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
             3'd3: low_lat <= ~low_lat;
             default: page <= ~page;
         endcase
-        if (pending && !spi_busy && !spi_start && !ev_next) begin spi_start <= 1'b1; pending <= 1'b0; end
         if (rst) begin
-            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0; pending <= 1'b1;
+            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0;
             low_lat <= DEF_LOW_LAT[0];
-            spi_start <= 1'b0;
         end
     end
     assign force_bad = {mode == 2'd1, mode == 2'd2};
@@ -133,6 +128,14 @@ module puck_ui #(
         sp0 <= {sp0[0], dec_present[0]}; sp1 <= {sp1[0], dec_present[1]};
         sl0 <= {sl0[0], dec_locked[0]};  sl1 <= {sl1[0], dec_locked[1]};
     end
+
+    // ---- RX5808: both modules get the channel RX_FIRST_MS after reset, at once when the band or
+    //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
+    wire chan_step  = ev_next && (field == 3'd0 || field == 3'd1);
+    wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
+    rx5808_tune #(.CLK_HZ(CLK_HZ), .FIRST_MS(RX_FIRST_MS), .REPEAT_MS(RX_REPEAT_MS)) rx (
+        .clk(clk), .rst(rst), .synth(synth), .write_now(chan_step), .any_locked(any_locked),
+        .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(rx_spi_sel_n));
 
     // ---- snow meter: copy values a few clocks after each toggle, flag stale channels,
     //      convert to decimal one value at a time

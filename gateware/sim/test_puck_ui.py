@@ -25,7 +25,8 @@ def run():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
     work = HERE / 'build' / 'tb_puck_ui'
     work.mkdir(parents=True, exist_ok=True)
-    src = [GW / 'rtl' / n for n in ('i2c_master.v', 'rx5808_spi.v', 'ssd1306_text.v', 'bin2bcd.v', 'uart_tx.v', 'puck_ui.v')]
+    src = [GW / 'rtl' / n for n in ('i2c_master.v', 'rx5808_spi.v', 'rx5808_tune.v', 'ssd1306_text.v', 'bin2bcd.v',
+                                    'uart_tx.v', 'puck_ui.v')]
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), '-o', 'sim.vvp', '-s', 'tb_puck_ui',
                     *map(str, src), str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_puck_ui.v')],
                    cwd=work, env=env, check=True)
@@ -87,16 +88,25 @@ def test_puck_ui():
     res = dict(re.findall(r'(\w+)=(\w+)', next(l for l in log.splitlines() if l.startswith('RESULT'))))
     assert 'timeout' not in log
     assert res['collisions'] == '0' and res['nack'] == '0'
+    assert res['spi_idle_bad'] == '0'                 # SPI CLK low and DATA high between frames
 
-    # SPI: initial F4, then R4, L4, A4, A5, A6 — each a full 25-bit frame
-    frames = re.findall(r'SPI (\d+) (\w+)', log)
-    expect = [('F', 4), ('R', 4), ('L', 4), ('A', 4), ('A', 5), ('A', 6)]
+    # SPI: F4 after reset, then one frame per band / channel step (R4, L4, A4, A5, A6) while decoder A
+    # is locked, each a full 25-bit frame. When no decoder is locked any more, A6 is repeated every
+    # 40 ms (RX_REPEAT_MS in the testbench): three times in the 130 ms until decoder B locks, then never.
+    frames = re.findall(r'SPI (\d+) (\w+) (\d+)', log)
+    expect = [('F', 4), ('R', 4), ('L', 4), ('A', 4), ('A', 5), ('A', 6)] + [('A', 6)] * 3
     assert len(frames) == len(expect), frames
     table = {(b, c): (f, reg) for b, c, f, reg, _ in vc.table()}
-    for (n, bits), key in zip(frames, expect):
+    for (n, bits, _), key in zip(frames, expect):
         f, reg = table[key]
         want = sum(b << i for i, b in enumerate(vc.spi_frame(reg)))
         assert int(n) == 25 and int(bits, 16) == want, (key, n, bits, hex(want))
+    t_unlock, t_relock = (int(re.search(rf'MARK {m} (\d+)', log)[1]) for m in ('unlock', 'relock'))
+    times = [int(t) for _, _, t in frames]
+    assert 5_000_000 < times[0] < 5_200_000, times[0]                       # RX_FIRST_MS = 5
+    assert all(t < t_unlock for t in times[:6]), (times, t_unlock)
+    assert [round((t - t_unlock) / 1e6) for t in times[6:]] == [40, 80, 120], (times, t_unlock)
+    assert all(t < t_relock for t in times), (times, t_relock)
 
     ev = screens(log)
     s0 = screen_before(ev, 'default')

@@ -57,6 +57,14 @@ IO_LOC  "i2c_sda_b" 51;
 IO_PORT "i2c_sda_b" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC  "tvp_resetb" 18;
 IO_PORT "tvp_resetb" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// RX5808 x2, shared CLK/DATA/SEL (as M3 and M6): CLK J5-18 PIN71, DATA J6-17 PIN19 (LED4's pin),
+// SEL J6-16 PIN20 (LED5's pin)
+IO_LOC  "rx_spi_clk" 71;
+IO_PORT "rx_spi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_data" 19;
+IO_PORT "rx_spi_data" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "rx_spi_sel_n" 20;
+IO_PORT "rx_spi_sel_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 // embedded SDRAM (GW2AR-18), from Seyviour/sdram-tang-nano-20k-os-example; banks 2/7 at 3.3 V
 IO_LOC "O_sdram_clk" IOR11B;
 IO_PORT "O_sdram_clk"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;

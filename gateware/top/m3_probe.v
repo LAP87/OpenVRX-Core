@@ -12,8 +12,9 @@
 //   xe    timing codes with uncorrectable bit errors
 //   i2c   OK / NA (no acknowledge) / -- (start-up not finished); st = status registers 89h,88h (---- = none yet)
 //
-// Both RX5808 are tuned to F4 5800 MHz at start (same SPI pins as M6), so
-// receiver video reaches the decoders without the menu.
+// Both RX5808 are tuned to F4 5800 MHz 0.5 s after start (same SPI pins as M6), so
+// receiver video reaches the decoders without the menu. The write is repeated
+// every 2 s for as long as no decoder is locked (rx5808_tune.v).
 // LEDs (active low): 0 heartbeat, 1 SCLK A, 2 SCLK B. The pins of LED 3-5 are header pins and carry
 // RESETB (18 = J6-18) and the RX5808 SPI SEL and DATA (20 = J6-16, 19 = J6-17), as in M4 and M6
 // (pin 25 shares its bank with the TMDS clock pair; pins 52/53 are configuration and HDMI DDC pins).
@@ -24,7 +25,9 @@ module m3_probe #(
     parameter CLK_HZ = 27_000_000,
     parameter WINDOW = 27_000_000,        // board clocks per report
     parameter BAUD = 115_200,
-    parameter POWER_MS = 20
+    parameter POWER_MS = 20,
+    parameter RX_FIRST_MS = 500,          // RX5808 channel write after reset, and its repeat while
+    parameter RX_REPEAT_MS = 2000         // no decoder is locked (rx5808_tune.v)
 ) (
     input  wire        clk,
     input  wire        tvpa_sclk,
@@ -64,20 +67,15 @@ module m3_probe #(
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
 
-    // ---- RX5808: F4 5800 MHz once after reset
+    // ---- RX5808: F4 5800 MHz, written 0.5 s after reset and again every 2 s while no decoder is locked
     wire [41:0] f4 = vtx_channel(6'd27);
-    reg  spi_go, spi_done;
-    wire spi_busy;
-    wire [1:0] sel_n;
-    rx5808_spi #(.HALF(CLK_HZ / 1_000_000 > 0 ? CLK_HZ / 1_000_000 : 1)) spi (
-        .clk(clk), .rst(rst), .start(spi_go), .sel_mask(2'b11), .addr(4'h1), .data(f4[19:0]),
-        .busy(spi_busy), .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(sel_n));
+    wire [1:0]  sel_n;
+    wire        any_locked = (st_valid[0] && !dev_err[0] && st0[1] && st0[2]) ||
+                             (st_valid[1] && !dev_err[1] && st1[1] && st1[2]);
+    rx5808_tune #(.CLK_HZ(CLK_HZ), .FIRST_MS(RX_FIRST_MS), .REPEAT_MS(RX_REPEAT_MS)) rx (
+        .clk(clk), .rst(rst), .synth(f4[19:0]), .write_now(1'b0), .any_locked(any_locked),
+        .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(sel_n));
     assign rx_spi_sel_n = sel_n[0];
-    always @(posedge clk) begin
-        spi_go <= 1'b0;
-        if (!rst && !spi_done && !spi_busy && !spi_go) begin spi_go <= 1'b1; spi_done <= 1'b1; end
-        if (rst) spi_done <= 1'b0;
-    end
 
     // ---- probes
     reg  snap_t;
