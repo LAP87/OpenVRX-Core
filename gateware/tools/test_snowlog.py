@@ -1,4 +1,5 @@
-"""snowlog.py: parsing of the FPGA's log lines and the summary table."""
+"""snowlog.py: parsing of the FPGA's log lines, a capture from a fake port and the summary table."""
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -13,6 +14,22 @@ def test_parse():
         'channel': 'F4', 'mhz': 5800, 'mode': 'MIX'}
     assert snowlog.parse('S ------ 002345 000 100 000 A6 5765 B')['snow_a'] is None
     assert snowlog.parse('noise') is None
+    assert snowlog.parse('S 01234? 002345 040 034 025 F4 5800 MIX') is None, 'a damaged digit is not a crash'
+
+
+def test_log_skips_damaged_lines(tmp_path, monkeypatch, capsys):
+    """Three lines arrive in odd-sized pieces, the middle one damaged. No serial port is opened."""
+    data = [b'S 000100 000200 050 040 010 F4 58', b'00 MIX\r\nS 0001x0 000200 050 040 010 F4 5800 MIX\r\n',
+            b'S 000300 ------ 100 000 000 F4 5800 A\r\n']
+    monkeypatch.setattr(snowlog, 'open_serial', lambda path: 99)
+    monkeypatch.setattr(snowlog.os, 'read', lambda fd, n: data.pop(0) if data else b'')
+    monkeypatch.setattr(snowlog.os, 'close', lambda fd: None)
+    out = tmp_path / 'log.csv'
+    snowlog.log(argparse.Namespace(port='COM5', label='t', seconds=0.3, out=str(out)))
+    with open(out) as fh:
+        rows = list(csv.DictReader(fh))
+    assert [(r['snow_a'], r['snow_b'], r['mode']) for r in rows] == [('100', '200', 'MIX'), ('300', '', 'A')]
+    assert '1 damaged lines skipped' in capsys.readouterr().out
 
 
 def test_summary(tmp_path, capsys):
