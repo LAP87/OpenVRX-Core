@@ -9,8 +9,8 @@
 //    20K's SDRAM at 64.8 MHz from an rPLL with exactly these settings
 //    (src/pllr/gowin_pll_nes.v). His 27 MHz example and Seyviour's port of
 //    it to the open toolchain have the same phase (src/gowin_rpll/
-//    gowin_rpll.v in both). All read single words and sample them CAS+1
-//    clocks after the READ command.
+//    gowin_rpll.v in both). NESTang and the example read single words and
+//    sample them CAS+1 clocks after the READ command.
 //  * Not proven: this project. sdram_burst.v reads 8-word bursts, which
 //    upstream never does (see its header), and nothing here has run on
 //    hardware. This file used 180 degrees until 2026-10-05. No upstream

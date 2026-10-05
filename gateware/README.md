@@ -11,8 +11,9 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 | M0 — testbild 720p60 på kortets HDMI | `top/m0_testpattern.v` | ✔ `build/m0_testpattern.fs` (792 LUT, 3 %; pixel 140 MHz mot 74,25) | Simulering av TMDS och tidsbas |
 | M1 — Moneagles TVP5150AM1 → HDMI (luma, 360×240, 720p60), inbäddad BT.656-synk | `top/m1_moneagle_view.v` | ✔ `build/m1_moneagle_view.fs` (822 LUT, 44/46 BSRAM) | Hela ingångsvägen mot facit |
 | M1s — samma, separata synksignaler (HSYNC/VSYNC/AVID) | `top/m1s_moneagle_view_sync.v` | ✔ `build/m1s_moneagle_view_sync.fs` (1 052 LUT, 44/46 BSRAM) | Båda polariteter och bytefaser |
-| **M2 — full upplösning i färg via SDRAM, trippelbuffert, ingen rivning** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 154 LUT 15 %, 16 BSRAM, 2 PLL; SDRAM 127 MHz mot 64,8) | Tre klockdomäner + SDRAM-modell: SDRAM-innehåll och RGB-pixlar mot modell |
+| **M2 — full upplösning i färg via SDRAM, trippelbuffert, ingen rivning** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 177 LUT 15 %, 16 BSRAM, 2 PLL; SDRAM 122 MHz mot 64,8; byggt 2026-10-05) | Tre klockdomäner + SDRAM-modell med databladets tider: SDRAM-innehåll och RGB-pixlar mot modell, inga protokollfel i minnesmodellen |
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 387 LUT 16 %, 4 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
+| **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 408 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 95 MHz mot 64,8; byggt 2026-10-05) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | se bygget nedan | Rapportraderna mot en frisk och en felkopplad dekoder (`sim/test_probe.py`) |
 | **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (7 026 LUT 33 %, 24 BSRAM; SDRAM 90 MHz) | Mixern bitexakt mot facit (två klockor, snö, trasig synk, död kanal, olåst dekoder); I2C mot slavmodeller |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | ✔ `build/m5c_moneagle_1080p.fs` (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
@@ -110,13 +111,62 @@ Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radma
                  förhämtning av nästa källrad till 4-plats radbuffert, YCbCr -> RGB (BT.601), 4:3-fönster
 ```
 
-- SDRAM-styrningen (`rtl/sdram_burst.v`) bygger på nand2mario:s hårdvaruprovade timing (64,8 MHz, CAS 2) men med 32-bitars burstar om 8 ord. Läspunkten är en parameter (`RD_SAMPLE`) om den behöver justeras på riktig hårdvara — symptom: bilden förskjuten 2 pixlar sidledes eller "trasig" i 8-pixelsblock.
-- Bandbredd: ca 21 MB/s in + ca 21 MB/s ut mot ca 170 MB/s kapacitet.
+- SDRAM-styrningen (`rtl/sdram_burst.v`) bygger på nand2marios styrning, men flyttar burstar om 8 ord i stället för enstaka ord.
+  - **Provat på hårdvara uppströms:** NESTang kör samma minne i 64,8 MHz med SDRAM-klockan 225° efter styrklockan, CAS 2, och läser enstaka ord CAS + 1 klockor efter läskommandot. Fasen och läspunkten är desamma här.
+  - **Inte provat någonstans:** läsning i burst. Där byts ordet på bussen 2,5–6 ns efter nästa SDRAM-klockflank, medan ett enstaka ord ligger kvar. Läspunkten måste alltså träffa ett fönster på 11,9 ns, och var det ligger beror på kortets fördröjning (klockan ut plus data tillbaka). Med 225° och standardläspunkten läses rätt ord om fördröjningen är 3,3–15,2 ns (`sim/test_sdram.py`). Den är inte mätt, och byggena har inga tidskrav på I/O: i M2-bygget placerades läsvipporna 13–39 rutor från sina stift, så den skiljer mellan dataledningar och mellan byggen.
+  - Kör därför minnestestet (M2a nedan) före M2 och M4.
+- T_RCD/T_RP/T_RC är 2/2/6 klockor, som NESTang anger. Databladet för EM638325-6 kräver 18 ns för de två första, alltså 2 klockor. Till 2026-10-05 stod här 180° och 1/1/4, vilket ingen uppströms kör.
+- Läspunkten är `RD_SAMPLE` i `rtl/sdram_burst.v` (alla toppmoduler) eller parametern med samma namn i `rtl/fb_backend.v`. Fel läspunkt ger en bild som är förskjuten 2 pixlar eller trasig i 8-pixelsblock.
+- Bandbredd (simulerat): bilden behöver ca 21 MB/s in och ca 21 MB/s ut. Styrningen läser 130 MB/s (16 klockor per burst) och skriver 80 MB/s genom `fb_sdram`. En rad hämtas på högst 11,7 µs; en utrad är 22,2 µs.
 - Halvbild visas med radupprepning (bob): ingen kamskada vid snabba FPV-rörelser, ca 1 halvbild (16,7–20 ms) buffertlatens.
 - Lysdioder (tänd = sant): LED0 hjärtslag, LED1 BT.656-rader kommer in, LED2 SDRAM initierat, LED3 halvbild visas, LED4 SDRAM-PLL låst, LED5 pixel-PLL låst.
 - SDRAM-stiftens placering verifierad i place & route (55 signaler på IOL/IOR-platserna).
 
 **M2s:** samma 13 trådar som M1s (M1-kablarna + HSYNC PIN75/J6-3, VSYNC PIN85/J6-4, AVID PIN25/J6-10). Lysdioderna betyder samma som i M2; LED1 = AVID-rader kommer in.
+
+## M2a — minnestest av SDRAM
+
+`top/m2a_memtest.v` → `build/m2a_memtest.fs` (kärna `rtl/memtest_core.v`). Bara Tang-kortet och USB-kabeln behövs.
+
+Testet skriver hela minnet i burstar om 8 ord, läser tillbaka och jämför, först med pseudoslumptal och sedan med adressen som data. Det görs för tre läspunkter i tur och ordning. Varje läspunkt ger en rad på kortets USB-UART (PIN69, 115200 8N1), ungefär fyra rader i sekunden:
+
+```
+M rs=5 pass=0012 err=00000000 bits=00000000000000000000000000000000 pos=00000000
+```
+
+| Fält | Betyder |
+|---|---|
+| `rs` | läspunkt: 4, 5 eller 6 klockor efter radaktiveringen. 5 är standard (`RD_SAMPLE`) |
+| `pass` | varv, hex. Ett varv är tre rader |
+| `err` | felaktiga ord, hex, av 400000 jämförda |
+| `bits` | en siffra per dataledning, DQ31 först och DQ0 sist |
+| `pos` | en siffra per ord i bursten, ord 0 först |
+
+En siffra i `bits` och `pos` är felräknarens storlek: 0 inga fel, 1 ett, 2 två eller tre, 3 fyra till sju och så vidare (n betyder 2^(n−1) till 2^n − 1), F minst 16 384.
+
+| Raderna visar | Betyder | Gör |
+|---|---|---|
+| `rs=5` har `err=00000000`, de andra är fulla av fel | läsningen fungerar; `rs=4` läser ordet före och `rs=6` ordet efter | prova fasen ett steg före och efter, se nedan |
+| bara `rs=4` eller bara `rs=6` är ren | fördröjningen är kortare eller längre än väntat | byt fas, eller sätt `RD_SAMPLE` till det värdet |
+| ingen rad är ren | alla läspunkter hamnar där data byts | byt fas |
+| få fel, på enstaka siffror i `bits` | de dataledningarna ligger på fönstrets kant | byt fas |
+
+Annan fas utan att ändra källkod: `SDRAM_PHASE=12 gateware/build.sh m2a_memtest` ger `build/m2a_memtest_phase12.fs`. Talet är sextondelar av en period: 8 = 180°, 10 = 225° (standard), 12 = 270°. Senare fas passar kortare fördröjning. Testet mäter sitt eget bygge, och i M4 och M6 hamnar läsvipporna på andra platser. Välj därför en fas där `rs=5` är ren även ett steg (0,96 ns) åt vardera hållet, och för in den som `PSDA_SEL` i `rtl/clocks_sdram.v`.
+
+Håll S2 intryckt för att prova testet självt: då skrivs ett ord fel med flit, och en fungerande läspunkt ska visa `err=00000001`, sista siffran i `bits` 1 och sjätte siffran i `pos` 1. S1 startar om. Lysdioder (tänd = sant): LED0 växlar för varje rad, LED1 SDRAM initierat, LED2 standardläspunkten hade fel i sin senaste rad.
+
+Simulerat i `sim/test_memtest.py`, där UART:en avkodas bit för bit, mot `sim/sdram_model.v`. Modellen har tiderna ur Etrons datablad för EM638325-6 (tAC 6 ns, tOH 2,5 ns). Att det inbyggda minnet beter sig som den kretsen är ett antagande, liksom modellens kortfördröjning på 3 + 3 ns.
+
+| Klockan ut + data tillbaka | Fas | Ren rad |
+|---|---|---|
+| 3 + 3 ns (antagandet) | 225° | `rs=5` |
+| 0 | 225° | ingen |
+| 0 | 180° | `rs=4` |
+| 1 + 1 ns | 225° | ingen |
+| 1 + 1 ns | 270° | `rs=5` |
+| 3 + 17 ns | 225° | `rs=6` |
+
+Vilken rad som blir ren på ett riktigt kort vet ingen förrän testet har körts där.
 
 ## `model/` — facit
 

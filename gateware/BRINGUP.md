@@ -72,6 +72,17 @@ Loggen läses från kortets andra USB-serieport (BL616 visar två; UART:en är o
 stty -F /dev/ttyUSB1 115200 raw -echo && cat /dev/ttyUSB1
 ```
 
+### 2.1 Minnestest före M4
+
+M4 är första steget som använder SDRAM-minnet, och läsningen där är inte provad på hårdvara (README, "M2 — så fungerar det"). Kör därför `m2a_memtest` först. Bara Tang-kortet och USB-kabeln behövs, så det går att göra direkt efter M0.
+
+```bash
+gateware/build.sh m2a_memtest
+openFPGALoader -b tangnano20k gateware/build/m2a_memtest.fs
+```
+
+Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar `err=00000000` varv efter varv, och `err=00000001` medan S2 hålls intryckt. Visar en annan rad nollorna, eller ingen, står det i README ("M2a — minnestest av SDRAM") hur fasen och läspunkten byts. Bygg sedan M4 med den fas som gav ren rad.
+
 ## 3. Vad M3-proben ska visa
 
 En rad per dekoder och sekund. Frisk NTSC:

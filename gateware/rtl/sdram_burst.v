@@ -6,7 +6,9 @@
 // machine, the init sequence and the rule "sample read data CAS+1 clocks after
 // the READ command". Changed here: 32-bit words, burst length 8 (one request
 // moves 8 consecutive words of a row), internal refresh, and T_RCD/T_RP/T_RC
-// of 2/2/6 clocks instead of 1/1/4.
+// of 2/2/6 clocks instead of 1/1/4. Both upstream repositories are under the
+// Apache License 2.0; their sdram.v carries the author's name, nand2mario,
+// and no other notice.
 //
 // What is proven on hardware and what is not (upstream sources read 2026-10-05):
 //  * nand2mario's example runs at 27 MHz. NESTang (src/sdram_nes.v) runs this
