@@ -20,27 +20,17 @@ PROJECT = GW.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(GW / 'model'))
 import bt656  # noqa: E402
+import fb_ref  # noqa: E402
 from test_m2 import LINES, field_stream, sample  # noqa: E402
 
 V_ACTIVE, H_ACTIVE = 36, 1920
-
-
-def src_line(out_y):
-    acc, src = 0, 0
-    for _ in range(out_y):
-        if acc + LINES >= V_ACTIVE:
-            acc += LINES - V_ACTIVE
-            src = min(src + 1, LINES - 1)
-        else:
-            acc += LINES
-    return src
 
 
 def expected(field, out_y, x):
     if not (240 <= x < 1680):
         return 0x10, 0x80
     sx = (x - 240) // 2
-    src = src_line(out_y)
+    src = fb_ref.src_line(out_y, LINES, V_ACTIVE)
     cb, _, cr = sample(field, src, sx & ~1)
     _, y, _ = sample(field, src, sx)
     return y, (cb if x % 2 == 0 else cr)
@@ -58,16 +48,19 @@ async def m5c_bt1120_frame(dut):
     while not dut.sdram_ready.value:
         await RisingEdge(dut.sd_clk)
 
+    fb = dut.core.backend.fb
     pubs = []
+    holds = {0: 0}                # buffer -> index of the field written to it last
 
     async def watch_pubs():
         written = 0
         while True:
             await RisingEdge(dut.sd_clk)
             await ReadOnly()
-            if dut.core.backend.fb.pub_valid.value:
-                pubs.append((int(dut.core.backend.fb.pub_buf.value), written))
+            if fb.publish.value:
+                pubs.append((int(fb.cur_buf.value), written))
                 written += 1
+                holds[int(fb.nxt.value)] = written
     cocotb.start_soon(watch_pubs())
 
     for fld in range(4):
@@ -99,14 +92,14 @@ async def m5c_bt1120_frame(dut):
             if h == 0 and v == 0:
                 if state == 'seek' and prev_v == 1:
                     state = 'active'
-                    frame_buf = int(dut.core.backend.disp.display_buf.value)
+                    frame_buf = int(fb.show_buf.value)
                 x = 0                                    # next word is pixel 0
             if h == 0:
                 prev_v = v
             continue
         if state == 'active' and 0 <= x < H_ACTIVE:
             if x % 37 == 0 or x in (238, 239, 240, 241, 1678, 1679, 1680):
-                field = [p[1] for p in pubs if p[0] == frame_buf][-1]
+                field = holds[frame_buf]
                 exp = expected(field, out_y, x)
                 assert (y8, c8) == exp, f'line {out_y} x {x} field {field}: got {(y8, c8)}, expected {exp}'
                 checked += 1
@@ -121,7 +114,7 @@ def test_m5c_bt1120():
         os.environ['PATH'] = f'{iverilog_bin}{os.pathsep}' + os.environ['PATH']
     r = get_runner('icarus')
     build = HERE / 'build' / 'tb_m5c'
-    rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v',
+    rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v', 'field_phase.v',
                                     'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v', 'ycbcr2rgb.v',
                                     'fb_display.v', 'fb_backend.v', 'm2_core.v', 'tvp_sync_rx.v', 'bt1120_tx.v')]
     r.build(sources=rtl + [HERE / 'sdram_model.v', HERE / 'tb_m5c.v'], hdl_toplevel='tb_m5c',

@@ -4,7 +4,7 @@ display window, with three clock domains and the behavioural SDRAM.
 Stimulus: fields of 12 active lines (2 VBI lines each), alternating F bit,
 known luma/chroma patterns. Checks the SDRAM contents of a published field
 and the RGB output pixels against a Python model of the scaling and BT.601
-conversion.
+conversion. What the field store decides is tested in test_fb.py.
 
 Run:  .venv/bin/python -m pytest -q gateware/sim
 """
@@ -22,6 +22,7 @@ GW = HERE.parent
 PROJECT = GW.parent
 sys.path.insert(0, str(GW / 'model'))
 import bt656  # noqa: E402
+import fb_ref  # noqa: E402
 
 LINES, VBI, V_ACTIVE, V_TOTAL = 12, 2, 36, 40
 
@@ -63,15 +64,9 @@ def to_rgb(y, cb, cr):
             clamp(298 * ys + 516 * cbs + 128))
 
 
-def expected_pixel(field, out_y, x):
-    """Model of fb_display: Bresenham line mapping, x window 160..1119, sx = xr*3//4."""
-    acc, src = 0, 0
-    for yy in range(out_y):            # source line for out_y
-        if acc + LINES >= V_ACTIVE:
-            acc += LINES - V_ACTIVE
-            src = min(src + 1, LINES - 1)
-        else:
-            acc += LINES
+def expected_pixel(field, out_y, x, low=False):
+    """Model of fb_display: line mapping from fb_ref, x window 160..1119, sx = xr*3//4."""
+    src = fb_ref.src_line(out_y, LINES, V_ACTIVE, low)
     if not (160 <= x < 1120):
         return (0, 0, 0)
     sx = ((x - 160) * 3) // 4
@@ -93,16 +88,19 @@ async def m2_end_to_end(dut):
     while not dut.sdram_ready.value:
         await RisingEdge(dut.sd_clk)
 
+    fb = dut.core.backend.fb
     pubs = []                     # (buf, lines, field index written)
+    holds = {0: 0}                # buffer -> index of the field written to it last
 
     async def watch_pubs():
         written = 0
         while True:
             await RisingEdge(dut.sd_clk)
             await ReadOnly()
-            if dut.core.backend.fb.pub_valid.value:
-                pubs.append((int(dut.core.backend.fb.pub_buf.value), int(dut.core.backend.fb.pub_lines.value), written))
+            if fb.publish.value:
+                pubs.append((int(fb.cur_buf.value), int(fb.n_now.value), written))
                 written += 1
+                holds[int(fb.nxt.value)] = written
     cocotb.start_soon(watch_pubs())
 
     async def feed(nfields):
@@ -128,14 +126,14 @@ async def m2_end_to_end(dut):
             got = int(dut.mem.peek_data.value)
             assert got == exp, f'field {fld} buf {buf} line {line} word {idx}: {got:#010x} != {exp:#010x}'
 
-    # display: wait for a frame start, find which field it shows, check pixels
+    # display: wait for a frame start, find which field it shows (decided in the SDRAM domain
+    # a few clocks after the frame's first line request), check pixels
     while True:
         await RisingEdge(dut.pix_clk)
         await ReadOnly()
-        if int(dut.core.backend.timing.y.value) == V_TOTAL - 1 and int(dut.core.backend.timing.x.value) == 2:
+        if int(dut.core.backend.timing.y.value) == V_TOTAL - 1 and int(dut.core.backend.timing.x.value) == 40:
             break
-    shown_buf = int(dut.core.backend.disp.display_buf.value)
-    shown_field = [p[2] for p in pubs if p[0] == shown_buf][-1]
+    shown_field = holds[int(fb.show_buf.value)]
     assert int(dut.core.backend.disp.have_video.value) == 1
     checked, out_y, x = 0, 0, 0
     while out_y < V_ACTIVE:
@@ -180,7 +178,7 @@ async def m2_low_latency(dut):
                 dut.tvp_d.value = b
                 if i == end_of_line1:
                     line1_done.append(get_sim_time('ns'))
-    feeder = cocotb.start_soon(feed(7))
+    feeder = cocotb.start_soon(feed(8))
 
     frames = []                   # sim time of each output frame's first active pixel
     async def watch_frames():
@@ -191,10 +189,10 @@ async def m2_low_latency(dut):
                 frames.append(get_sim_time('ns'))
     cocotb.start_soon(watch_frames())
 
-    # check the pixels of the frame that follows field 4's line 1
-    while len(line1_done) < 5:
+    # check the pixels of the frame that follows field 5's line 1
+    while len(line1_done) < 6:
         await RisingEdge(dut.pix_clk)
-    shown_field = 4
+    shown_field = 5
     while True:
         await RisingEdge(dut.pix_clk)
         await ReadOnly()
@@ -216,15 +214,15 @@ async def m2_low_latency(dut):
                 x, out_y = 0, out_y + 1
     await feeder
 
-    # genlock: from field 2 on, one frame per field, starting 0..2 output lines after line 1
+    # genlock: from field 3 on, one frame per field, starting 0..2 output lines after line 1
     out_line = H_TOTAL * PIX_NS
     lags = []
-    for t in line1_done[2:]:
+    for t in line1_done[3:]:
         nxt = [f for f in frames if f >= t]
         assert nxt, f'no frame after field line 1 at {t}'
         lags.append(nxt[0] - t)
     assert all(0 <= lag <= 2 * out_line for lag in lags), [round(l / out_line, 2) for l in lags]
-    locked = [f for f in frames if f > line1_done[2]]
+    locked = [f for f in frames if f > line1_done[3]]
     periods = [b - a for a, b in zip(locked, locked[1:])]
     field_ns = (VBI + LINES) * LINE_BYTES * TVP_NS
     assert all(abs(p - field_ns) <= 1.5 * out_line for p in periods), periods
@@ -241,7 +239,7 @@ def _run_m2(testcase):
         os.environ['PATH'] = f'{iverilog_bin}{os.pathsep}' + os.environ['PATH']
     r = get_runner('icarus')
     build = HERE / 'build' / 'tb_m2'
-    rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v',
+    rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v', 'field_phase.v',
                                     'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v', 'ycbcr2rgb.v',
                                     'fb_display.v', 'fb_backend.v', 'm2_core.v')]
     r.build(sources=rtl + [HERE / 'sdram_model.v', HERE / 'tb_m2.v'], hdl_toplevel='tb_m2',
