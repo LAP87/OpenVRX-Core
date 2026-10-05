@@ -4,6 +4,10 @@
 // Register defaults are the TVP5150AM1's (SLES209E table 3-11) where the tests
 // look: 03h = 01h (outputs off), 04h = DCh (autoswitch mask). 0Dh starts at 00h
 // instead of the real 47h, so that a test can see it being written.
+// Status as a healthy NTSC input reads (SLES209E 3.21.49, 3.21.50):
+//   88h = 0Eh  H, V and colour lock; bit5 = 0: 60 Hz; bit6 = 0: not line alternating
+//   89h = 00h  no weak signal (bit6); bit4 follows the field, so 10h is as healthy
+// Healthy PAL reads 88h = 6Eh (50 Hz, line alternating); 89h bit5 is the PAL switch.
 // Testbench hooks: tvp_reset (registers back to defaults, as after RESETB or a
 // supply dip), wr_protect (writes are acknowledged but ignored).
 `timescale 1ns/1ps
@@ -34,7 +38,7 @@ module i2c_slave_model #(
         page = 0;
         tvp_reset;
         regs[8'h80] = 8'h51; regs[8'h81] = 8'h50;          // device ID 5150
-        regs[8'h88] = 8'h2E; regs[8'h89] = 8'h40;          // locked, 60 Hz / weak signal
+        regs[8'h88] = 8'h0E; regs[8'h89] = 8'h00;          // healthy NTSC
         sda_low = 0; active = 0; writes = 0; wr_protect = 0;
     end
 

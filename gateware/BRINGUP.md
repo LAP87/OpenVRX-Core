@@ -88,7 +88,7 @@ stty -F /dev/ttyUSB1 115200 raw -echo && cat /dev/ttyUSB1
 En rad per dekoder och sekund. Frisk NTSC:
 
 ```
-A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E ri 00
+A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 000E ri 00
 ```
 
 | Fält | Friskt | Betyder |
@@ -101,8 +101,19 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 40
 | `fld` | `060` (PAL `050`) | fältbyten per sekund |
 | `xe` | `0000` | synkord med bitfel som inte gick att rätta |
 | `i2c` | `OK` | dekodern svarade på den senaste I2C-frågan (`NA`: inget svar, `--`: uppstarten är inte klar) |
-| `st` | låsbitar satta | statusregister 89h,88h (se TVP5150AM1-databladet) |
+| `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan |
 | `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |
+
+**Statusregistren** (TI SLES209E avsnitt 3.21.49 och 3.21.50). De två sista siffrorna i `st` är register 88h:
+
+| Bit i 88h | Hex | Betyder |
+|---|---|---|
+| 1, 2, 3 | `02`, `04`, `08` | H-lås, V-lås, färglås. Alla tre ger `E` som sista siffra |
+| 5 | `20` | fältfrekvens: 0 = 60 Hz, 1 = 50 Hz |
+| 6 | `40` | färgen växlar radvis (PAL) |
+| 0, 4, 7 | `01`, `10`, `80` | får variera på en frisk signal: VCR-läge, lås tappat sedan förra läsningen, toppvitt |
+
+Frisk NTSC läser alltså `0E` och frisk PAL `6E`. De två första siffrorna är register 89h. Bit 6 (`40`) betyder svag signal och ska vara 0. Bit 4 (`10`) följer fältet och bit 5 (`20`) är PAL-växeln, så `00` och `10` är lika friska, för PAL också `20` och `30`. `sim/tvp_status.py` har samma tabell som kod, och `sim/test_probe.py` kontrollerar exemplet ovan mot den.
 
 `ri` räknas upp när register 03h inte läser tillbaka 0Dh. Det händer när dekodern har återställts av en spänningsdipp eller en störning på RESETB. Då är dess utgångar avstängda, och FPGA:n skriver uppstartsregistren igen utan att röra den andra dekodern. Samma sak sker i M4 och M6, men bara M3 visar räknaren.
 
@@ -119,7 +130,8 @@ Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot 
 | `len ---------`, `ln 00000` | inga synkord: en databit fel räcker. Titta på `tog`/`hi` först |
 | `len` varierar, `xe` stiger | brus eller fel samplingsflank: korta trådarna, jord mellan signalerna |
 | `i2c NA` | SDA eller SCL, pull-up saknas, eller fel adress (YOUT7-strappning) |
-| `i2c OK` men låsbitarna i `st` är nollor | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `i2c OK` men låsbitarna i `st` är nollor (sista siffran inte `E`) | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `st` börjar på `4`–`7` (t.ex. `400E`) | dekodern flaggar svag signal: antenn, avstånd, eller mottagaren på fel kanal |
 | `ri` stiger då och då | dekodern återställs under drift: glapp i matningen eller på RESETB-tråden |
 | `ri` går till `FF` på några sekunder, `st 0000` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
 

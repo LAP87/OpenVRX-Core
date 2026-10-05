@@ -20,11 +20,25 @@ HERE = Path(__file__).resolve().parent
 GW = HERE.parent
 PROJECT = GW.parent
 sys.path.insert(0, str(GW / 'model'))
+sys.path.insert(0, str(HERE))
+import tvp_status  # noqa: E402
 import vtx_channels as vc  # noqa: E402
 
 WINDOW = 270_000
 CLK_HZ = 2_700_000                  # what tb_probe.v tells the probe (scales its timers)
 LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4}) ri ([0-9A-F]{2})$')
+
+
+def test_bringup_example_line():
+    """The example report in BRINGUP.md section 3 has the format the probe prints (same
+    pattern and length as in test_probe_reports), and its status word is what a healthy
+    NTSC decoder reads according to the datasheet's bit tables."""
+    text = (GW / 'BRINGUP.md').read_text(encoding='utf-8')
+    example = next(l for l in text.splitlines() if l.startswith('A sclk '))
+    m = LINE.match(example)
+    assert m and len(example) == 88, example
+    assert m[4] == 'OK' and m[6] == '00' and 'len 1716-1716' in m[3], example
+    assert tvp_status.healthy(int(m[5], 16), 'ntsc'), example
 
 
 def run():
@@ -72,11 +86,11 @@ def test_probe_reports():
         assert body.startswith('tog FF hi FF len 1716-1716 ln '), l
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
-        assert i2c == 'OK' and st == '402E', l
+        assert i2c == 'OK' and st == '000E', l
     for l in b[1:3]:
         _, _, body, i2c, st, _ = fields(l)
         assert body.startswith('tog DB hi DF len --------- ln 00000 fld 000 xe 0000'), l
-        assert i2c == 'OK' and st == '402E', l
+        assert i2c == 'OK' and st == '000E', l
 
     # B's clock has stopped: the line says so instead of repeating stale values
     _, f_dead, body, _, _, _ = fields(b[3])

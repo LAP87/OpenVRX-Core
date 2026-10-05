@@ -2,7 +2,7 @@
 // No video out. Once a second it prints one line per decoder over the
 // onboard USB-UART (PIN69, 115200 8N1):
 //
-//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 402E ri 00
+//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 000E ri 00
 //
 //   sclk  SCLK frequency in Hz (resolution 256 Hz); "no SCLK" ends the line when the decoder clock is absent
 //   tog   data bits YOUT7..0 that toggled (FF = all wired); hi = bits ever 1 (stuck-low bit: tog 0, hi 0)
@@ -11,7 +11,7 @@
 //   fld   field changes this second (60 or 50)
 //   xe    timing codes with uncorrectable bit errors
 //   i2c   OK / NA (the last transaction was not acknowledged) / -- (start-up not finished)
-//   st    status registers 89h,88h (---- = none yet)
+//   st    status registers 89h,88h (---- = none yet); healthy NTSC 000E or 100E, healthy PAL x06E
 //   ri    times the decoder was found reset (03h not 0Dh) and brought up again, hex, stops at FF
 //
 // Both RX5808 are tuned to F4 5800 MHz 0.5 s after start (same SPI pins as M6), so

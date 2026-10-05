@@ -38,7 +38,9 @@ module tb_tvp_ctrl;
     i2c_slave_model #(.ADDR(SPLIT ? 7'h5C : 7'h5D)) s1 (.scl(present1 ? scl : 1'b1), .sda(present1 ? sda1 : 1'b1),
                                                        .sda_low(s1_low_raw));
     initial begin
-        #1 s1.regs[8'h88] = 8'h06; s1.regs[8'h89] = 8'h00;   // decoder 1: H+V lock, 50 Hz
+        // decoder 0 keeps the model's default, healthy NTSC (000E); decoder 1 reads as healthy PAL
+        // in an odd field with the PAL switch set (306E)
+        #1 s1.regs[8'h88] = 8'h6E; s1.regs[8'h89] = 8'h30;
         if (SCENARIO == 2) s1.wr_protect = 1;
     end
 

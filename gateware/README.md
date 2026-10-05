@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (62 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (64 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
