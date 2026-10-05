@@ -144,6 +144,11 @@ PULL=DOWN gateware/build.sh m3_probe    # -> build/m3_probe_pulldown.fs
 
 Ett svagt internt pull-motstånd kan inte flytta ett stift som dekodern verkligen driver. En bit som följer pull-up/pull-down (syns i `hi` och `tog`) drivs alltså inte: glapp eller fel stift. Idén kommer från otanl/CVBS2HDMI.
 
+Två begränsningar:
+
+- Bit 7 får ingen pull. YOUT7 är dekoderns adresstrapp (I2CSEL), som läses vid reset. En pull-up mot modulens eget strappmotstånd kan flytta dekodern till adress BAh, och då visar proben `i2c NA` för en dekoder som är rätt kopplad. Bit 7 kontrolleras i stället med `tog` och `hi` i den vanliga bitströmmen.
+- Tre stift har motstånd på kortet som är starkare än FPGA:ns pull (Sipeeds scheman 3921 och 3923): stift 26 (YOUT2 A) har cirka 7 kΩ mot jord genom HDMI hot-plug-delaren, stift 79 (YOUT6 B) cirka 5 kΩ mot jord vid RGB-lysdioden, och stift 49 (YOUT4 B) 27 kΩ mot 3,3 V vid bakbelysningskretsen. En odriven bit där följer kortets motstånd, inte pull-testet.
+
 ## 5. Delade stift på Tang Nano 20K (rev 3923)
 
 Stiftplanen använder alla vanliga stift på stiftlisterna. Några av dem är också kopplade till annat på kortet (Sipeeds schema rev 1.3, enligt [openfpga-deck:s kortbeskrivning](https://github.com/Yash-Kamat/openfpga-deck/pull/11)):

@@ -21,7 +21,7 @@ if [ -f "$here/boards/$top.cst" ]; then cat "$here/boards/$top.cst" >> "$top.cst
 out_fs="$top.fs"
 if [ -n "${PULL:-}" ]; then
   case "$PULL" in UP|DOWN) ;; *) echo "PULL must be UP or DOWN" >&2; exit 1 ;; esac
-  sed -i -E "/IO_PORT \"tvp[ab]_d\[/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$top.cst"
+  sed -i -E "/IO_PORT \"tvp[ab]_d\[[0-6]\]/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$top.cst"   # not d[7]: YOUT7 is the I2C address strap
   out_fs="${top}_pull$(echo "$PULL" | tr 'A-Z' 'a-z').fs"
 fi
 "$bin/yowasp-yosys" -q -l "$top.yosys.log" \

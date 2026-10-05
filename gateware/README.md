@@ -20,7 +20,7 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (67 test, ca 8 min).
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (68 test, ca 8 min).
 
 ## Moduler (`rtl/`)
 
@@ -243,7 +243,7 @@ Utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i
 
 ## M3 — uppstartsprob
 
-`top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar och statusregister. Lysdioder: LED0 hjärtslag 1 Hz, LED1 SCLK från A, LED2 SCLK från B. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe`. Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
+`top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar och statusregister. Lysdioder: LED0 hjärtslag 1 Hz, LED1 SCLK från A, LED2 SCLK från B. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe` (bit 0–6; bit 7 är dekoderns adresstrapp och får ingen pull, `tools/test_build_pull.py`). Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
 
 ## Formella bevis
 
