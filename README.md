@@ -11,7 +11,7 @@ low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
 **Status:** everything passes simulation against independent Python models
-(284 tests) and builds to bitstreams with timing met. **Nothing has run on
+(288 tests) and builds to bitstreams with timing met. **Nothing has run on
 hardware yet.** Most of this code was written with heavy AI assistance
 (Claude) and reviewed by the project owner; see the hub's
 [REVIEW.md](https://github.com/LAP87/OpenVRX/blob/main/REVIEW.md) for what to
