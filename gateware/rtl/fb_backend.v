@@ -64,28 +64,24 @@ module fb_backend #(
     always @(posedge sd_clk  or posedge rst_async) if (rst_async) rst_s <= 3'b111; else rst_s <= {rst_s[1:0], 1'b0};
     always @(posedge pix_clk or posedge rst_async) if (rst_async) rst_p <= 3'b111; else rst_p <= {rst_p[1:0], 1'b0};
     wire srst = rst_s[2], prst = rst_p[2];
-    reg [1:0] ll_ss, ll_ps;
-    always @(posedge sd_clk)  ll_ss <= {ll_ss[0], ll_mode};
-    always @(posedge pix_clk) ll_ps <= {ll_ps[0], ll_mode};
-    wire ll_s = ll_ss[1], ll_p = ll_ps[1];
+    // crossings: cdc_sync.v, proven in formal/toggle_props.v and formal/level_props.v
+    wire ll_s, ll_p;
+    sync2 ll_sync_s (.clk(sd_clk),  .d(ll_mode), .q(ll_s));
+    sync2 ll_sync_p (.clk(pix_clk), .d(ll_mode), .q(ll_p));
 
     // ---- pixel -> SDRAM domain: line requests ----
     wire       p_fetch_toggle, p_fetch_first;
     wire [1:0] p_fetch_slot;
     wire [9:0] p_fetch_line;
-    reg  [2:0] ft;
-    reg        s_fetch_req, s_fetch_first;
-    reg  [1:0] s_fetch_slot;
-    reg  [9:0] s_fetch_line;
-    always @(posedge sd_clk) begin
-        ft <= {ft[1:0], p_fetch_toggle};
-        s_fetch_req <= 1'b0;
-        if (ft[2] != ft[1]) begin
-            s_fetch_req  <= !ll_s;
-            s_fetch_line <= p_fetch_line; s_fetch_slot <= p_fetch_slot; s_fetch_first <= p_fetch_first;
-        end
-        if (srst) s_fetch_req <= 1'b0;
-    end
+    wire        fetch_ev;
+    wire [12:0] fetch_q;
+    toggle_rx #(.W(13), .RESET_Q(0)) fetch_rx (.clk(sd_clk), .rst(1'b0), .tgl(p_fetch_toggle),
+        .din({p_fetch_first, p_fetch_slot, p_fetch_line}), .event_now(fetch_ev), .q(fetch_q));
+    wire       s_fetch_first = fetch_q[12];
+    wire [1:0] s_fetch_slot  = fetch_q[11:10];
+    wire [9:0] s_fetch_line  = fetch_q[9:0];
+    reg        s_fetch_req;
+    always @(posedge sd_clk) s_fetch_req <= fetch_ev && !ll_s && !srst;
 
     // ---- SDRAM domain ----
     wire        req_valid, req_write, req_ready, wdata_take, rdata_valid, init_done;
@@ -180,16 +176,17 @@ module fb_backend #(
         .rclk(pix_clk), .raddr(lb_raddr), .rdata(lb_rdata));
 
     // ---- low-latency trigger into the pixel domain ----
-    reg  [2:0] llt;
+    wire       ll_ev;
+    wire [9:0] ll_lines;
+    toggle_rx #(.W(10)) ll_rx (.clk(pix_clk), .rst(prst), .tgl(s_ll_trig), .din(s_ll_lines),
+        .event_now(ll_ev), .q(ll_lines));
     reg        ll_trig;
-    reg  [9:0] ll_lines;
     reg  [22:0] ll_since;                 // ~0.1 s at 74.25 MHz without a field -> no video
     always @(posedge pix_clk) begin
-        llt <= {llt[1:0], s_ll_trig};
-        ll_trig <= ll_p && (llt[2] != llt[1]);
-        if (llt[2] != llt[1]) begin ll_lines <= s_ll_lines; ll_since <= 0; end
+        ll_trig <= ll_p && ll_ev;
+        if (ll_ev) ll_since <= 0;
         else if (!ll_since[22]) ll_since <= ll_since + 1'b1;
-        if (prst) begin ll_trig <= 1'b0; ll_lines <= 10'd0; ll_since <= 23'h400000; end
+        if (prst) begin ll_trig <= 1'b0; ll_since <= 23'h400000; end
     end
     wire ll_alive = !ll_since[22];
     wire ll_pal   = ll_lines > 10'd270;
