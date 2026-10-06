@@ -150,7 +150,7 @@ def run_sim(a, b, work, params=None):
     p = dict(N_A=len(a), N_B=len(b), T_A=T_A, T_B=T_B, START_A=START_A, START_B=START_B)
     p.update(params or {})
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v',
-                                    'chan_capture.v', 'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'mixer2.v')]
+                                    'chan_capture.v', 'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'noise_stats.v', 'mixer2.v')]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_mixer',
                     *[f'-Ptb_mixer.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'tb_mixer.v')], cwd=work, env=env, check=True)
