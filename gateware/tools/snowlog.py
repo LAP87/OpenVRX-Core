@@ -6,14 +6,17 @@
     python gateware/tools/snowlog.py --summary emi.csv
 On Windows the port is COM5 and the like (set up with the `mode` command; not tried on a real port yet).
 
-Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb uaa ubb umm Bc ffff MOD o
-snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), % of mixer
-decisions from A / B / blended, band+channel, MHz, mode, and "!" once the mixer has
-dropped a line since reset (else "-"; older bitstreams send no such field). The Tang
-Nano 20K's BL616 shows up as two ttyUSB ports; the UART is usually the second one.
+Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD o
+snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), noise A, noise B
+(luma samples outside 16..235 in the last 1024 lines), % of mixer decisions from A / B /
+blended, band+channel, MHz, mode, and "!" once the mixer has dropped a line since reset
+(else "-"). Lines from older bitstreams (no noise values, possibly no "!"/"-") are read
+too; their noise columns stay empty. The Tang Nano 20K's BL616 shows up as two ttyUSB
+ports; the UART is usually the second one.
 
 Only compare runs with the same camera scene: the snow value also depends on the
-picture content. Change one thing at a time (HDMI on/off, channel, distance, shield).
+picture content. The noise value should not, but that is not shown on a real signal yet.
+Change one thing at a time (HDMI on/off, channel, distance, shield).
 """
 import argparse
 import csv
@@ -24,19 +27,27 @@ import sys
 import time
 from collections import defaultdict
 
-FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'use_a', 'use_b', 'use_mix', 'channel', 'mhz', 'mode', 'dropped']
+FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
+          'mhz', 'mode', 'dropped']
 
 
 def parse(line):
     """A log line as a dict, or None for anything else (also a line damaged on the way)."""
     p = line.split()
-    if len(p) not in (9, 10) or p[0] != 'S' or (len(p) == 10 and p[9] not in '-!'):
+    if len(p) == 12:                                   # current format, with the noise values
+        noise, p = p[3:5], p[:3] + p[5:]
+    elif len(p) in (9, 10):                            # older bitstreams: no noise values
+        noise = None
+    else:
+        return None
+    if p[0] != 'S' or (len(p) == 10 and p[9] not in '-!'):
         return None
     num = lambda s: None if s.startswith('-') else int(s)  # noqa: E731
     try:
-        return {'snow_a': num(p[1]), 'snow_b': num(p[2]), 'use_a': int(p[3]), 'use_b': int(p[4]),
-                'use_mix': int(p[5]), 'channel': p[6], 'mhz': int(p[7]), 'mode': p[8],
-                'dropped': int(len(p) == 10 and p[9] == '!')}
+        return {'snow_a': num(p[1]), 'snow_b': num(p[2]),
+                'noise_a': num(noise[0]) if noise else None, 'noise_b': num(noise[1]) if noise else None,
+                'use_a': int(p[3]), 'use_b': int(p[4]), 'use_mix': int(p[5]), 'channel': p[6], 'mhz': int(p[7]),
+                'mode': p[8], 'dropped': int(len(p) == 10 and p[9] == '!')}
     except ValueError:
         return None
 
@@ -76,8 +87,13 @@ def open_serial_windows(path):
 
 
 def log(args):
-    fd = open_serial(args.port)
     new = not os.path.exists(args.out)
+    if not new:
+        with open(args.out, newline='') as fh:
+            header = next(csv.reader(fh), None)
+        if header != FIELDS:
+            sys.exit(f'{args.out} has other columns ({",".join(header or [])}); write to a new file')
+    fd = open_serial(args.port)
     end = time.time() + args.seconds
     buf, n, bad = b'', 0, 0
     with open(args.out, 'a', newline='') as fh:
@@ -104,12 +120,13 @@ def summary(path):
     with open(path) as fh:
         for r in csv.DictReader(fh):
             rows[r['label']].append(r)
-    print(f'{"label":16s} {"n":>5s} {"snowA med":>10s} {"snowB med":>10s} {"A%":>5s} {"B%":>5s} {"mix%":>5s}  channels'
-          '   (! = the mixer dropped lines)')
+    print(f'{"label":16s} {"n":>5s} {"snowA med":>10s} {"snowB med":>10s} {"noiseA med":>10s} {"noiseB med":>10s} '
+          f'{"A%":>5s} {"B%":>5s} {"mix%":>5s}  channels   (! = the mixer dropped lines)')
     for label, rs in rows.items():
-        med = lambda k: statistics.median([int(r[k]) for r in rs if r[k] not in ('', 'None')] or [0])  # noqa: E731
+        med = lambda k: statistics.median([int(r[k]) for r in rs if r.get(k) not in (None, '', 'None')] or [0])  # noqa: E731
         chans = sorted({r['channel'] for r in rs})
         print(f'{label:16s} {len(rs):5d} {med("snow_a"):10.0f} {med("snow_b"):10.0f} '
+              f'{med("noise_a"):10.0f} {med("noise_b"):10.0f} '
               f'{med("use_a"):5.0f} {med("use_b"):5.0f} {med("use_mix"):5.0f}  {",".join(chans)}'
               + (' !' if any(r.get('dropped') == '1' for r in rs) else ''))
 

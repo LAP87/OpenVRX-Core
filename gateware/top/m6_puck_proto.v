@@ -74,6 +74,8 @@ module m6_puck_proto #(
     wire [19:0] snow_a, snow_b;
     wire [10:0] use_a, use_b, use_mix;
     wire        snow_ta, snow_tb, use_t;
+    wire [19:0] noise_a, noise_b;
+    wire        noise_ta, noise_tb;
     ssd1306_text #(.CLK_HZ(CLK_HZ)) oled (
                        .clk(clk), .rst(rst_c[2]), .scl_low(oled_scl_low), .sda_low(oled_sda_low),
                        .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(oled_hold), .other_active(tvp_active),
@@ -86,6 +88,7 @@ module m6_puck_proto #(
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
+                .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
@@ -114,7 +117,8 @@ module m6_puck_proto #(
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),
                 .dec_field(dec_field), .dec_line(dec_line),
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
-                .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t));
+                .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
+                .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb));
 
     wire [7:0] r, g, b;
     wire de, hs, vs, have_video, sdram_ready;
