@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (284 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (308 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -52,6 +52,16 @@ Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gatew
 - Simulera: `.venv/bin/python -m pytest -q gateware/sim gateware/model`.
 - Flasha (när kortet finns): openFPGALoader behövs, t.ex. `sudo pacman -S openfpgaloader` (Arch), sedan
   `openFPGALoader -b tangnano20k gateware/build/m0_testpattern.fs` (RAM) eller med `-f` (flash).
+
+Bygget läser en fryst kopia av RTL, inkluderingsfiler och stift-/klockvillkor. Bredvid bitströmmen ligger `<toppmodul>.build.json`: Git-revision och smutsig arbetskopia, SHA256 för byggindata och resultat, verktygsversioner, byggval och sista timingresultatet per klocka. Samma suffix används för bitström, loggar och manifest vid `PULL` och `SDRAM_PHASE`.
+
+Kontroll före flashning:
+
+```sh
+.venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m0_testpattern.build.json --root .
+```
+
+När verktygen ska starta flyttas föregående resultat till `build/previous/`. Vid syntes-, routing-, timing- eller packningsfel saknas bitströmmen på den vanliga flashningssökvägen; loggar och frysta byggindata finns i den arbetsmapp som felmeddelandet anger. Ogiltiga byggval avvisas innan tidigare resultat flyttas. Timingrapporten verifierar inte elektriska marginaler på kortet. `tools/test_build_artifacts.py` provar felvägarna med verktygsstubbar och kontrollerar att en tillfällig källkodsändring inte når kompilatorn; kontrollvarianten som läser levande filer ger annat kompilerat innehåll.
 
 ## M0 — första ljuset
 

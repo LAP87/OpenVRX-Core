@@ -10,8 +10,8 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status:** everything passes simulation against independent Python models
-(284 tests) and builds to bitstreams with timing met. **Nothing has run on
+**Status:** the regression suite has 308 tests, including simulations against
+Python models and build failure controls. Milestone tops build with timing met. **Nothing has run on
 hardware yet.** Most of this code was written with heavy AI assistance
 (Claude) and reviewed by the project owner; see the hub's
 [REVIEW.md](https://github.com/LAP87/OpenVRX/blob/main/REVIEW.md) for what to
@@ -27,7 +27,7 @@ attack first.
 | `gateware/sim/` | cocotb testbenches |
 | `gateware/model/` | Python reference models (BT.656, line mixer, field store and display mapping, channel table, font) and vector generator |
 | `gateware/vectors/` | Generated BT.656 test vectors with expected results |
-| `gateware/tools/` | `snowlog.py` (UART log to CSV), `tmds_fuses.py` (compares the HDMI pairs of built bitstreams), guard tests for how Apicula packs the I/O banks, and the test that runs the formal proofs |
+| `gateware/tools/` | `snowlog.py` (UART log to CSV), `build_manifest.py` (checks build hashes), `tmds_fuses.py` (compares built HDMI pairs), I/O bank guards and formal proof tests |
 | `mixer/` | Original floating-point mixer prototype (Python, OpenCV) |
 | `tests/latency/` | Glass-to-glass latency analysis from a high-speed video |
 
@@ -45,8 +45,14 @@ testbenches look there first).
 ```sh
 .venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools
 gateware/build.sh m6_puck_proto        # -> gateware/build/m6_puck_proto.fs
+.venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m6_puck_proto.build.json --root .
 openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 ```
+
+Each build uses a frozen source copy and writes a manifest with source and
+artifact hashes, tool versions, options and clock timing. A failed build leaves
+no bitstream at the normal output path; previous results stay in
+`gateware/build/previous/`. Diagnostic files stay in the failed run's directory.
 
 Detailed documentation (wiring per milestone, mixer rules, menu, buffered and
 low-latency mode, toolchain pitfalls) is in [gateware/README.md](gateware/README.md),

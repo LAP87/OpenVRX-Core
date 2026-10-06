@@ -29,7 +29,7 @@ def pulled(tmp, line, pull):
     """Ports whose constraint line the sed line changed; every changed line must now carry the pull."""
     before = (GW / 'boards' / 'tangnano20k.cst').read_text() + (GW / 'boards' / 'm3_probe.cst').read_text()
     (tmp / 'm3_probe.cst').write_text(before)
-    subprocess.run(['bash', '-c', f'PULL={pull}; top=m3_probe; {line}'], cwd=tmp, check=True)
+    subprocess.run(['bash', '-c', f'PULL={pull}; prefix=m3_probe; {line}'], cwd=tmp, check=True)
     after = (tmp / 'm3_probe.cst').read_text()
     assert len(before.splitlines()) == len(after.splitlines())
     changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]

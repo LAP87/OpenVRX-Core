@@ -5,26 +5,22 @@
 #   PULL=UP gateware/build.sh m3_probe      # weak pull-ups (or DOWN) on the decoder data pins: pull test
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
-# Output: gateware/build/<top>.fs (with PULL: <top>_pullup.fs / _pulldown.fs; with SDRAM_PHASE: <top>_phase12.fs)
+# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE).
+# Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
 # — flash with openFPGALoader -b tangnano20k <file>
 set -euo pipefail
 top="${1:?usage: build.sh <top module name>}"
 here="$(cd "$(dirname "$0")" && pwd)"
 bin="$here/../.venv/bin"
 out="$here/build"
-mkdir -p "$out"
-cd "$out"
-export TMPDIR="$out"     # yowasp (WASI) only sees the working directory; ABC needs a temp dir there
-
-srcs=("$here"/rtl/*.v "$here/top/$top.v")
-# board pins + optional per-design pins (boards/<top>.cst)
-cat "$here/boards/tangnano20k.cst" > "$top.cst"
-if [ -f "$here/boards/$top.cst" ]; then cat "$here/boards/$top.cst" >> "$top.cst"; fi
+manifest="$here/tools/build_manifest.py"
+[[ "$top" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [ -f "$here/top/$top.v" ] || {
+  echo "unknown top module: $top" >&2; exit 1;
+}
 out_fs="$top.fs"
 if [ -n "${PULL:-}" ]; then
   case "$PULL" in UP|DOWN) ;; *) echo "PULL must be UP or DOWN" >&2; exit 1 ;; esac
-  sed -i -E "/IO_PORT \"tvp[ab]_d\[[0-6]\]/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$top.cst"   # not d[7]: YOUT7 is the I2C address strap
-  out_fs="${top}_pull$(echo "$PULL" | tr 'A-Z' 'a-z').fs"
+  out_fs="${top}_pull${PULL,,}.fs"
 fi
 # optional Verilog define: another SDRAM clock phase than the default of clocks_sdram.v
 defs=""
@@ -33,24 +29,83 @@ if [ -n "${SDRAM_PHASE:-}" ]; then
   defs="-DSDRAM_PHASE=$SDRAM_PHASE"
   out_fs="${out_fs%.fs}_phase$SDRAM_PHASE.fs"
 fi
-"$bin/yowasp-yosys" -q -l "$top.yosys.log" \
-  -p "read_verilog -I$here/rtl $defs ${srcs[*]}; synth_gowin -top $top -family gw2a -json $top.synth.json; tee -o $top.stat.txt stat"
-# optional per-clock constraints (boards/<top>.sdc); --freq covers clocks it does not name
-sdc=()
-if [ -f "$here/boards/$top.sdc" ]; then cp "$here/boards/$top.sdc" "$top.sdc"; sdc=(--sdc "$top.sdc"); fi
 # Place-and-route seed. With some seeds nextpnr cannot put the board clock on the global clock network
 # ("Can't route the clocks.clk_27 net"); a top that has met that keeps a seed that works in boards/<top>.seed.
 seed="${SEED:-}"
-if [ -z "$seed" ] && [ -f "$here/boards/$top.seed" ]; then seed="$(tr -dc '0-9' < "$here/boards/$top.seed")"; fi
-"$bin/yowasp-nextpnr-himbaechel-gowin" --json "$top.synth.json" --write "$top.pnr.json" \
-  --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst="$out/$top.cst" \
-  --freq "${FREQ_MHZ:-75}" "${sdc[@]}" --seed "${seed:-0}" --log "$top.pnr.log" --quiet || {
-    grep -E "^ERROR" "$top.pnr.log" >&2
-    if grep -q "Can't route the .* net" "$top.pnr.log"; then echo "clock routing failed with seed ${seed:-0}: try SEED=<n> $0 $top" >&2; fi
+if [ -z "$seed" ] && [ -f "$here/boards/$top.seed" ]; then seed="$(tr -d '[:space:]' < "$here/boards/$top.seed")"; fi
+seed="${seed:-0}"
+[[ "$seed" =~ ^[0-9]+$ ]] || { echo "SEED must be a nonnegative integer" >&2; exit 1; }
+freq="${FREQ_MHZ:-75}"
+[[ "$freq" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v f="$freq" 'BEGIN {exit !(f > 0)}' || {
+  echo "FREQ_MHZ must be positive" >&2; exit 1;
+}
+for tool in python yowasp-yosys yowasp-nextpnr-himbaechel-gowin gowin_pack; do
+  [ -x "$bin/$tool" ] || { echo "missing tool: $bin/$tool" >&2; exit 1; }
+done
+
+mkdir -p "$out"
+exec 9>"$out/.build.lock"
+flock 9                         # do not publish two builds into the same directory at once
+prefix="${out_fs%.fs}"
+work="$(mktemp -d "$out/.${prefix}.XXXXXX")"
+attempt=0
+cleanup() {
+  rc=$?
+  trap - EXIT
+  if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -eq 1 ]; then rm -f "$out/$out_fs" "$out/$prefix.build.json"; fi
+    echo "build failed; diagnostics: $work" >&2
+  else
+    rm -rf "$work"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+"$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --copy-to "$work/source"
+source_here="$work/source/gateware"
+manifest="$source_here/tools/build_manifest.py"
+# Remove the old result from the flash path before starting, while keeping it recoverable.
+previous=""
+for ext in fs build.json cst sdc synth.json stat.txt yosys.log pnr.json pnr.log; do
+  if [ -e "$out/$prefix.$ext" ]; then
+    if [ -z "$previous" ]; then
+      mkdir -p "$out/previous"
+      previous="$(mktemp -d "$out/previous/${prefix}.XXXXXX")"
+    fi
+    mv "$out/$prefix.$ext" "$previous/"
+  fi
+done
+attempt=1
+cd "$work"
+export TMPDIR="$work"           # yowasp/ABC need a temp directory visible to WASI
+srcs=("$source_here"/rtl/*.v "$source_here/top/$top.v")
+cat "$source_here/boards/tangnano20k.cst" > "$prefix.cst"
+if [ -f "$source_here/boards/$top.cst" ]; then cat "$source_here/boards/$top.cst" >> "$prefix.cst"; fi
+if [ -n "${PULL:-}" ]; then
+  sed -i -E "/IO_PORT \"tvp[ab]_d\[[0-6]\]/ s/PULL_MODE=NONE/PULL_MODE=$PULL/" "$prefix.cst"   # not d[7]: YOUT7 is the I2C address strap
+fi
+"$bin/yowasp-yosys" -q -l "$prefix.yosys.log" \
+  -p "read_verilog -I$source_here/rtl $defs ${srcs[*]}; synth_gowin -top $top -family gw2a -json $prefix.synth.json; tee -o $prefix.stat.txt stat"
+sdc=()
+if [ -f "$source_here/boards/$top.sdc" ]; then cp "$source_here/boards/$top.sdc" "$prefix.sdc"; sdc=(--sdc "$prefix.sdc"); fi
+"$bin/yowasp-nextpnr-himbaechel-gowin" --json "$prefix.synth.json" --write "$prefix.pnr.json" \
+  --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst="$work/$prefix.cst" \
+  --freq "$freq" "${sdc[@]}" --seed "$seed" --log "$prefix.pnr.log" --quiet || {
+    grep -E "^ERROR" "$prefix.pnr.log" >&2 || true
+    if grep -q "Can't route the .* net" "$prefix.pnr.log"; then echo "clock routing failed with seed $seed: try SEED=<n> $0 $top" >&2; fi
     exit 1
   }
-"$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$top.pnr.json"
+"$bin/python" "$manifest" route "$prefix.pnr.log"
+"$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$prefix.pnr.json"
+"$bin/python" "$manifest" finish "$here/.." inputs.json "$prefix" "$prefix.build.json"
+# The bitstream is published last, after its logs, hashes and manifest are ready.
+for ext in cst sdc synth.json stat.txt yosys.log pnr.json pnr.log build.json; do
+  if [ -f "$prefix.$ext" ]; then mv "$prefix.$ext" "$out/"; fi
+done
+mv "$out_fs" "$out/"
 echo "built $out/$out_fs"
+echo "manifest $out/$prefix.build.json"
 # nextpnr prints the clock table twice: an estimate after placement, then the result after routing. Show the last.
-grep -E "(LUT4|DFF|OSER10|rPLL|BSRAM):[[:space:]]+[0-9]+/" "$top.pnr.log" || true
-awk '/Max frequency for clock/ { if (!in_table) table=""; table=table $0 ORS; in_table=1; next } { in_table=0 } END { printf "%s", table }' "$top.pnr.log"
+grep -E "(LUT4|DFF|OSER10|rPLL|BSRAM):[[:space:]]+[0-9]+/" "$out/$prefix.pnr.log" || true
+awk '/Max frequency for clock/ { if (!in_table) table=""; table=table $0 ORS; in_table=1; next } { in_table=0 } END { printf "%s", table }' "$out/$prefix.pnr.log"
