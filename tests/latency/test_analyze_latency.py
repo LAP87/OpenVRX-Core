@@ -82,6 +82,15 @@ def test_pairing_uses_lag_window_not_next_edge():
     assert [round(d, 1) for *_, d in pairs] == [24.0]
 
 
+def test_screen_edge_is_consumed_once():
+    # Both LED edges fall inside the lag window for screen 16. Old code counted
+    # that single screen blink twice (24 ms and 8 ms).
+    pairs = al.pair_delays([10., 14.], [16.], frame_ms=4., lag=6, tolerance=5)
+    assert pairs == [(10., 16., 24.)]
+    assert al.pair_delays([10, 14], [16], frame_ms=4, lag=6, tolerance=5) == pairs
+    assert al.pair_delays([10.], [9.], frame_ms=4., lag=0, tolerance=2) == []
+
+
 def test_delay_longer_than_blink_period_is_measured_correctly(tmp_path, capsys):
     # reproduces the review case: 500 ms real delay, blinks every ~250-450 ms
     video = tmp_path / 'slow.avi'

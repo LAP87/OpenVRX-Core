@@ -101,19 +101,23 @@ def estimate_lag(led, screen, max_lag):
 
 
 def pair_delays(led_edges, screen_edges, frame_ms, lag, tolerance):
-    """Pair each LED edge with the screen edge nearest to led + lag, within ± tolerance frames.
+    """Pair edges once each around led + lag, within ± tolerance frames.
 
     Pairing around the correlation lag (instead of "next screen edge") cannot
     confuse consecutive blinks when the delay is longer than the blink period.
     """
     pairs = []
-    se = np.asarray(screen_edges)
+    se = np.asarray(screen_edges, dtype=float)
+    used = np.zeros(len(se), dtype=bool)
     for t in led_edges:
         if not len(se):
             break
-        k = int(np.argmin(np.abs(se - (t + lag))))
-        if abs(se[k] - (t + lag)) <= tolerance:
+        distance = np.abs(se - (t + lag))
+        distance[used | (se < t)] = np.inf
+        k = int(np.argmin(distance))
+        if distance[k] <= tolerance:
             pairs.append((t, float(se[k]), (se[k] - t) * frame_ms))
+            used[k] = True
     return pairs
 
 

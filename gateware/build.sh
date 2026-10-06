@@ -51,4 +51,6 @@ if [ -z "$seed" ] && [ -f "$here/boards/$top.seed" ]; then seed="$(tr -dc '0-9' 
   }
 "$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$top.pnr.json"
 echo "built $out/$out_fs"
-grep -E "Max frequency for clock|Device utilisation|LUT4|DFF|OSER10|rPLL|BSRAM" "$top.pnr.log" | head -20 || true
+# nextpnr prints the clock table twice: an estimate after placement, then the result after routing. Show the last.
+grep -E "(LUT4|DFF|OSER10|rPLL|BSRAM):[[:space:]]+[0-9]+/" "$top.pnr.log" || true
+awk '/Max frequency for clock/ { if (!in_table) table=""; table=table $0 ORS; in_table=1; next } { in_table=0 } END { printf "%s", table }' "$top.pnr.log"
