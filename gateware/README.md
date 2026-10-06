@@ -17,11 +17,11 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 478 LUT 12 %, 0 BSRAM; 27 MHz-domän 238 MHz, dekoderklockorna 140 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
 | **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 385 LUT 40 %, 25 BSRAM; SDRAM 100 MHz, pixel 119 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka (14 scenarier, `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`) |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
-| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (11 990 LUT 57 %, 25 BSRAM; SDRAM 98 MHz, pixel 127 MHz, 27 MHz-domän 99 MHz mot 54; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
+| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (11 990 LUT 57 %, 25 BSRAM; SDRAM 98 MHz, pixel 127 MHz, 27 MHz-domän 99 MHz mot 54; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (284 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (290 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
 
 ## Moduler (`rtl/`)
 
@@ -42,6 +42,7 @@ Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gatew
 | `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer → ordström. Reglerna står under M4 nedan | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln för parade rader mot Python-prototypen och fem egenskaper på slumpade radföljder i `model/test_line_mixer_ref.py` |
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
 | `rx5808_spi.v`, `rx5808_tune.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI) och när kanalen skrivs (0,5 s efter start, vid kanalbyte, varannan sekund utan lås), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_rx5808_tune.py`: skrivtidpunkterna mot en modell av regeln; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
+| `noise_stats.v` | Brusmått per mottagare: lumasampel utanför 16–235 per rad och summerat över 1 024 rader, räknat på orden ur kanalens FIFO i mixerns klockdomän. Mixern läser det inte; det går till M6-loggen | `sim/test_noise_stats.py`: varje rad och varje fönster mot `luma_outside()` i `model/bt656.py` på vektorn `ntsc_spikes` (injicerade spikar, gränsvärdena 15/16/235/236, krominans utanför intervallet); negativa kontroller: intervallet 15–236 och räkning av krominans ger andra tal |
 | `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/04h/0Dh/03h; 04h maskar SECAM ur autoswitchen), pollning av status 88h/89h, och ny uppstart av en dekoder som har återställts (03h läses tillbaka vid varje pollning, räknare per dekoder) | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder, återställd dekoder, dekoder som inte tar emot skrivningar, SDA kortsluten låg, dekoder som kommer in sent) |
 
 ## Verktyg (allt i projektmappen, inget på systemet)
@@ -266,17 +267,21 @@ Används för egenstörningsmätningen i `design/PUCK_2027_KONCEPT.md` i OpenVRX
 
 **OSD i videon** (`osd_overlay.v`): samma fyra rader som OLED:n, 3× förstorade, vita på en halvmörk platta längst ned i 4:3-fönstret (x 176, y 576 i 720p). Syns i 5 s efter varje knapptryck och hela tiden på mätarsidan, så att menyn går att läsa i bilden, utan att se på pucken. Pixelexakt testad (`sim/test_osd.py`).
 
-**Mätlogg över USB** (`uart_tx.v`, PIN69 → kortets BL616 USB-UART, 115200 8N1): en rad per mätfönster (≈ 15/s):
+**Mätlogg över USB** (`uart_tx.v`, PIN69 → kortets BL616 USB-UART, 115200 8N1): en rad per mätfönster (≈ 15/s), 57 byte med CR LF:
 ```
-S 012345 002345 040 034 025 F4 5800 MIX -
+S 012345 002345 000017 000000 040 034 025 F4 5800 MIX -
 ```
-snö A, snö B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, läge, och sist `!` om mixern sedan start har tappat en rad för att dess radplatser var fulla (annars `-`). På datorn (Windows: `COM5` i stället för `/dev/ttyUSB1`; den vägen är inte provad mot en riktig port):
+snö A, snö B, brus A, brus B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, läge, och sist `!` om mixern sedan start har tappat en rad för att dess radplatser var fulla (annars `-`). Äldre bitströmmar skickar raden utan brusvärdena (43 byte); `snowlog.py` läser båda.
+
+**Brus** (`noise_stats.v`) är antalet lumasampel utanför 16–235 under de senaste 1 024 raderna från mottagaren (en rad har 720). BT.656 tillåter 1–254, men en dekoder håller bildens luma inom 16–235, så det som hamnar utanför är brusklick och störd synk. Till skillnad från snövärdet beror det inte på hur detaljrik bilden är. Det räknas på orden som lämnar kanalens FIFO, innan mixern väljer, och mixern använder det inte. Simulerat mot `luma_outside()` i `model/bt656.py` (`sim/test_noise_stats.py`); om det skiljer brus från bildinnehåll på riktig signal är inte provat. Det visas bara i loggen, inte på OLED:n. M6-siffrorna i tabellen ovan är från bygget före brusmåttet.
+
+På datorn (Windows: `COM5` i stället för `/dev/ttyUSB1`; den vägen är inte provad mot en riktig port):
 ```
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_pa --seconds 30 --out emi.csv
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_av --seconds 30 --out emi.csv
 python gateware/tools/snowlog.py --summary emi.csv
 ```
-(BL616 visar två serieportar; UART:en är oftast den andra.) Sammanfattningen visar medianen per etikett, alltså en mätserie per testvillkor.
+(BL616 visar två serieportar; UART:en är oftast den andra.) Sammanfattningen visar medianen per etikett, alltså en mätserie per testvillkor. CSV:n har kolumnerna `time, label, snow_a, snow_b, noise_a, noise_b, use_a, use_b, use_mix, channel, mhz, mode, dropped`; `snowlog.py` vägrar lägga till rader i en fil med andra kolumner.
 
 Ingen RSSI ännu: RX5808:s RSSI är analog och Tang Nano 20K saknar ADC. Det kommer med en extern I2C-ADC eller med GW5A-25:s inbyggda ADC.
 
