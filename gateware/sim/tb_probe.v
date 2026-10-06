@@ -14,11 +14,14 @@ module tb_probe;
     always #18.45 if ($time < STOP_B) cb = ~cb;
 
     reg [7:0] mem [0:1048575];
-    integer n_bytes, ia = 0, ib = 0;
-    reg [1023:0] vec;
+    integer n_bytes, ia = 0, ib = 0, vec_fd;
+    string vec;
     reg [7:0] da = 8'h80, db = 8'h80;
     initial begin
-        if (!$value$plusargs("vec=%s", vec)) begin $display("RESULT novec"); $finish; end
+        if (!$value$plusargs("vec=%s", vec)) $fatal(1, "missing +vec=<file>");
+        vec_fd = $fopen(vec, "r");
+        if (vec_fd == 0) $fatal(1, "cannot open vector: %0s", vec);
+        $fclose(vec_fd);
         $readmemh(vec, mem);
         n_bytes = 0;
         while (mem[n_bytes] !== 8'bx && n_bytes < 1048575) n_bytes = n_bytes + 1;

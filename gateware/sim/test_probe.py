@@ -12,6 +12,7 @@ gone (the rule itself is tested in test_rx5808_tune.py).
 Run: .venv/bin/python -m pytest -q gateware/sim/test_probe.py"""
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -54,7 +55,13 @@ def run():
                     *map(str, src), str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_probe.v')],
                    cwd=work, env=env, check=True)
     vec = GW / 'vectors' / 'ntsc_clean_frame.hex'
-    return subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={vec}'], cwd=work, env=env, check=True,
+    # Exercise paths longer than the old Verilog reg[1023:0] (128 bytes).
+    # A worktree or CI checkout can exceed that limit even without this fixture.
+    fixture = work / ('long_vector_path_' * 5) / vec.name
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(vec, fixture)
+    assert len(str(fixture).encode()) > 128
+    return subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={fixture}'], cwd=work, env=env, check=True,
                           capture_output=True, text=True).stdout
 
 

@@ -13,6 +13,7 @@ Run: .venv/bin/python -m pytest -q gateware/sim/test_top_pins.py"""
 import functools
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,7 +52,11 @@ def run(top, locks=True):
                     *[f'-Ptb_top_pins.{k}={v}' for k, v in params.items()], *map(str, src)],
                    cwd=work, env=env, check=True)
     vec = GW / 'vectors' / 'ntsc_clean_frame.hex'
-    log = subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={vec}', f'+pll_stop_ns={VIDEO_STOP}'], cwd=work, env=env,
+    fixture = work / ('long_vector_path_' * 5) / vec.name
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(vec, fixture)
+    assert len(str(fixture).encode()) > 128
+    log = subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={fixture}', f'+pll_stop_ns={VIDEO_STOP}'], cwd=work, env=env,
                          check=True, capture_output=True, text=True).stdout
     assert 'RESULT done spi_idle_bad=0' in log, log[-2000:]         # SPI CLK low, DATA high between frames
     return dict(cfg,
