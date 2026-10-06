@@ -106,6 +106,10 @@ def replay(sd, src, **model_kw):
             assert st.first_word(v[0], v[1]) == v[4], f'next buffer {v[4]}, model {st.cur}'
             content = {k: c for k, c in content.items() if k[0] != st.cur}
             field_of[st.cur] = None
+        elif ev == 'J':
+            assert st.end_joined(v[0], v[1]) == v[2], f'dropped joined field {v}, model {st.cur}'
+            content = {k: c for k, c in content.items() if k[0] != st.cur}
+            field_of[st.cur] = None
         elif ev == 'P':
             assert st.lines == v[0], f'line count {v[0]}, model {st.lines}'
         elif ev == 'W':
@@ -501,20 +505,24 @@ def test_mode_switch_buf_low_buf():
       * BUF -> LOW: the first frame after the switch has no video (have_video = 0: the writer
         joined the field in the middle, so the frame trigger has not come yet); every later
         frame is one whole field, one field after the other, the newest;
-      * LOW -> BUF: the first two frames are what the store has (missing lines replaced by an
-        earlier line); from the third frame on every line is the right one and every frame is
-        one field, at most two fields old.
-    Known and recorded, not a pass of its own: of the first two frames after LOW -> BUF at most
-    one is older than that (README: stale first frame). The LOW frame in progress at the switch
-    ends with what the line buffer holds (not checked)."""
+      * LOW -> BUF: the frames before the first publish after the switch have no video
+        (fb_display.v forgets the fields published before low-latency mode); no frame shows a
+        field older than two fields; from the third frame on every line is the right one and
+        every frame is one field. The LOW frame in progress at the switch ends with what the
+        line buffer holds (not checked).
+    Negative control for the no-stale-frame check: without the `if (ll) have_pub <= 0` line in
+    fb_display.v, or with the joined field published as before (fb_sdram.v `joined`), the first
+    frame after LOW -> BUF shows the field that sat in buffer 0 before (7 fields old in this
+    run); run once by hand with each of the two taken out."""
     run = switch_run('tb_fb_ms')            # the same run as the reference of the negative control (cached)
     bad = check_switch(run)
     assert not any(bad.values()), bad
     sw1, sw2 = run['sw']
     assert not next(f for f in run['frames'] if f['pc'] > sw1)['video'], 'the first frame after BUF -> LOW had video'
-    first_two = [f for f in run['frames'] if f['pc'] > sw2][:2]
-    old = [f for f in first_two if min(f['shown'][y][0] for y in range(V_ACTIVE)) < cur_field(f['pc']) - 2]
-    assert len(old) <= 1, 'more than one stale frame after LOW -> BUF'
+    after = [f for f in run['frames'] if f['pc'] > sw2]
+    assert not after[0]['video'], 'the first frame after LOW -> BUF had video before a field was published'
+    old = [f for f in after if f['video'] and min(f['shown'][y][0] for y in range(V_ACTIVE)) < cur_field(f['pc']) - 2]
+    assert not old, 'stale frame after LOW -> BUF: ' + str([f['pc'] for f in old])
 
 
 def test_mode_switch_checks_catch_faults():

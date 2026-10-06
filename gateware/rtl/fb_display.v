@@ -70,6 +70,11 @@ module fb_display #(
             latest_lines <= pub_lines; have_pub <= 1'b1; since_pub <= 0;
         end else if (since_pub != {24{1'b1}}) since_pub <= since_pub + 1'b1;
         if (since_pub[23]) have_pub <= 1'b0;
+        // In low-latency mode the field store is held in reset and its buffers go stale. Forget the
+        // fields published before, so that the first frames after a switch back to the buffer are
+        // blank until a field has been published again (the same as the first frame after a switch
+        // to low latency), instead of showing whatever buffer 0 held before.
+        if (ll) have_pub <= 1'b0;
         if (rst) begin have_pub <= 1'b0; since_pub <= 0; latest_lines <= 0; end
     end
 

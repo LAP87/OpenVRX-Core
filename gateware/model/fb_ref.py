@@ -6,6 +6,7 @@ line an output line shows).
 The store is modelled at the level of its decisions. Feed it the events of the
 SDRAM clock domain in the order they happen:
     first_word(f, line)   the first word of a field is at the head of the FIFO
+    end_joined(f, line)   the field joined after reset ends and is dropped
     word(f, line, idx, t) a word is taken (t in cycles)
     line_stored(line)     the last group of a line has been written
     frame_start()         first line request of an output frame
@@ -64,6 +65,7 @@ class FieldStore:
         self.ref_line = ref_line
         self.cur = 0
         self.have_field = False
+        self.joined = False                       # the current field is the one joined after reset
         self.cur_f = 0
         self.last_line = self.max_line = 0
         self.done_any, self.max_done = False, 0
@@ -86,9 +88,9 @@ class FieldStore:
     def first_word(self, f, line):
         """The first word of a field is seen (before it is taken). Returns the buffer it will be written to."""
         if not self.have_field:
-            self.have_field, self.cur_f = True, f
+            self.have_field, self.cur_f, self.joined = True, f, True
         else:
-            assert self.is_new_field(f, line)
+            assert self.is_new_field(f, line) and not self.joined
             n = (self.max_line + 1) & 1023
             if self.n1 is None:
                 self.lines = n
@@ -103,6 +105,17 @@ class FieldStore:
             self.cur, self.cur_f = nxt, f
             self.last_line = self.max_line = 0
             self.done_any, self.max_done = False, 0
+        self.ok[self.cur] = set()
+        self.phase.new_field()
+        return self.cur
+
+    def end_joined(self, f, line):
+        """The field the writer joined ends: it is dropped, not published; the writer moves to a free buffer."""
+        assert self.joined and self.is_new_field(f, line)
+        nxt = next(b for b in range(N_BUF) if b not in (self.cur, self.show, self.prev))
+        self.joined, self.cur, self.cur_f = False, nxt, f
+        self.last_line = self.max_line = 0
+        self.done_any, self.max_done = False, 0
         self.ok[self.cur] = set()
         self.phase.new_field()
         return self.cur

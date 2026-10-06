@@ -7,7 +7,10 @@
 // flips or the line number goes backwards) the buffer is published and the
 // next one is chosen: never the one just published, the one on screen or its
 // fallback. The `ok` bits of the new buffer are cleared before words are taken
-// again (128 cycles).
+// again (128 cycles). The field the writer joined after reset (its first word
+// was not the field's first line) is not published: its missing lines have no
+// fallback field, and the buffer holds whatever was there before. The writer
+// moves to a free buffer and starts over with the next field.
 //
 // Frame start (the display's first line request of a frame) decides what the
 // frame shows:
@@ -91,6 +94,7 @@ module fb_sdram #(
     // writer state
     reg [1:0]  cur_buf;
     reg        cur_field, have_field;
+    reg        joined;                   // the current field is the one the writer joined after reset
     reg [9:0]  last_line, max_line;
     reg [31:0] grp [0:7];
     reg [7:0]  grp_mask;
@@ -146,11 +150,13 @@ module fb_sdram #(
     wire breaks_grp = (grp_mask != 0) && (e_line != grp_line || e_idx[8:3] != grp_base);
     wire look_in    = resetn && !sweeping && !grp_ready && !in_empty && !in_pop;   // the writer looks at the FIFO head
     wire first_word = look_in && !have_field;
-    wire publish    = look_in && have_field && new_field && grp_mask == 0;
+    wire field_end  = look_in && have_field && new_field && grp_mask == 0;
+    wire publish    = field_end && !joined;
+    wire discard    = field_end && joined;
     wire take       = look_in && have_field && !new_field && !breaks_grp;
     wire stored     = resetn && writing && wdata_take && wr_k == 3'd7 && grp_base == 6'd44;   // a line is complete
     wire ph_low;
-    field_phase phase (.clk(clk), .rst(!resetn), .nf(first_word || publish),
+    field_phase phase (.clk(clk), .rst(!resetn), .nf(first_word || field_end),
                        .at_ref(take && e_line == REF_LINE && e_idx == 9'd0),
                        .low(ph_low), .low_now(), .il(), .early(), .dly());
     wire [9:0] n_now = max_line + 10'd1;
@@ -179,7 +185,7 @@ module fb_sdram #(
         lb_we     <= 1'b0;
         ok_we     <= 1'b0;
         if (!resetn) begin
-            cur_buf <= 0; have_field <= 0; grp_mask <= 0; grp_ready <= 0; writing <= 0;
+            cur_buf <= 0; have_field <= 0; joined <= 0; grp_mask <= 0; grp_ready <= 0; writing <= 0;
             last_line <= 0; max_line <= 0; fetching <= 0; rd_inflight <= 0; req_valid <= 0;
             done_any <= 0; max_done <= 0; sweeping <= 0; mk_have <= 0;
             latest <= 0; older <= 0; latest_v <= 0; older_v <= 0; low_of <= 0; n1_v <= 0; pub_lines <= 0;
@@ -193,11 +199,15 @@ module fb_sdram #(
                 if (&sweep_i) sweeping <= 1'b0;
             end else if (look_in) begin
                 if (first_word) begin
-                    have_field <= 1'b1; cur_field <= e_field;
+                    have_field <= 1'b1; cur_field <= e_field; joined <= 1'b1;
                     sweeping <= 1'b1; sweep_i <= 0;
                 end else if (new_field || breaks_grp) begin
                     if (grp_mask != 0) grp_ready <= 1'b1;          // flush the open group first
-                    else begin                                     // publish, move on
+                    else if (joined) begin                         // the joined field: drop it, move on
+                        joined <= 1'b0; cur_field <= e_field; cur_buf <= nxt;
+                        last_line <= 0; max_line <= 0; done_any <= 1'b0; max_done <= 0;
+                        sweeping <= 1'b1; sweep_i <= 0; mk_have <= 1'b0;
+                    end else begin                                 // publish, move on
                         pub_valid <= 1'b1;
                         if (!n1_v) pub_lines <= n_now;
                         else if (n_gap <= 10'd2) pub_lines <= (n_now < n1) ? n_now : n1;

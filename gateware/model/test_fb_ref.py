@@ -98,7 +98,10 @@ def store_run(seed, **kw):
                 continue
             t += rng.randrange(3000, 5000)
             if not st.have_field or st.is_new_field(k & 1, n):
-                st.first_word(k & 1, n)
+                if st.have_field and st.joined:
+                    st.end_joined(k & 1, n)          # the field joined first is dropped, not published
+                else:
+                    st.first_word(k & 1, n)
                 assert not shown_once or st.cur not in in_use, 'the writer was given a buffer that is on screen'
             st.word(k & 1, n, 0, t)
             if rng.random() < 0.2:

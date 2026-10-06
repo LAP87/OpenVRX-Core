@@ -102,6 +102,7 @@ module tb_fb;
         look3_d <= dut.fb.look == 2'd3;
         if (look3_d) $fwrite(fs, "S %0d %0d\n", dut.fb.f_buf, dut.fb.f_src);
         if (dut.fb.first_word) $fwrite(fs, "A %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.cur_buf);
+        if (dut.fb.discard) $fwrite(fs, "J %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.nxt);
         if (dut.fb.publish)
             $fwrite(fs, "N %0d %0d %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.cur_buf, dut.fb.n_now, dut.fb.nxt);
         if (dut.fb.pub_valid) $fwrite(fs, "P %0d\n", dut.fb.pub_lines);
