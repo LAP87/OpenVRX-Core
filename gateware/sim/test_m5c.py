@@ -57,6 +57,9 @@ async def m5c_bt1120_frame(dut):
         while True:
             await RisingEdge(dut.sd_clk)
             await ReadOnly()
+            if fb.discard.value:                 # the field the writer joined (field 0) is dropped, buffer kept free
+                written += 1
+                holds[int(fb.nxt.value)] = written
             if fb.publish.value:
                 pubs.append((int(fb.cur_buf.value), written))
                 written += 1

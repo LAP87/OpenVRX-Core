@@ -514,7 +514,7 @@ def test_mode_switch_buf_low_buf():
     fb_display.v, or with the joined field published as before (fb_sdram.v `joined`), the first
     frame after LOW -> BUF shows the field that sat in buffer 0 before (7 fields old in this
     run); run once by hand with each of the two taken out."""
-    run = switch_run('tb_fb_ms')            # the same run as the reference of the negative control (cached)
+    run = switch_run('tb_fb_ms')
     bad = check_switch(run)
     assert not any(bad.values()), bad
     sw1, sw2 = run['sw']
@@ -531,7 +531,7 @@ def test_mode_switch_checks_catch_faults():
     of field 9, shown in LOW, carries the wrong tag (picture). Fault 2: r is X for one pixel
     clock in a LOW frame (X/Z). Fault 3: an extra vsync pulse in a BUF frame after the second
     switch (frame length). The run without faults passes the same checks."""
-    clean = switch_run('tb_fb_ms')
+    clean = switch_run('tb_fb_ms_ref')     # own build directory: the two tests may run in separate processes at once
     assert not any(check_switch(clean).values())
     fr = clean['frames']
     pc_low = fr[next(i for i, f in enumerate(fr) if f['pc'] > clean['sw'][0]) + 3]['pc'] + 10 * H_TOTAL + 500
