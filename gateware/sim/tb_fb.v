@@ -10,7 +10,13 @@
 `default_nettype none
 module tb_fb;
     parameter N_LINES = 1;                    // entries in lines.hex
-    parameter LL = 0;                         // 1: low-latency mode
+    parameter LL = 0;                         // 1: low-latency mode (the mode at reset)
+    parameter SW1 = 0, SW2 = 0;               // SDRAM clock cycle at which ll_mode goes to 1 / to 0 (0 = never)
+    parameter FAULT = 0;                      // bit mask of test-bench side faults for negative controls (test_fb.py):
+                                              // bit 0: one source word of field FAULT_TAG carries a wrong tag
+                                              // bit 1: the observed r has an X for one pixel clock at pixel clock FAULT_PC
+                                              // bit 2: the observed vsync gets a spurious extra pulse at pixel clock FAULT_PC2
+    parameter FAULT_TAG = 0, FAULT_PC = 0, FAULT_PC2 = 0;
     parameter V_TOTAL = 40, V_ACTIVE = 36, V_FP = 1, V_SYNC = 1;
     parameter BOB = 1, RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270, LL_EQ = 1;
     parameter JUMP_AFTER = 3, HOLD = 32;
@@ -23,6 +29,15 @@ module tb_fb;
     // SDRAM clock as from clocks_sdram.v: sd_clk shifted 225 degrees
     reg sd_clk_shift = 0;
     always @(sd_clk) sd_clk_shift <= #(0.625 * T_S) sd_clk;
+
+    // ll_mode as the DUT sees it: set at reset, switched by cycle count (SDRAM clock, so it is
+    // synchronous to the SDRAM domain and asynchronous to the pixel domain, as the real one)
+    reg ll_mode_r = (LL != 0);
+    wire ll_any = ll_mode_r;
+    always @(posedge sd_clk) begin
+        if (SW1 != 0 && cyc == SW1) ll_mode_r <= 1'b1;
+        if (SW2 != 0 && cyc == SW2) ll_mode_r <= 1'b0;
+    end
 
     // ---- source: lines.hex entries {start cycle[31:0], field, line[9:0], tag[11:0]}
     reg [54:0] src [0:N_LINES-1];
@@ -38,7 +53,9 @@ module tb_fb;
         if (f_pop && !f_empty) rp <= rp + 1'b1;
         if (!rst && sdram_ready) begin
             if (wi < 360) begin
-                fifo[wp] <= {e[22], e[21:12], wi[8:0], 1'b0, e[11:0], e[21:12], wi[8:0]};
+                fifo[wp] <= {e[22], e[21:12], wi[8:0], 1'b0,
+                             (FAULT[0] && e[11:0] == FAULT_TAG && e[21:12] == 3 && wi == 52) ? e[11:0] ^ 12'h40 : e[11:0],
+                             e[21:12], wi[8:0]};
                 wp <= wp + 1'b1;
                 wi <= wi + 1;
                 if (wi == 359) li <= li + 1;
@@ -57,7 +74,7 @@ module tb_fb;
     fb_backend #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .SDRAM_FREQ(5_000_000),
                  .BOB(BOB), .RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT),
                  .LL_EQ(LL_EQ), .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD)) dut (
-        .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(LL != 0),
+        .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(ll_mode_r),
         .f_empty(f_empty), .f_data(f_data), .f_pop(f_pop),
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe), .SDRAM_nRAS(nras),
         .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
@@ -75,7 +92,7 @@ module tb_fb;
     reg        look3_d = 0, w_have = 0, w_f, trig_d = 0;
     reg [9:0]  w_line;
     reg        rd_bad;
-    always @(posedge sd_clk) if (!rst && (dut.fb.resetn || LL != 0)) begin
+    always @(posedge sd_clk) if (!rst && (dut.fb.resetn || ll_any)) begin
         if (dut.fb.first)
             $fwrite(fs, "D %0d %0d %0d %0d %0d %0d\n", dut.fb.s_dec, dut.fb.p_dec, dut.fb.pok_dec,
                     dut.fb.d_cur ? dut.fb.ph_low : dut.fb.low_of[dut.fb.latest], dut.fb.rt_now, cyc);
@@ -120,6 +137,24 @@ module tb_fb;
             // the word read for source pixel 104/105 (x = 300 is window pixel 140, source pixel 105)
             if (dut.x == 302 && dut.y < V_ACTIVE)
                 $fwrite(fp, "X %0d %0d %0d %0d\n", dut.y, dut.lb_rdata[30:19], dut.lb_rdata[18:9], dut.lb_rdata[8:0]);
+        end
+    end
+
+    // mode switches, vsync starts and lines with an X/Z on an output (observed outputs; the
+    // faults 2 and 3 corrupt only what is observed here, never the DUT)
+    reg        vs_d = 0, bad_line = 0;
+    reg  [1:0] m_d = 0;
+    wire       vs_obs = (FAULT[2] && pc >= FAULT_PC2 && pc < FAULT_PC2 + 40) ? 1'b1 : vsync;
+    wire [7:0] r_obs  = (FAULT[1] && pc == FAULT_PC) ? 8'bx : r;
+    always @(posedge pix_clk) if (!rst) begin
+        m_d <= {m_d[0], ll_mode_r};
+        if (m_d[1] != m_d[0]) $fwrite(fp, "M %0d %0d\n", pc, m_d[0]);
+        vs_d <= vs_obs;
+        if (vs_obs && !vs_d) $fwrite(fp, "S %0d\n", pc);
+        if ((^{r_obs, g, b, de, hsync, vs_obs}) === 1'bx) bad_line <= 1'b1;
+        if (dut.x == 0) begin
+            if (bad_line) $fwrite(fp, "Z %0d\n", pc);
+            bad_line <= 1'b0;
         end
     end
 

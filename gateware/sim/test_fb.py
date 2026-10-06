@@ -15,6 +15,7 @@ source fields have 12 lines and a blanking gap, with periods chosen like
 
 Run:  .venv/bin/python -m pytest -q gateware/sim/test_fb.py
 """
+import functools
 import os
 import shutil
 import subprocess
@@ -415,3 +416,120 @@ def test_low_latency_source_moves():
     ll_picture(frames, 5, 7)
     ll_picture(frames, 12, 15)
     assert sum(1 for n in lens if n < 47) <= 1 and max(lens) <= 47 + 8, lens
+
+
+# ---- switching between the modes while video runs
+MAX_WAIT = 8                                # genlock_timing.v default: a frame waits at most this many extra lines
+VT = LL_V['V_TOTAL']                        # the switching runs use the low-latency frame of 48 lines
+MS_FIELDS = 19
+FIELD_CYC = 13.5 * P_LL
+MS_SW1 = round(T0 + 5.55 * FIELD_CYC)       # BUF -> LOW in field 5 (tag 6): the writer joins it after its line 2
+MS_SW2 = round(T0 + 11.85 * FIELD_CYC)      # LOW -> BUF in field 11 (tag 12), late in the field
+MS_SRC = source(MS_FIELDS, period=P_LL, lines=9, vbi=4, interlaced=True)
+
+
+@functools.lru_cache(maxsize=None)
+def switch_run(name, **params):
+    """Run MS_SRC with ll_mode 0, then 1 at MS_SW1 and 0 at MS_SW2 (tb_fb.v drives it).
+    Returns what the output did: the switch times, complete output frames, vsync starts,
+    frame starts and the lines with an X/Z (all in pixel clocks)."""
+    sd, pix = run_sim(name, MS_SRC, SW1=MS_SW1, SW2=MS_SW2, **LL_V, **params)
+    mode = [(v[0], v[1]) for ev, *v in pix if ev == 'M']
+    assert [m for _, m in mode] == [1, 0], f'mode switches seen at the output: {mode}'
+    return dict(sw=[pc for pc, _ in mode], frames=pix_frames(pix), vs=[v[0] for ev, *v in pix if ev == 'S'],
+                bad=[v[0] for ev, *v in pix if ev == 'Z'], starts=[v[0] for ev, *v in pix if ev == 'V'])
+
+
+def cur_field(pc):
+    """Tag of the newest field whose line 1 was complete at pixel clock pc."""
+    cyc = pc * T_P / T_S
+    return max(tag for t, _, line, tag in MS_SRC if line == 1 and t + 360 <= cyc)
+
+
+def check_switch(run):
+    """The checks of the mode switch. Returns {check: [what is wrong]}, all empty if the switch is clean."""
+    sw1, sw2 = run['sw']
+    frames, starts, vs = run['frames'], run['starts'], run['vs']
+    bad = dict(xz=[], length=[], picture=[], settle=[])
+    # 1. No X/Z on r, g, b, de, hsync, vsync, except at the very start and from a switch to
+    #    the end of the first output frame after it (the line ring holds nothing yet).
+    allowed = [(0, starts[2])] + [(sw, [s for s in starts if s > sw][1]) for sw in (sw1, sw2)]
+    bad['xz'] = [round(pc / H_TOTAL, 1) for pc in run['bad'] if not any(a <= pc < b for a, b in allowed)]
+    # 2. Frame length from vsync to vsync: VT - 1 .. VT + MAX_WAIT (genlock_timing.v, formal/genlock_props.v);
+    #    VT - 1 .. VT + 1 (750/751-line frames) from the third frame after a switch on.
+    for a, b in zip(vs, vs[1:]):
+        n = round((b - a) / H_TOTAL)
+        settling = any(sw < b <= sw + 3 * (VT + MAX_WAIT) * H_TOTAL for sw in (sw1, sw2))
+        if not (VT - 1 <= n <= (VT + MAX_WAIT if settling else VT + 1)):
+            bad['length'].append((round(b / H_TOTAL), n))
+    # 3. The picture. Every output line is the source line the model gives, a whole line (word 52).
+    lines_ok = lambda f: all(f['shown'][y][1:] == (fb.src_line(y, f['lines'], V_ACTIVE, f['low']), 52) for y in range(V_ACTIVE))
+    tags = lambda f: sorted({f['shown'][y][0] for y in range(V_ACTIVE)})
+    pre = [f for f in frames if f['pc'] + VT * H_TOTAL <= sw1 and f['video']][1:]
+    low = [f for f in frames if f['pc'] > sw1 and f['pc'] + VT * H_TOTAL <= sw2][1:]    # not the first frame after the switch
+    buf = [f for f in frames if f['pc'] > sw2]
+    for name, group in (('BUF before', pre), ('LOW', low)):
+        for f in group:                                         # one field per frame
+            if not (f['video'] and lines_ok(f) and len(tags(f)) == 1):
+                bad['picture'].append((name, round(f['pc'] / H_TOTAL), tags(f)))
+    lt = [tags(f)[0] for f in low]
+    if len(lt) < 4 or lt != list(range(lt[0], lt[0] + len(lt))):
+        bad['picture'].append(('LOW fields are not consecutive', lt))
+    for f in low:                                               # and the newest one
+        if not 0 <= cur_field(f['pc']) - tags(f)[0] <= 1:
+            bad['picture'].append(('LOW shows an old field', round(f['pc'] / H_TOTAL), tags(f), cur_field(f['pc'])))
+    # Back in BUF: the first two frames are what the store has (lines not yet written are replaced
+    # by an earlier line, fb_sdram.v): word 52 of a line that is the one wanted or above it. From the
+    # third frame on every line is the right one, one field per frame, no more than two fields old.
+    for i, f in enumerate(buf):
+        if i < 2:
+            if f['video'] and not all(f['shown'][y][2] == 52 and 0 <= f['shown'][y][1] <= f['src'][y] for y in range(V_ACTIVE)):
+                bad['picture'].append(('BUF after: line below the one wanted', round(f['pc'] / H_TOTAL)))
+        elif not (f['video'] and lines_ok(f) and len(tags(f)) == 1 and tags(f)[0] >= cur_field(f['pc']) - 2):
+            bad['settle'].append(('BUF after', i, round(f['pc'] / H_TOTAL), tags(f), cur_field(f['pc'])))
+    if len(buf) < 6:
+        bad['settle'].append(('too few frames after the switch back', len(buf)))
+    return bad
+
+
+def test_mode_switch_buf_low_buf():
+    """ll_mode goes to 1 in the middle of a field and back to 0 late in a field while the source
+    runs (interlaced, 59.94 Hz-like; 5 fields BUF, 6 LOW, 7 BUF). Checked at the output:
+      * no X/Z on r, g, b, de, hsync, vsync after the first frame following each switch;
+      * every frame, vsync to vsync, has VT - 1 .. VT + 8 lines (genlock_timing.v), and
+        VT - 1 .. VT + 1 from the third frame after a switch; no SDRAM protocol error (run_sim);
+      * BUF -> LOW: the first frame after the switch has no video (have_video = 0: the writer
+        joined the field in the middle, so the frame trigger has not come yet); every later
+        frame is one whole field, one field after the other, the newest;
+      * LOW -> BUF: the first two frames are what the store has (missing lines replaced by an
+        earlier line); from the third frame on every line is the right one and every frame is
+        one field, at most two fields old.
+    Known and recorded, not a pass of its own: of the first two frames after LOW -> BUF at most
+    one is older than that (README: stale first frame). The LOW frame in progress at the switch
+    ends with what the line buffer holds (not checked)."""
+    run = switch_run('tb_fb_ms')            # the same run as the reference of the negative control (cached)
+    bad = check_switch(run)
+    assert not any(bad.values()), bad
+    sw1, sw2 = run['sw']
+    assert not next(f for f in run['frames'] if f['pc'] > sw1)['video'], 'the first frame after BUF -> LOW had video'
+    first_two = [f for f in run['frames'] if f['pc'] > sw2][:2]
+    old = [f for f in first_two if min(f['shown'][y][0] for y in range(V_ACTIVE)) < cur_field(f['pc']) - 2]
+    assert len(old) <= 1, 'more than one stale frame after LOW -> BUF'
+
+
+def test_mode_switch_checks_catch_faults():
+    """Negative control for test_mode_switch_buf_low_buf: the same run with faults made in the
+    test bench (not the RTL), each of which the matching check must catch. Fault 1: one word
+    of field 9, shown in LOW, carries the wrong tag (picture). Fault 2: r is X for one pixel
+    clock in a LOW frame (X/Z). Fault 3: an extra vsync pulse in a BUF frame after the second
+    switch (frame length). The run without faults passes the same checks."""
+    clean = switch_run('tb_fb_ms')
+    assert not any(check_switch(clean).values())
+    fr = clean['frames']
+    pc_low = fr[next(i for i, f in enumerate(fr) if f['pc'] > clean['sw'][0]) + 3]['pc'] + 10 * H_TOTAL + 500
+    pc_buf = fr[-3]['pc'] + 5 * H_TOTAL
+    run = switch_run('tb_fb_ms_fault', FAULT=7, FAULT_TAG=9, FAULT_PC=pc_low, FAULT_PC2=pc_buf)
+    bad = check_switch(run)
+    assert bad['xz'], 'an X on r was not seen'
+    assert bad['length'], 'an extra vsync pulse was not seen'
+    assert [b for b in bad['picture'] if b[0] == 'LOW'], f"a wrong tag was not seen: {bad['picture']}"
