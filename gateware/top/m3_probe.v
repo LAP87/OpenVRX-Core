@@ -12,10 +12,13 @@
 //   xe    timing codes with uncorrectable bit errors
 //   i2c   OK / NA (no acknowledge) / -- (start-up not finished); st = status registers 89h,88h (---- = none yet)
 //
-// Both RX5808 are tuned to F4 5800 MHz at start (same SPI pins as M6), so
-// receiver video reaches the decoders without the menu.
-// LEDs (active low): 0 heartbeat, 1 SCLK A, 2 SCLK B, 3 both decoders answer on I2C; led[4]/led[5] carry the
-// RX5808 SPI DATA/SEL (pins 19/20 = J6-17/J6-16; pins 52/53 are configuration and HDMI DDC pins).
+// Both RX5808 are tuned to F4 5800 MHz 0.5 s after start and again every 2 s
+// while no decoder is locked (rx_tune.v), so receiver video reaches the
+// decoders without the menu, also when the receivers are powered later.
+// LEDs (active low): 0 heartbeat, 1 SCLK A, 2 SCLK B. The other three LED pins are signals (header J6):
+// led[3] pin 18 = J6-18 = decoder RESETB (not pin 25: that is in the HDMI bank and is the HDMI CEC line),
+// led[4] pin 19 = J6-17 = RX5808 SPI DATA, led[5] pin 20 = J6-16 = RX5808 SEL
+// (not pins 52/53: those are SSPI configuration pins and the HDMI DDC lines).
 // Pull test (find open joints without a meter): PULL=UP or PULL=DOWN gateware/build.sh m3_probe
 // adds weak pulls on the data pins; a bit that follows the pull is not driven by the decoder.
 `default_nettype none
@@ -23,7 +26,8 @@ module m3_probe #(
     parameter CLK_HZ = 27_000_000,
     parameter WINDOW = 27_000_000,        // board clocks per report
     parameter BAUD = 115_200,
-    parameter POWER_MS = 20
+    parameter POWER_MS = 20,
+    parameter START_MS = 500              // first RX5808 write
 ) (
     input  wire        clk,
     input  wire        tvpa_sclk,
@@ -33,12 +37,11 @@ module m3_probe #(
     inout  wire        i2c_scl,
     inout  wire        i2c_sda_a,
     inout  wire        i2c_sda_b,
-    output wire        tvp_resetb,
-    output wire        rx_spi_clk,        // RX5808 DATA and SEL leave on led[4] (J6-17), led[5] (J6-16), as in M6
+    output wire        rx_spi_clk,        // RX5808 DATA and SEL leave on led[4] (J6-17), led[5] (J6-16), as in M6;
+                                          // RESETB on led[3] (J6-18)
     output wire [5:0]  led,
     output wire        uart_txd
 );
-    `include "vtx_channels.vh"
 
     // ---- resets
     reg [3:0] por = 4'hF;
@@ -49,7 +52,7 @@ module m3_probe #(
     always @(posedge tvpb_sclk or posedge rst) if (rst) rst_b <= 3'b111; else rst_b <= {rst_b[1:0], 1'b0};
 
     // ---- decoders: I2C bring-up and status (as in M4)
-    wire scl_low, init_done;
+    wire scl_low, init_done, tvp_resetb;
     wire [1:0] sda_low, dev_err, st_valid;
     wire [15:0] st0, st1;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C), .POWER_MS(POWER_MS)) ctrl (
@@ -61,20 +64,12 @@ module m3_probe #(
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
 
-    // ---- RX5808: F4 5800 MHz once after reset
-    wire [41:0] f4 = vtx_channel(6'd27);
-    reg  spi_go, spi_done;
-    wire spi_busy;
-    wire [1:0] sel_n;
-    wire       spi_data;
-    rx5808_spi #(.HALF(CLK_HZ / 1_000_000 > 0 ? CLK_HZ / 1_000_000 : 1)) spi (
-        .clk(clk), .rst(rst), .start(spi_go), .sel_mask(2'b11), .addr(4'h1), .data(f4[19:0]),
-        .busy(spi_busy), .spi_clk(rx_spi_clk), .spi_data(spi_data), .spi_sel_n(sel_n));
-    always @(posedge clk) begin
-        spi_go <= 1'b0;
-        if (!rst && !spi_done && !spi_busy && !spi_go) begin spi_go <= 1'b1; spi_done <= 1'b1; end
-        if (rst) spi_done <= 1'b0;
-    end
+    // ---- RX5808: F4 5800 MHz, START_MS after reset and again while no decoder is locked
+    wire spi_data, spi_sel_n;
+    wire [7:0] rx_writes;
+    rx_tune #(.CLK_HZ(CLK_HZ), .START_MS(START_MS)) tune (
+        .clk(clk), .rst(rst), .locked(st_valid != 2'b00 && ((st0[1] && st0[2]) || (st1[1] && st1[2]))),
+        .spi_clk(rx_spi_clk), .spi_data(spi_data), .spi_sel_n(spi_sel_n), .writes(rx_writes));
 
     // ---- probes
     reg  snap_t;
@@ -202,6 +197,6 @@ module m3_probe #(
     // ---- LEDs
     reg [24:0] beat;
     always @(posedge clk) beat <= beat + 1'b1;
-    assign led = {sel_n[0], spi_data, ~{init_done && dev_err == 2'b00, fresh[1], fresh[0], beat[24]}};
+    assign led = {spi_sel_n, spi_data, tvp_resetb, ~{fresh[1], fresh[0], beat[24]}};
 endmodule
 `default_nettype wire

@@ -24,7 +24,7 @@ def run():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
     work = HERE / 'build' / 'tb_probe'
     work.mkdir(parents=True, exist_ok=True)
-    src = [GW / 'rtl' / n for n in ('bt656_rx.v', 'bt656_probe.v', 'i2c_master.v', 'tvp_ctrl.v', 'rx5808_spi.v',
+    src = [GW / 'rtl' / n for n in ('bt656_rx.v', 'bt656_probe.v', 'i2c_master.v', 'tvp_ctrl.v', 'rx5808_spi.v', 'rx_tune.v',
                                     'bin2bcd.v', 'uart_tx.v')] + [GW / 'top' / 'm3_probe.v']
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), '-o', 'sim.vvp', '-s', 'tb_probe',
                     *map(str, src), str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_probe.v')],
@@ -62,11 +62,11 @@ def test_probe_reports():
         assert body.startswith('tog FF hi FF len 1716-1716 ln '), l
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
-        assert i2c == 'OK' and st == '402E', l
+        assert i2c == 'OK' and st == '000E', l
     for l in b[1:3]:
         _, _, body, i2c, st = fields(l)
         assert body.startswith('tog DB hi DF len --------- ln 00000 fld 000 xe 0000'), l
-        assert i2c == 'OK' and st == '402E', l
+        assert i2c == 'OK' and st == '000E', l
 
     # B's clock has stopped: the line says so instead of repeating stale values
     _, f_dead, body, _, _ = fields(b[3])

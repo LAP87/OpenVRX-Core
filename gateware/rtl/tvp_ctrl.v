@@ -7,8 +7,8 @@
 //   03h = 0Dh  YCbCr, sync and SCLK outputs enabled (default 01h keeps the bus off)
 //   0Dh = 47h  8-bit 4:2:2 ITU-R BT.656, embedded syncs
 // then every POLL_MS read 88h (status 1: bit1 H lock, bit2 V lock, bit3
-// colour lock, bit4 lost lock since last read, bit5 60 Hz) and 89h (status 2:
-// bit6 weak signal). I2C addresses 5Ch (B8h) and 5Dh (BAh), set by YOUT7's
+// colour lock, bit4 lost lock since last read, bit5 field rate 0 = 60 Hz /
+// 1 = 50 Hz) and 89h (status 2: bit6 weak signal). SLES209E 3.21.49-50. I2C addresses 5Ch (B8h) and 5Dh (BAh), set by YOUT7's
 // pull at reset. Two identical modules have the same address (the pull is fixed
 // on the module): then use SPLIT_SDA = 1, one SDA line per decoder and a shared
 // SCL; DEV1 may then equal DEV0.

@@ -30,6 +30,7 @@ module puck_ui #(
     parameter [2:0] DEF_CH = 3'd3,        // 4th channel -> F4 5800 MHz (legal in Sweden)
     parameter DEF_LOW_LAT = 0,            // start in the low-latency mode
     parameter OSD_MS = 5000,              // OSD visible this long after a button press
+    parameter REWRITE_MS = 2000,          // rewrite the channel this often while no decoder is locked
     parameter BAUD = 115200
 ) (
     input  wire        clk,
@@ -102,6 +103,8 @@ module puck_ui #(
     wire [19:0] synth = chan[19:0];
 
     reg  spi_start, pending;
+    reg  [1:0] sv, sp0, sp1, sl0, sl1;    // status synchronisers (below)
+    reg  [$clog2(REWRITE_MS+1)-1:0] rw_ms;
     wire spi_busy;
     rx5808_spi #(.HALF(CLK_HZ / 1_000_000 > 0 ? CLK_HZ / 1_000_000 : 1)) spi (
         .clk(clk), .rst(rst), .start(spi_start), .sel_mask(2'b11), .addr(4'h1), .data(synth),
@@ -118,8 +121,11 @@ module puck_ui #(
             default: page <= ~page;
         endcase
         if (pending && !spi_busy && !spi_start && !ev_next) begin spi_start <= 1'b1; pending <= 1'b0; end
+        // receivers powered after the FPGA, or browned out, start on 5865 MHz: rewrite while nothing is locked
+        if (tick) rw_ms <= (rw_ms == REWRITE_MS - 1) ? 0 : rw_ms + 1'b1;
+        if (tick && rw_ms == REWRITE_MS - 1 && !sl0[1] && !sl1[1]) pending <= 1'b1;
         if (rst) begin
-            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0; pending <= 1'b1;
+            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0; pending <= 1'b1; rw_ms <= 0;
             low_lat <= DEF_LOW_LAT[0];
             spi_start <= 1'b0;
         end
@@ -127,7 +133,6 @@ module puck_ui #(
     assign force_bad = {mode == 2'd1, mode == 2'd2};
 
     // ---- status synchronisers
-    reg [1:0] sv, sp0, sp1, sl0, sl1;
     always @(posedge clk) begin
         sv <= {sv[0], view_b};
         sp0 <= {sp0[0], dec_present[0]}; sp1 <= {sp1[0], dec_present[1]};

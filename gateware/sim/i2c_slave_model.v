@@ -22,7 +22,7 @@ module i2c_slave_model #(
         page = 0;
         regs[8'h03] = 8'h01; regs[8'h0D] = 8'h00;
         regs[8'h80] = 8'h51; regs[8'h81] = 8'h50;          // device ID 5150
-        regs[8'h88] = 8'h2E; regs[8'h89] = 8'h40;          // locked, 60 Hz / weak signal
+        regs[8'h88] = 8'h0E; regs[8'h89] = 8'h00;          // H, V and colour locked, 60 Hz; no weak signal (SLES209E 3.21.49-50)
         sda_low = 0; active = 0; writes = 0;
     end
 

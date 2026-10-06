@@ -25,7 +25,7 @@ module tb_tvp_ctrl;
     i2c_slave_model #(.ADDR(7'h5C)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
     i2c_slave_model #(.ADDR(SPLIT ? 7'h5C : 7'h5D)) s1 (.scl(scl), .sda(sda1), .sda_low(s1_low_raw));
     initial begin
-        s1.regs[8'h88] = 8'h06; s1.regs[8'h89] = 8'h00;   // decoder 1: H+V lock, 50 Hz
+        s1.regs[8'h88] = 8'h06; s1.regs[8'h89] = 8'h00;   // decoder 1: H+V lock, no colour lock, 60 Hz
     end
 
     reg saw_reset_low = 0;

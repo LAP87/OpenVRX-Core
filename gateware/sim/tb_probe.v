@@ -36,9 +36,9 @@ module tb_probe;
     i2c_slave_model #(.ADDR(7'h5C)) tvp_b (.scl(scl), .sda(sda_b), .sda_low(s_b));
 
     // CLK_HZ only scales the millisecond timers (I2C start-up, UART) so the run stays short
-    m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1)) dut (
+    m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1), .START_MS(10)) dut (
         .clk(clk), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
-        .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
+        .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b),
         .rx_spi_clk(spi_clk), .led(led), .uart_txd(txd));
 
     // UART receiver, DIV clocks per bit

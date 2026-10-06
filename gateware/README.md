@@ -13,12 +13,12 @@ Plan: `../design/GATEWARE_PLAN.md`. Licens: CERN-OHL-S-2.0, se `LICENSE` i repot
 | M1s — samma, separata synksignaler (HSYNC/VSYNC/AVID) | `top/m1s_moneagle_view_sync.v` | ✔ `build/m1s_moneagle_view_sync.fs` (1 052 LUT, 44/46 BSRAM) | Båda polariteter och bytefaser |
 | **M2 — full upplösning i färg via SDRAM, trippelbuffert, ingen rivning** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 154 LUT 15 %, 16 BSRAM, 2 PLL; SDRAM 127 MHz mot 64,8) | Tre klockdomäner + SDRAM-modell: SDRAM-innehåll och RGB-pixlar mot modell |
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 387 LUT 16 %, 4 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
-| **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | se bygget nedan | Rapportraderna mot en frisk och en felkopplad dekoder (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (7 026 LUT 33 %, 24 BSRAM; SDRAM 90 MHz) | Mixern bitexakt mot facit (två klockor, snö, trasig synk, död kanal, olåst dekoder); I2C mot slavmodeller |
+| **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 356 LUT 11 %) | Rapportraderna mot en frisk och en felkopplad dekoder (`sim/test_probe.py`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (7 072 LUT 34 %, 24 BSRAM; SDRAM 85 MHz mot 64,8, pixel 110 MHz mot 74,25) | Mixern bitexakt mot facit (två klockor, snö, trasig synk, död kanal, olåst dekoder); I2C mot slavmodeller |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | ✔ `build/m5c_moneagle_1080p.fs` (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
-| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (10 341 LUT 49 %, 24 BSRAM; SDRAM 84 MHz, 27 MHz-domän 81 MHz, pixel 131 MHz) | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); M4-delen som ovan |
+| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (10 324 LUT 49 %, 24 BSRAM; SDRAM 88 MHz mot 64,8, pixel 107 MHz mot 74,25) | Meny, SPI, OLED, snö-mätare, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
+**Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning (M3/M4/M6 2026-10-05, med riktiga klockkrav per klocka i `boards/<top>.sdc`; övriga 2026-10-04). BSRAM-ökningen (+12) är låglatenslägets ringbuffert på 16 rader.
 
 Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (52 test, ca 8 min).
 
@@ -132,12 +132,13 @@ Pixel 74,25 MHz: fb_display: senaste färdiga halvbild per bild, Bresenham radma
 | YOUT0–7 | PIN27, 28, 26, 29, 30, 31, 73, 74 (J6-8, 9, 11, 12, 13, 14, 1, 2) | PIN76, 42, 41, 48, 49, 86, 79, 72 (J5-3, 5, 6, 10, 12, 13, 14, 17) |
 | I2C SDA | PIN85 (J6-4) | PIN51 (J5-9) |
 | I2C SCL | PIN75 (J6-3), gemensam | |
-| RESETB | PIN25 (J6-10), gemensam — den röda modulen saknar reset-stift: löd en tråd till TVP stift 8 | |
+| RESETB | PIN18 (J6-18, lysdiod 3), gemensam — den röda modulen saknar reset-stift: löd en tråd till TVP stift 8. Inte PIN25 (HDMI-banken, CEC) | |
+| RX5808 SPI | CLK PIN71 (J5-18), DATA PIN19 (J6-17), SEL PIN20 (J6-16), som M3/M6 | |
 | Jord | J6-20 / J5-2, J5-15 | |
 
 Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per dekoder. Kontrollera modulernas matning och IO-nivå (3,3 V) innan inkoppling. Stift 52–56 (konfigurationsstift) används inte.
 
-Lysdioder (tänd = sant): LED0 hjärtslag, LED1 rader från A, LED2 rader från B, LED3 mixern föredrar B, LED4 halvbild visas, LED5 båda dekodrarna svarar på I2C och rapporterar H- och V-lås.
+Lysdioder (tänd = sant): LED0 hjärtslag, LED1 dekoder A låst, LED2 dekoder B låst. Lysdiodsstiften 3–5 bär RESETB och RX5808 DATA/SEL. M4 håller båda mottagarna på F4 5800 MHz (`rtl/rx_tune.v`). Koppling och felsökning: [BRINGUP.md](BRINGUP.md).
 
 ## M5 alt. C — Moneagle → 1080p60 → LT8618SX → XR-glasögon
 
@@ -163,7 +164,7 @@ Var hittar man en LT8618SX att koppla till? Ingen färdig breakout är verifiera
 
 ## M6 — puckprototyp steg 1 (M4 + meny, RX5808, OLED)
 
-> Koppling, uppstartsordning och felsökning steg för steg: [BRINGUP.md](BRINGUP.md). Ändrat 2026-10-04: SPI DATA och SEL flyttade från PIN53/52 (konfigurationsstift och HDMI-DDC på kortet) till lysdiodsstiften 19/20. Lysdioderna i M6 är nu fyra: LED0 hjärtslag, LED1 rader från A, LED2 rader från B, LED3 båda dekodrarna låsta.
+> Koppling, uppstartsordning och felsökning steg för steg: [BRINGUP.md](BRINGUP.md). Ändrat 2026-10-04: SPI DATA och SEL flyttade från PIN53/52 (konfigurationsstift och HDMI-DDC på kortet) till lysdiodsstiften 19/20. Ändrat 2026-10-05: RESETB flyttad från PIN25 (HDMI-banken, CEC; Core issue #6) till lysdiodsstift 18 (J6-18). Lysdioderna i M3/M4/M6 är nu tre: LED0 hjärtslag, LED1/LED2 dekoder A/B låst (M3: SCLK A/B).
 
 `top/m6_puck_proto.v` → `build/m6_puck_proto.fs`. Allt från M4 plus:
 
