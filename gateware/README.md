@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna är från nextpnr efter routning. M1, M2, M2s, M2a, M3, M4 och M6 är byggda 2026-10-05 ur den här commiten, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); M0 och M1s är från 2026-10-04. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (274 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
+Hela simuleringssviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (284 test, ca 16 min). Testen i `gateware/sim` är oberoende av varandra och kan köras parallellt, ett pytest-anrop per test: ca 5 min med tio åt gången.
 
 ## Moduler (`rtl/`)
 
@@ -308,6 +308,8 @@ Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning 
 **Varför `LOW` fungerar:** utgången skannar varje källrad långsammare (3 × 22,2 µs) än ingången levererar den (63,6 µs). Läsaren kan alltså aldrig gå om skrivaren, och skrivaren ligger högst cirka 13 rader före (därav 16 platser). Upplösningen är densamma i båda lägena, så läget går att byta medan det kör. Vid byte mellan PAL och NTSC i `LOW` ändras bildfrekvensen, och skärmen synkar om (1–2 s).
 
 **Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751), och vad en skärm gör med den korta bilden vid omlåsning är inte känt. CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. XR-glasögon tar enligt navets anteckningar inte emot 720p alls; `LOW` är för skärmar och goggles som gör det. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell) och `sim/test_fb.py` (lika långa bilder, fält utan rad 1, falsk fältstart, källa som flyttar sig).
+
+**Lägesbyte under drift är simulerat** (`sim/test_fb.py::test_mode_switch_buf_low_buf`, `ll_mode` 1 mitt i ett fält och 0 igen sent i ett fält, fem fält `BUF`, sex `LOW`, sju `BUF`). Kontrollerat vid utgången: inget X/Z på r, g, b, de, hsync, vsync efter första bilden efter varje byte; varje bild är mellan V_TOTAL−1 och V_TOTAL+8 rader från vsync till vsync (47–49 från tredje bilden efter ett byte); inga SDRAM-protokollfel. `BUF` → `LOW`: första bilden efter bytet har ingen video (skrivaren går med mitt i fältet, så bildtriggern har inte kommit), sedan visar varje bild ett helt fält, i följd, det senaste. `LOW` → `BUF`: de två första bilderna är det lagret har (rader som saknas ersätts av en rad ovanför), från tredje bilden är varje rad rätt och varje bild ett fält. Känt, inte åtgärdat: första hela bilden efter `LOW` → `BUF` kan visa rad 0 ur bufferten som låg där före `LOW` (ett gammalt fält, här 7 fält gammalt) och upprepa den över de rader skrivaren inte hunnit till, eftersom `fb_sdram.v` återställs till `cur_buf = 0` utan att rensa sina lagrade-rad-bitar. En bild (17 ms), därefter rätt. Negativ kontroll: `test_mode_switch_checks_catch_faults` (fel som läggs in i testbänken, inte i RTL: fel tagg på ett ord, X på r, extra vsync-puls) måste fångas var och en av sin kontroll.
 
 ## Apicula-fällor (från otanl/CVBS2HDMI, kontrollerade 2026-10-04)
 
