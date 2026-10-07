@@ -320,6 +320,56 @@ def test_missing_lines_are_covered():
         assert (got[2], got[3], got[4]) == ((6, 2), (6, 2), (6, 4))
 
 
+def mixer_left_out(bad_both, n_fields=9):
+    """{(field, line)} that the mixer model leaves out of n_fields fields of two receivers in step
+    whose lines `bad_both` are bad on both (model/line_mixer_ref.py, lines bad on both receivers)."""
+    import bt656
+    import line_mixer_ref as mix
+    m, ev = mix.Mixer(keep_words=False), []
+    for k in range(n_fields):
+        for n in range(LINES):
+            t = (k * (LINES + VBI) + VBI + n) * 63_556.0
+            for ch in (0, 1):
+                ev.append((t + 3000.0 * ch, ch, bt656.LineRecord(k & 1, n, 1716, 1440, 0, int((k, n) in bad_both), 1000)))
+    for t, ch, rec in ev:
+        m.push(ch, rec, t)
+    m.finish()
+    left, fld, prev = set(), 0, -1
+    for (_, _, _, line), o in zip(m.trace, m.omitted):
+        fld += line < prev
+        prev = line
+        if o:
+            left.add((fld, line))
+    return left
+
+
+def test_lines_the_mixer_leaves_out_are_covered():
+    """Lines bad on both receivers that the mixer leaves out: field 4 line 5, the first line of
+    field 5, the last line of field 6, and of field 7's lines 3 and 4 the first. The store
+    replaces a line with the line above, a first line with the field before's line. No black
+    line (that is only for a first line without a field before, review 2026-10-06 F3) and no gap.
+    A left-out last line is not replaced: for the store that field is one line shorter, and the
+    picture is scaled from LINES - 1 lines while it is one of the two latest fields."""
+    drop = mixer_left_out({(4, 5), (5, 0), (6, LINES - 1), (7, 3), (7, 4)})
+    assert drop == {(4, 5), (5, 0), (6, LINES - 1), (7, 3)}, drop
+    src = source(9, drop=drop)
+    sd, pix = run_sim('tb_fb_left_out', src, RT_EN=0)
+    frames, st = replay(sd, src, RT_EN=0)
+    assert check_display(frames, pix_frames(pix)) > 5 * V_ACTIVE
+    assert not unknown_in_video(pix)
+    last = [fr for fr in frames if fr.tag == 7]
+    assert last and all(fr.lines == LINES - 1 and max(fr.want) == LINES - 2 and fr.got == [(7, n) for n in fr.want]
+                        for fr in last), [(fr.lines, fr.got) for fr in last]
+    want = {5: {4: (5, 4), 5: (5, 4), 6: (5, 6)}, 6: {0: (5, 0), 1: (6, 1)}, 8: {3: (8, 2), 4: (8, 4)}}
+    for tag, lines in want.items():
+        hit = [fr for fr in frames if fr.tag == tag]
+        assert hit, f'field {tag - 1} (tag {tag}) was never shown'
+        for fr in hit:
+            got = dict(zip(fr.want, fr.got))
+            assert {n: got[n] for n in lines} == lines, f'tag {tag}: {got}'
+            assert 'blank' not in fr.got, f'tag {tag}: a black line'
+
+
 def test_short_field_does_not_change_the_scale():
     """Field 4 ends after 5 lines. The display keeps scaling by 12 lines (it used to
     stretch 5 lines over the screen); the rest of that frame comes from the field before."""

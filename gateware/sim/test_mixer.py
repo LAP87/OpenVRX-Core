@@ -69,16 +69,18 @@ class Stream:
         self.rng = random.Random(seed)
         self.data = bytearray()
 
-    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None, late=0):
-        """late: SAV comes that many bytes late, EAV on time (the active part is shorter)."""
+    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None, late=0, extra=0):
+        """late: SAV comes that many bytes late, EAV on time (the active part is shorter).
+        extra: that many more blanking bytes before SAV (the line is too long, its active part whole)."""
         act = bt656.blanking(1440) if v else active_bytes(fld, n, amp, self.rng)
-        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8 + late)
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8 + late + extra)
         self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 0) if sav is None else sav]) + act[:1440 - late]
 
     def field(self, fld, f=None, amp=None, hooks=None, lines=LINES, vbi=VBI):
         """Field `fld` (picture content; F bit fld & 1 unless given). amp: snow amplitude for all
         lines or {line: amplitude}; other lines get a random one. hooks: {line index in the
-        field, blanking lines first: ('eav' | 'sav', byte to send as that timing code)}."""
+        field, blanking lines first: ('eav' | 'sav', byte to send as that timing code) or
+        ('late' | 'extra', bytes), see line()}."""
         f = fld & 1 if f is None else f
         for i in range(vbi + lines):
             v = 1 if i < vbi else 0
@@ -221,6 +223,16 @@ def complete(trace, n_fields, lines=LINES):
         assert ls == list(range(lines)), f'output field {k}: lines {ls}'
 
 
+def source_fields(trace):
+    """Source field of each decision: line numbers restart in each field."""
+    out, fld, prev = [], 0, -1
+    for _, _, _, line in trace:
+        fld += line < prev
+        prev = line
+        out.append(fld)
+    return out
+
+
 def cur_changes(m):
     return sum(1 for x, y in zip(m.curs, m.curs[1:]) if x != y)
 
@@ -259,15 +271,19 @@ def test_random_damage():
         b.field(fld, hooks=hb[fld])
     a, b = a.done(), b.done()
     m = check('tb_mixer_damage', a, b)
-    have = [set(), set(), set()]
+    have, left_out = [set(), set(), set()], [set(), set(), set()]
     for data in (a, b):
         fld, prev = 0, -1
         for r in bt656.Receiver().feed(data):
             fld += r.line_in_field <= prev
             prev = r.line_in_field
             have[fld].add(r.line_in_field)
+    for (_, _, _, line), fld, o in zip(m.trace, source_fields(m.trace), m.omitted):
+        if o:
+            left_out[fld].add(line)
+    assert 20 in left_out[2], 'line 20 of field 2 is bad on both receivers (their line 19 was lost)'
     got = out_fields(m.trace)
-    assert [sorted(ls) for _, ls in got] == [sorted(h) for h in have], 'every line that a receiver had is shown'
+    assert [sorted(ls) for _, ls in got] == [sorted(h - o) for h, o in zip(have, left_out)],         'every line that a receiver had is shown, unless it is left out as bad on both'
     assert all(ls == sorted(ls) for _, ls in got) and 19 not in got[2][1]
 
 
@@ -301,6 +317,62 @@ def test_incomplete_line_check_is_tested():
     with pytest.raises(AssertionError, match='decision|word'):
         check('tb_mixer_incomplete_kept', a, b,
               alter={'mix_chan.v': (INCOMPLETE_KEEP, 'wire mark = marker && !full && !skipping;')})
+
+
+LONG = ('extra', 8)           # the line is 8 bytes too long: bad (length), but whole and on time
+OMIT = "wire       omit  = show && both_bad && (adm_new || !bad_last);"
+
+
+def double_bad_streams():
+    """Lines bad on both receivers: field 0 line 6 alone, field 1 lines 10 and 11, field 2 its
+    first and its last line. Field 3 is clean."""
+    hooks = [{VBI + 6: LONG}, {VBI + 10: LONG, VBI + 11: LONG}, {VBI: LONG, VBI + LINES - 1: LONG}, {}]
+    a, b = Stream(7), Stream(8)
+    for fld, h in enumerate(hooks):
+        a.field(fld, hooks=h)
+        b.field(fld, hooks=h)
+    return a.done(), b.done()
+
+
+def test_lines_bad_on_both_are_left_out():
+    """A line that is bad on both receivers is not written when the line before it in the field
+    was good, so the field store replaces it with the line above; of two in a row the second is
+    written. Everything else (decisions, current channel) is as without the rule."""
+    a, b = double_bad_streams()
+    m = check('tb_mixer_double_bad', a, b)
+    left = [(fld, line) for (_, _, _, line), fld, o in zip(m.trace, source_fields(m.trace), m.omitted) if o]
+    assert left == [(0, 6), (1, 10), (2, 0), (2, LINES - 1)], left
+    assert all(p == 0b11 for (_, p, *_), o in zip(m.trace, m.omitted) if o)
+    every = list(range(LINES))
+    assert out_fields(m.trace) == [(0, [n for n in every if n != 6]), (1, [n for n in every if n != 10]),
+                                   (0, every[1:-1]), (1, every)]
+    before = model(events(a, b), omit_bad=False)
+    assert m.curs == before.curs and [t[1:] for t in m.trace] == [t[1:] for t in before.trace]
+    assert all(t == u or o for t, u, o in zip(m.trace, before.trace, m.omitted))
+
+
+@pytest.mark.parametrize('variant, text', [('written', "wire       omit  = 1'b0;"),
+                                           ('every', "wire       omit  = show && both_bad;")])
+def test_double_bad_rule_is_checked(variant, text):
+    """Negative controls: a line_mixer.v that writes the line anyway, or leaves out every such
+    line (also the second of two), disagrees with the model."""
+    a, b = double_bad_streams()
+    with pytest.raises(AssertionError, match='decision|word'):
+        check(f'tb_mixer_double_bad_{variant}', a, b, alter={'line_mixer.v': (OMIT, text)})
+
+
+def test_line_bad_on_both_at_a_channel_change():
+    """A (current) stops after line 9 of field 1. B fills the gap and takes over on its eighth
+    lone line, line 17, which is bad (wrong length) while A has none: that line is left out,
+    and B takes over on it all the same."""
+    a = bytes(Stream(1).field(0, amp=0).field(1, amp=0).data[:FIELD + (VBI + 10) * LINE + 4])
+    b = Stream(2).field(0, amp=25).field(1, amp=25, hooks={VBI + 17: LONG}).field(2, amp=25).done()
+    m = check('tb_mixer_double_bad_takeover', a, b)
+    k = LINES + 10 + 8 - 1
+    assert m.curs.index(1) == k and cur_changes(m) == 1, 'B takes over at its 8th lone line'
+    assert m.omitted[k] and m.trace[k] == (0, 0b10, 1, 17), m.trace[k]
+    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, [n for n in range(LINES) if n != 17]),
+                                   (0, list(range(LINES)))]
 
 
 def test_current_channel_goes_silent():

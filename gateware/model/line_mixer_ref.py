@@ -25,6 +25,16 @@ The current channel changes without a pair when
 Nothing here depends on wall-clock silence: a blanking interval common to
 both channels produces no lines and therefore no decisions.
 
+Lines bad on both receivers. A line that would be shown although it is bad on
+both receivers (a pair of bad lines, or a lone bad line: the other receiver has
+none) is not written, unless the line shown before it in the same output field
+was such a line as well. The field store replaces a missing line with the line
+above (two at most), so a single bad line disappears; in a run of them only the
+first is left out, because noise is better than a frozen picture. Everything
+else is decided as if the line had been shown: the current channel, health,
+silence counters and the output field state. The decision is traced with
+use 0 (`omitted` says which ones were left out by this rule).
+
 Output order. Line numbers leave strictly increasing within a field. Each
 channel has a field counter (advanced when its own line number restarts); a
 line is admitted when it starts a new field or lies above the last line sent.
@@ -95,12 +105,14 @@ class Mixer:
 
     ext_bad: per channel either a bool (held for the whole run) or a function t_ns -> bool
     (decoder status "no lock", sampled when a line arrives). keep_words=False skips `out`.
+    omit_bad=False writes lines bad on both receivers like any other (the rule before 2026-10-08).
+    `omitted` has one entry per decision: True where a line was left out by that rule.
     """
 
     def __init__(self, t_pair=T_PAIR_CYCLES * 15.4, n_step=8, n_dead=40, ext_bad=(False, False),
-                 keep_words=True, **kw):
+                 keep_words=True, omit_bad=True, **kw):
         self.t_pair, self.n_step, self.n_dead = t_pair, n_step, n_dead
-        self.ext_bad, self.keep_words = ext_bad, keep_words
+        self.ext_bad, self.keep_words, self.omit_bad = ext_bad, keep_words, omit_bad
         self.kw = kw
         self.q = (deque(), deque())
         self.hist = ([], [])          # bad flags of the last 8 arrived lines
@@ -119,8 +131,11 @@ class Mixer:
         self.join = [False, False]
         self.trace = []               # (use, pop, field, line)
         self.curs = []                # current channel after each decision
+        self.omitted = []             # per decision: left out because it was bad on both receivers
         self.out = []                 # (field, line, idx, data)
         self.overflow = False
+        self.bad_last = False         # the last line shown (or left out) in this output field was bad on both
+        self.adm_new = False          # the last admitted line started an output field
 
     # ---- per-channel bookkeeping at arrival
     def _ext(self, ch, t):
@@ -196,6 +211,7 @@ class Mixer:
         else:
             ok, new = l > self.o_line, False
         if ok:
+            self.adm_new = new
             if new:
                 self.o_fbit = f
                 self.join = [False, False]
@@ -204,9 +220,20 @@ class Mixer:
             self.o_fc[ch] = e.fc
         return ok
 
-    def _emit(self, use, pop, field, line):
+    def _omit(self, show, both_bad):
+        """Is this shown line left out as bad on both receivers? Call after _admit."""
+        if not show:
+            return False
+        prev = False if self.adm_new else self.bad_last
+        self.bad_last = both_bad
+        return self.omit_bad and both_bad and not prev
+
+    def _emit(self, use, pop, field, line, omitted=False):
+        if omitted:
+            use = USE_NONE
         self.trace.append((use, pop, field, line))
         self.curs.append(self.cur)
+        self.omitted.append(omitted)
         qa, qb = self.q
         if use and self.keep_words:
             if use == USE_BLEND:
@@ -223,16 +250,18 @@ class Mixer:
         a, b = self.q[0][0], self.q[1][0]
         use, self.cur = decide_pair(a.rec.hf_energy, b.rec.hf_energy, self.cur, a.bad, b.bad)
         own = (a, b)[self.cur]
-        if self._admit(self.cur, own, owner=True, step=True):
+        show = self._admit(self.cur, own, owner=True, step=True)
+        if show:
             other = 1 - self.cur
             self.join[other] = True
             self.o_fc[other] = (a, b)[other].fc
             field = self.o_fbit
         else:
             use, field = USE_NONE, own.rec.field
+        omitted = self._omit(show, a.bad and b.bad)
         self.step_valid, self.since_pair = True, 0
         self.quiet = [0, 0]
-        self._emit(use, 0b11, field, own.rec.line_in_field)
+        self._emit(use, 0b11, field, own.rec.line_in_field, omitted)
 
     def _solo(self, x):
         e, other = self.q[x][0], 1 - x
@@ -250,6 +279,7 @@ class Mixer:
         p_last = self.last_arr[other]
         gap_ok = step and not e.bad and (p_last is None or p_last <= e.t - self.t_pair)
         show = (owner or gap_ok) and self._admit(x, e, owner, step)
+        omitted = self._omit(show, e.bad)              # lone: the other receiver has no such line
         # counters
         if self.quiet[other] == 0:
             self.qfast[other] = step
@@ -257,4 +287,4 @@ class Mixer:
         self.quiet[x] = 0
         self.since_pair = min(self.since_pair + 1, self.n_step)
         self._emit((USE_B if x else USE_A) if show else USE_NONE, 0b10 if x else 0b01,
-                   self.o_fbit if show else e.rec.field, e.rec.line_in_field)
+                   self.o_fbit if show else e.rec.field, e.rec.line_in_field, omitted)
