@@ -13,10 +13,17 @@
 // byte that is not acknowledged (nack with done); the bytes after it are not
 // sent and wreq does not pulse for them. A single-byte write (wextra = 0)
 // behaves as before: all its bytes are sent, nack reports any NACK.
+//
+// A slave may stretch SCL for up to STRETCH_MAX clocks at a time. If SCL is
+// held low longer, the transaction ends there: both lines are released, done
+// pulses with nack and stuck set, and busy drops. Nothing more is sent; the
+// next transaction starts with START as usual (and ends the same way if SCL
+// is still held low).
 `default_nettype none
 module i2c_master #(
     parameter DIV = 68,                   // clock cycles per quarter bit (27 MHz / 68 / 4 = 99 kHz)
-    parameter LEN_W = 8                   // width of wextra: up to 2^LEN_W data bytes per write
+    parameter LEN_W = 8,                  // width of wextra: up to 2^LEN_W data bytes per write
+    parameter STRETCH_MAX = 270_000       // 10 ms at 27 MHz
 ) (
     input  wire       clk,
     input  wire       rst,
@@ -30,6 +37,7 @@ module i2c_master #(
     output reg        busy,
     output reg        done,               // pulse at the end of a transaction
     output reg        nack,               // with done: some byte was not acknowledged
+    output reg        stuck,              // with done: SCL was held low longer than STRETCH_MAX
     output reg  [7:0] rdata,
     output reg        scl_low,
     output reg        sda_low,
@@ -75,6 +83,7 @@ module i2c_master #(
     reg [1:0] scl_s, sda_s;               // synchronisers
     always @(posedge clk) begin scl_s <= {scl_s[0], scl_in}; sda_s <= {sda_s[0], sda_in}; end
     wire stretch = (ph == 2'd2) && !scl_low && !scl_s[1];
+    reg [$clog2(STRETCH_MAX + 1)-1:0] st_n;   // clocks SCL has been held low in this stretch
 
     // write data token (tk 3) of a write
     wire is_data = !op_rw && (tk == 3'd3);
@@ -84,8 +93,9 @@ module i2c_master #(
         wreq <= 1'b0;
         if (!busy) begin
             div <= 0; ph <= 0; bitn <= 0; tk <= 0;
+            st_n <= 0;
             if (start) begin
-                busy <= 1'b1; nack <= 1'b0;
+                busy <= 1'b1; nack <= 1'b0; stuck <= 1'b0;
                 op_rw <= rw; op_dev <= dev; op_addr <= addr; op_wdata <= wdata;
                 rem <= rw ? {LEN_W{1'b0}} : wextra;
                 op_multi <= !rw && (wextra != {LEN_W{1'b0}});
@@ -144,9 +154,14 @@ module i2c_master #(
                 endcase
                 endcase
             end
+            // SCL held low too long: give up, release both lines
+            st_n <= stretch ? st_n + 1'b1 : 0;
+            if (stretch && st_n == STRETCH_MAX - 1) begin
+                busy <= 1'b0; done <= 1'b1; nack <= 1'b1; stuck <= 1'b1; scl_low <= 1'b0; sda_low <= 1'b0;
+            end
         end
         if (rst) begin
-            busy <= 1'b0; done <= 1'b0; nack <= 1'b0; scl_low <= 1'b0; sda_low <= 1'b0; wreq <= 1'b0;
+            busy <= 1'b0; done <= 1'b0; nack <= 1'b0; stuck <= 1'b0; scl_low <= 1'b0; sda_low <= 1'b0; wreq <= 1'b0;
         end
     end
 endmodule

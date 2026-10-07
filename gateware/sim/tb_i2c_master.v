@@ -2,13 +2,15 @@
 // middle of a write, writes to an absent address, read-back. A bus monitor
 // (independent of the slave) prints what is on SCL/SDA:
 //   BUS S | BUS P | BUS B <byte> <ack bit: 0 ACK, 1 NACK>
-// and every transaction ends with DONE <nack> <wreq pulses>, reads with RD <data>.
+// and every transaction ends with DONE <nack> <wreq pulses> <stuck>, reads with RD <data>.
+// A slave holding SCL low is modelled by `hold`: briefly (stretch) and for good (stuck).
 // The next write byte is put on wdata a varying number of clocks after each wreq.
 // Driven by sim/test_i2c_master.py, which compares everything with model/i2c_ref.py.
 `timescale 1ns/1ps
 `default_nettype none
 module tb_i2c_master;
     parameter AUTO_INC = 1;               // 0: negative control, a slave that does not auto-increment
+    parameter STRETCH_MAX = 200;          // clocks the master waits for SCL before it gives up
     localparam DIV = 4;
 
     reg clk = 0, rst = 1;
@@ -17,12 +19,14 @@ module tb_i2c_master;
     reg        start = 0, rw = 0;
     reg  [6:0] dev = 0;
     reg  [7:0] addr = 0, wdata = 0, wextra = 0;
-    wire       wreq, busy, done, nack, scl_low, m_sda_low, s_sda_low;
+    wire       wreq, busy, done, nack, stuck, scl_low, m_sda_low, s_sda_low;
     wire [7:0] rdata;
-    wire scl = scl_low ? 1'b0 : 1'b1;
+    reg        hold = 0;                  // a slave holds SCL low
+    wire scl = (scl_low | hold) ? 1'b0 : 1'b1;
     wire sda = (m_sda_low | s_sda_low) ? 1'b0 : 1'b1;
-    i2c_master #(.DIV(DIV)) dut (.clk(clk), .rst(rst), .start(start), .rw(rw), .dev(dev), .addr(addr),
-        .wdata(wdata), .wextra(wextra), .wreq(wreq), .busy(busy), .done(done), .nack(nack), .rdata(rdata),
+    i2c_master #(.DIV(DIV), .STRETCH_MAX(STRETCH_MAX)) dut (.clk(clk), .rst(rst), .start(start), .rw(rw),
+        .dev(dev), .addr(addr), .wdata(wdata), .wextra(wextra), .wreq(wreq), .busy(busy), .done(done), .nack(nack),
+        .stuck(stuck), .rdata(rdata),
         .scl_low(scl_low), .sda_low(m_sda_low), .scl_in(scl), .sda_in(sda));
     i2c_slave_model #(.ADDR(7'h5C), .LOG(1), .AUTO_INC(AUTO_INC)) slave (.scl(scl), .sda(sda), .sda_low(s_sda_low));
 
@@ -58,7 +62,7 @@ module tb_i2c_master;
             @(posedge clk); start <= 1'b0;
             @(posedge done);
             @(posedge clk);
-            $display("DONE %0d %0d", nack, n_req);
+            $display("DONE %0d %0d %0d", nack, n_req, stuck);
             repeat (20) @(posedge clk);
         end
     endtask
@@ -71,8 +75,35 @@ module tb_i2c_master;
             @(posedge done);
             @(posedge clk);
             $display("RD %02x", rdata);
-            $display("DONE %0d 0", nack);
+            $display("DONE %0d 0 %0d", nack, stuck);
             repeat (20) @(posedge clk);
+        end
+    endtask
+    // a write during which a slave holds SCL low for `len` clocks (len < 0: until the master gives up),
+    // starting at the first time the master pulls SCL low `after` clocks or more after the start
+    reg     seen_done = 0;
+    integer held;
+    always @(posedge clk) if (done) seen_done <= 1'b1;
+    task wr_hold(input [6:0] d, input [7:0] r, input integer n, input integer after, input integer len);
+        begin
+            slave.nack_data = -1;
+            n_req = 0; seen_done = 0;
+            @(posedge clk);
+            dev <= d; addr <= r; rw <= 1'b0; wdata <= buf_[0]; wextra <= n - 1; start <= 1'b1;
+            @(posedge clk); start <= 1'b0;
+            repeat (after) @(posedge clk);
+            @(posedge scl_low);
+            hold = 1; held = 0;
+            while (!seen_done && (len < 0 ? held < 5 * STRETCH_MAX : held < len)) begin
+                @(posedge clk); held = held + 1;
+            end
+            if (len < 0) $display("HELD %0d", held);
+            hold = 0;
+            while (!seen_done && held < 5 * STRETCH_MAX) begin @(posedge clk); held = held + 1; end
+            @(posedge clk);
+            if (seen_done) $display("DONE %0d %0d %0d", nack, n_req, stuck);
+            else $display("HUNG busy=%0d", busy);
+            repeat (100) @(posedge clk);
         end
     endtask
     task fill(input integer n, input integer seed);
@@ -94,6 +125,9 @@ module tb_i2c_master;
                                   rd(7'h5C, 8'h42); rd(7'h5C, 8'h43); rd(7'h5C, 8'h68); rd(7'h5D, 8'h10);
         $display("T full");       fill(256, 8'h03); wr(7'h5C, 8'hA0, 256, -1);
         $display("T read2");      rd(7'h5C, 8'hA0); rd(7'h5C, 8'hFF); rd(7'h5C, 8'h00); rd(7'h5C, 8'h9F);
+        $display("T stretch");    fill(2, 8'h44);   wr_hold(7'h5C, 8'hB0, 2, 300, STRETCH_MAX - 50);
+        $display("T stuck");      fill(2, 8'h55);   wr_hold(7'h5C, 8'hC0, 2, 20, -1);
+        $display("T after_stuck"); fill(1, 8'h99);  wr(7'h5C, 8'hD0, 1, -1); rd(7'h5C, 8'hD0); rd(7'h5C, 8'hB1);
         $display("END");
         $finish;
     end
