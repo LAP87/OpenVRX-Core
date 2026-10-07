@@ -236,10 +236,12 @@ module fb_sdram #(
                     if (e_idx[2:0] == 3'd7) grp_ready <= 1'b1;
                 end
             end
-            // pad holes of a closed group (only happens for broken lines)
+            // pad holes of a closed group with black. They only occur when the writer starts in the
+            // middle of a line (after reset or LOW), in the field it joined, which is not published.
+            // (grp[0] was used until 2026-10-07: never written after reset in LOW, it sent X to the SDRAM.)
             if (grp_ready && !writing && grp_mask != 8'hFF)
                 for (i = 0; i < 8; i = i + 1)
-                    if (!grp_mask[i]) begin grp[i] <= grp[0]; grp_mask[i] <= 1'b1; end
+                    if (!grp_mask[i]) begin grp[i] <= BLACK; grp_mask[i] <= 1'b1; end
 
             // ---- fetcher: frame decision, where to read the line from, store read data ----
             if (accept) begin
