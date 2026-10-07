@@ -10,8 +10,49 @@
 // H_MIN of its clocks (see formal/toggle_props.v for the numbers and the clock
 // ratios they hold for).
 //
+// toggle_tx: send side for a sender that cannot itself promise toggle_rx's
+// spacing and hold (the low-latency frame trigger: a field may end right after
+// its trigger). `req` asks for an event carrying `din`. tgl flips at most every
+// GAP clocks, and `q` takes the data when tgl flips and holds it until the next
+// flip. A request less than GAP clocks after the last flip waits and is sent
+// GAP clocks after it; a further request in that time replaces its data, so
+// two events merge into one. Proven in formal/toggle_tx_props.v; with GAP = 16
+// it meets the sender conditions of formal/toggle_props.v.
+//
 // sync2: two-stage synchroniser for a slow level (a mode bit).
 `default_nettype none
+module toggle_tx #(
+    parameter W = 1,
+    parameter GAP = 16
+) (
+    input  wire         clk,
+    input  wire         rst,
+    input  wire         req,
+    input  wire [W-1:0] din,
+    output reg          tgl,
+    output reg  [W-1:0] q
+`ifdef FORMAL
+    , output wire       f_pend             // a request is waiting, for the proof
+`endif
+);
+    localparam CW = $clog2(GAP + 1);
+    reg [CW-1:0] since;                    // clocks since the last flip, saturates at GAP - 1
+    reg          pend;
+    reg [W-1:0]  pdata;
+    wire         ready = since == GAP - 1;
+    always @(posedge clk) begin
+        if (!ready) since <= since + 1'b1;
+        if (req && !ready) begin pend <= 1'b1; pdata <= din; end
+        if ((req || pend) && ready) begin
+            tgl <= ~tgl; q <= req ? din : pdata; since <= 0; pend <= 1'b0;
+        end
+        if (rst) begin tgl <= 1'b0; q <= {W{1'b0}}; since <= GAP - 1; pend <= 1'b0; end
+    end
+`ifdef FORMAL
+    assign f_pend = pend;
+`endif
+endmodule
+
 module toggle_rx #(
     parameter W = 1,
     parameter RESET_Q = 1                  // 0: q has no reset (it is only read after an event)

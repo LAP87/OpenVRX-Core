@@ -10,7 +10,7 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status:** the regression suite has 318 tests, including simulations against
+**Status:** the regression suite has 321 tests, including simulations against
 Python models and build failure controls. Milestone tops build with timing met. **Nothing has run on
 hardware yet.** Most of this code was written with heavy AI assistance
 (Claude) and reviewed by the project owner; see the hub's

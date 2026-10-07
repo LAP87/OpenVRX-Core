@@ -122,7 +122,7 @@ module fb_backend #(
     wire       e_field = f_data[51];
     wire [9:0] e_line  = f_data[50:41];
     wire [8:0] e_idx   = f_data[40:32];
-    reg        ll_have, ll_field, ll_trig_done, s_ll_trig, s_ll_low, ll_wait, ll_n1_v;
+    reg        ll_have, ll_field, ll_trig_done, s_ll_low, ll_wait, ll_n1_v;
     reg  [9:0] ll_last, ll_max, s_ll_lines, ll_n1;
     reg [11:0] ll_dly;
     wire       ll_new_field = ll_have && (e_field != ll_field || e_line < ll_last);
@@ -136,6 +136,10 @@ module fb_backend #(
     wire [11:0] ph_dly;
     field_phase ll_phase (.clk(sd_clk), .rst(srst || !ll_s), .nf(ll_take && (!ll_have || ll_new_field)), .at_ref(ll_ref),
                           .low(ph_low), .low_now(ph_low_now), .il(), .early(ph_early), .dly(ph_dly));
+    wire       ll_delay = LL_EQ != 0 && ll_ref && ph_early;           // this field came early: wait ph_dly
+    wire       ll_send  = (ll_wait && ll_dly == 12'd0) || (ll_fire && !ll_delay);
+    wire       s_ll_trig;
+    wire [9:0] s_ll_pay;
     always @(posedge sd_clk) begin
         if (ll_take) begin
             ll_last <= e_line;
@@ -150,20 +154,25 @@ module fb_backend #(
             ll_trig_done <= ll_done;
         end
         // the frame starts once line 1 (or the first later line) of a field is complete;
-        // half a line period later if this field came early
+        // half a line period later if this field came early (ll_send below)
         if (ll_wait) begin
             ll_dly <= ll_dly - 12'd1;
-            if (ll_dly == 12'd0) begin ll_wait <= 1'b0; s_ll_trig <= ~s_ll_trig; end
+            if (ll_dly == 12'd0) ll_wait <= 1'b0;
         end
         if (ll_fire) begin
             ll_trig_done <= 1'b1;
             s_ll_low <= ll_ref ? ph_low_now : ph_low;
-            if (LL_EQ != 0 && ll_ref && ph_early) begin ll_wait <= 1'b1; ll_dly <= ph_dly; end
-            else begin ll_wait <= 1'b0; s_ll_trig <= ~s_ll_trig; end
+            if (ll_delay) begin ll_wait <= 1'b1; ll_dly <= ph_dly; end
+            else ll_wait <= 1'b0;
         end
         if (srst || !ll_s) begin ll_have <= 1'b0; ll_trig_done <= 1'b0; ll_wait <= 1'b0; ll_n1_v <= 1'b0; end
-        if (srst) begin s_ll_trig <= 1'b0; s_ll_lines <= 10'd0; s_ll_low <= 1'b0; end
+        if (srst) begin s_ll_lines <= 10'd0; s_ll_low <= 1'b0; end
     end
+    // The trigger carries the previous field's line count. That count changes when the next field
+    // starts, which may be right after the trigger, so toggle_tx holds a copy from each flip to the
+    // next and keeps flips 16 clocks apart (the conditions toggle_rx is proven under).
+    toggle_tx #(.W(10), .GAP(16)) ll_tx (.clk(sd_clk), .rst(srst), .req(ll_send), .din(s_ll_lines),
+        .tgl(s_ll_trig), .q(s_ll_pay));
 
     // ---- line buffer: 4 slots x 512 words (SDRAM fetches), or 16 (low-latency ring) ----
     wire [12:0] lb_raddr;
@@ -178,7 +187,7 @@ module fb_backend #(
     // ---- low-latency trigger into the pixel domain ----
     wire       ll_ev;
     wire [9:0] ll_lines;
-    toggle_rx #(.W(10)) ll_rx (.clk(pix_clk), .rst(prst), .tgl(s_ll_trig), .din(s_ll_lines),
+    toggle_rx #(.W(10)) ll_rx (.clk(pix_clk), .rst(prst), .tgl(s_ll_trig), .din(s_ll_pay),
         .event_now(ll_ev), .q(ll_lines));
     reg        ll_trig;
     reg  [22:0] ll_since;                 // ~0.1 s at 74.25 MHz without a field -> no video

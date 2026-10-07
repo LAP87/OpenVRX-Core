@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (318 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (321 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -353,10 +353,11 @@ Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning 
 | `async_fifo.v` (djup 4 och 8) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under |
 | `genlock_timing.v` | med fria lock/trig/h_alt: räknarna håller sig inom gränserna, varje bild slutar inom V_TOTAL + MAX_WAIT rader, varje bild som inte är en avsiktlig omlåsning har minst V_TOTAL − 1 rader, och två omlåsningar ligger minst HOLD bildstarter isär | utan väntegränsen kan en bild stå still; med två överhoppade rader blir en bild för kort; utan spärrtiden kan två korta bilder följa på varandra |
 | `cdc_sync.v` `toggle_rx` (radbegäran, publicering, lågfördröjningstrigger i `fb_backend.v`) | två fria klockor, högst 3 flanker av den ena mellan två av den andra (27–108 MHz mot 74,25 MHz), ett sampel mitt i en ändring får bli vilket värde som helst: med vändning högst var 16:e sändarklocka och data som hålls 16 klockor tappas eller dubbleras ingen händelse, varje händelse tas emot inom 4 mottagarflanker, och mottagen data är den skickade | flanken tagen direkt från andra domänen ger fel data; vändning var 8:e klocka tappar en händelse; data som ändras efter 2 klockor kommer fram fel |
+| `cdc_sync.v` `toggle_tx` (lågfördröjningstriggerns sändarsida) | en klocka, fria begäranden: vändningar minst 16 klockor isär, data hålls från vändning till vändning, varje begäran skickas inom 16 klockor med den senaste datan; det är sändarvillkoren i raden ovan | en sändare som vänder direkt på varje begäran bryter avståndet |
 | `cdc_sync.v` `sync2` (`ll_mode`) | lägesbiten ändras bara på den egna klockans flank och är rätt från tredje flanken efter ett byte; domänerna är bara oense under de tre flankerna | utan `sync2` ändras biten mellan flankerna; efter två flanker är den inte säkert inställd |
 | `fb_display.v` (radbuffertens platser) | med den riktiga tidsbasen: en rad som begärs under en aktiv utrad hamnar på en plats som inte läses under resten av raden | begäran till platsen som läses faller |
 
-Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal/`. Vad som inte är bevisat om klockdomänsövergångarna, och varför, står i [formal/README.md](formal/README.md): bland annat att två synksteg räcker mot metastabilitet, att SDRAM-sidan hinner skriva en rad, lågfördröjningsringen, och radantalet `s_ll_lines`, som en källa med mycket korta fält kan ändra medan det är på väg till pixeldomänen.
+Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal/`. Vad som inte är bevisat om klockdomänsövergångarna, och varför, står i [formal/README.md](formal/README.md): bland annat att två synksteg räcker mot metastabilitet, att SDRAM-sidan hinner skriva en rad, lågfördröjningsringen. Radantalet som följer lågfördröjningstriggern kunde ändras på vägen till pixeldomänen när ett fält var mycket kort; det hålls nu av `toggle_tx` (`sim/test_ll_payload.py`).
 
 ## Bygget av M6
 

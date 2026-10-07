@@ -59,10 +59,8 @@ FLOW="chformal -lower;" must_fail genlock_no_holdoff genlock_props 130 "" "$work
 cdc="$here/../rtl/cdc_sync.v"
 prove cdc_toggle toggle_props 12 "" "$cdc" "$here/toggle_props.v" || status=1
 prove cdc_level level_props 40 "" "$cdc" "$here/level_props.v" || status=1
-# Not proven (formal/README.md, "Öppet: s_ll_lines"): the low-latency line count is held only until the next
-# field starts, which for a field that ends right after line 1 is one SDRAM clock after its trigger flips.
-# The toggle proof with din held for one sender clock does not hold (compare cdc_toggle_data_early):
-# prove cdc_toggle_ll_lines toggle_props 12 "chparam -set H 1 toggle_props;" "$cdc" "$here/toggle_props.v"
+# the low-latency trigger's send side: flips 16 clocks apart, data held from flip to flip (toggle_props' conditions)
+FLOW="chformal -lower;" prove cdc_toggle_tx toggle_tx_props 40 "" "$cdc" "$here/toggle_tx_props.v" || status=1
 # line buffer slots: genlock_timing's own (separately proven) assertions are assumptions here
 lb_flow="chformal -lower; chformal -assert -assert2assume a:src=*genlock_timing.v*;"
 lb_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/linebuf_props.v")
@@ -78,6 +76,10 @@ grep -q "t\[0\] != tgl" cdc_nosync.v
 DEFS=-DFORMAL_NO_STRENGTHEN must_fail cdc_toggle_no_sync toggle_props 40 "" "$work/cdc_nosync.v" "$here/toggle_props.v" || status=1
 DEFS=-DFORMAL_NO_STRENGTHEN must_fail cdc_toggle_too_often toggle_props 40 "chparam -set S 8 -set H 8 toggle_props;" "$cdc" "$here/toggle_props.v" || status=1
 DEFS=-DFORMAL_NO_STRENGTHEN must_fail cdc_toggle_data_early toggle_props 40 "chparam -set H 2 toggle_props;" "$cdc" "$here/toggle_props.v" || status=1
+# a send side that flips at once on every request breaks the spacing
+sed 's/wire         ready = since == GAP - 1;/wire         ready = 1'"'"'b1;/' "$cdc" > cdc_tx_noready.v
+grep -q "ready = 1'b1;" cdc_tx_noready.v
+FLOW="chformal -lower;" must_fail cdc_toggle_tx_no_gap toggle_tx_props 40 "" "$work/cdc_tx_noready.v" "$here/toggle_tx_props.v" || status=1
 sed 's/assign q = s\[1\];/assign q = d;/' "$cdc" > cdc_level_nosync.v
 grep -q "assign q = d;" cdc_level_nosync.v
 must_fail cdc_level_no_sync level_props 20 "" "$work/cdc_level_nosync.v" "$here/level_props.v" || status=1
