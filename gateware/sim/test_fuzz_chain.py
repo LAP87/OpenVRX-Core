@@ -775,4 +775,5 @@ def test_chain_checks_catch_faults(block):
     from 3.3 ms; the others have no disturbance. Six fields each."""
     seed, classes, alter, group = NEGATIVE[block]
     res = run_seed(seed, classes, work=HERE / 'build' / 'fuzz' / f'neg_{block}', alter=alter, n_fields=6)
-    assert any(g.startswith(group) for g in res['groups']), (block, res['groups'], res['first'])
+    seen = res['groups'] + [f"{k['block']}/{k['kind']}" for k in res['known']]     # also what #17 explains
+    assert any(g.startswith(group) for g in seen), (block, seen, res['first'])
