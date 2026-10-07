@@ -69,10 +69,12 @@ def run_sim(name, src, alter=None, **params):
     p.update(params)
     rtl = [GW / 'rtl' / n for n in ('async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
                                     'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')]
-    for fname, (old, new) in (alter or {}).items():
+    for fname, pairs in (alter or {}).items():
         text = (GW / 'rtl' / fname).read_text()
-        assert text.count(old) == 1, f'{fname}: {old!r} not found once'
-        (work / fname).write_text(text.replace(old, new))
+        for old, new in ([pairs] if isinstance(pairs[0], str) else pairs):
+            assert text.count(old) == 1, f'{fname}: {old!r} not found once'
+            text = text.replace(old, new)
+        (work / fname).write_text(text)
         rtl = [work / fname if r.name == fname else r for r in rtl]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_fb', *[f'-Ptb_fb.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_fb.v')], cwd=work, env=env, check=True)
@@ -656,6 +658,27 @@ def test_mode_switch_buf_low_buf():
     assert not after[0]['video'], 'the first frame after LOW -> BUF had video before a field was published'
     old = [f for f in after if f['video'] and min(f['shown'][y][0] for y in range(V_ACTIVE)) < cur_field(f['pc']) - 2]
     assert not old, 'stale frame after LOW -> BUF: ' + str([f['pc'] for f in old])
+
+
+LOW_ISSUE = 'LAP87/OpenVRX-Core#17: frames with video before the output has locked after BUF -> LOW'
+
+
+@pytest.mark.xfail(strict=True, reason=LOW_ISSUE)
+def test_low_after_switch_shows_whole_fields():
+    """BUF -> LOW 0.1 field periods into field 5 (in its blanking interval). README: the first
+    frame after the switch has no video, and every later frame shows one whole field. Found by
+    sim/test_fuzz_chain.py (14 of 18 seeds with a switch to LOW): the display shows video once
+    any trigger has come, before the genlock has locked, and a frame on the free-running timing
+    reads ring slots never written in this LOW period (X here) next to lines of the new field."""
+    sw = round(T0 + 5.1 * FIELD_CYC)
+    sd, pix = run_sim('tb_fb_low_switch', MS_SRC, SW1=sw, **LL_V)
+    sw_pc = next(v[0] for ev, *v in pix if ev == 'M')
+    starts = [v[0] for ev, *v in pix if ev == 'V']
+    first = next(s for s in starts if s > sw_pc)
+    assert not next(v[2] for ev, *v in pix if ev == 'V' and v[0] == first), 'the first frame after BUF -> LOW has video'
+    for f in [f for f in pix_frames(pix) if f['pc'] > sw_pc and f['video']]:
+        tags = {f['shown'][y][0] for y in range(V_ACTIVE)}
+        assert len(tags) == 1 and -1 not in tags, f"frame at {round(f['pc'] / H_TOTAL)} lines shows fields {sorted(tags)}"
 
 
 def test_mode_switch_checks_catch_faults():

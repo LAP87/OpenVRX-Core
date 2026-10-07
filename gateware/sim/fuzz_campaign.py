@@ -81,6 +81,12 @@ def summary(path):
             groups[f"{f['block']}/{f['kind']}"].append(r['seed'])
     for g, seeds in sorted(groups.items(), key=lambda x: -len(x[1])):
         print(f'  {g}: {len(seeds)}  {seeds[:30]}')
+    known = defaultdict(list)
+    for r in rs:
+        for k in r.get('known', []):
+            known[k['issue']].append(r['seed'])
+    for issue, seeds in known.items():
+        print(f'  known, {issue}: {len(set(seeds))}  {sorted(set(seeds))[:30]}')
     edges = [r['seed'] for r in rs if r['result'] == 'edge' or (r.get('edges') and r['result'] == 'fail')]
     print(f'  mixer edge cases: {len(edges)}  {edges[:30]}')
     cls = Counter(c for r in rs for c in r.get('classes', []))
