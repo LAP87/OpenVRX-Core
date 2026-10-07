@@ -400,6 +400,38 @@ def test_field_phase_from_arrival_times():
     assert not any(fr.low for fr in frames)
 
 
+# The store leaves reset at about cycle 1056 in tb_fb (sdram_burst's 1000-cycle wait at SDRAM_FREQ
+# 5 MHz, then the mode register). With the first field's line 1 at T0 + 3 line periods, this T0 puts
+# it 53 390 cycles after that: 4096 cycles less than one field period, in the middle of the window
+# (2 T_EQ .. T_MAX) in which field_phase.v takes two intervals for an interlaced pair.
+FIRST_REF_T0 = 42124
+PHASE_FIX = "if (rst) begin cnt <= {W{1'b1}};"
+
+
+def test_first_interval_is_not_measured():
+    """A progressive source whose first reference line comes about 4096 cycles less than a field
+    period after the store leaves reset. field_phase.v counted that time as an interval between
+    two fields, took the next field for the lower one of an interlaced pair and drew it half a
+    line lower (found by sim/test_fuzz_chain.py, seed 17). The count now starts saturated, as in
+    the model: the first reference line is not a measurement. Decisions match the model and no
+    frame is drawn lower."""
+    src = source(6, t0=FIRST_REF_T0)
+    sd, pix = run_sim('tb_fb_first_ref', src, RT_EN=0)
+    frames, st = replay(sd, src, RT_EN=0)
+    check_display(frames, pix_frames(pix))
+    assert not any(fr.low for fr in frames) and not any(r[4] for r in sd if r[0] == 'D')
+
+
+def test_first_interval_check_is_tested():
+    """Negative control: field_phase.v counting from 0 after reset draws a frame of the same
+    source lower, and disagrees with the model."""
+    src = source(6, t0=FIRST_REF_T0)
+    sd, pix = run_sim('tb_fb_first_ref_old', src, alter={'field_phase.v': (PHASE_FIX, 'if (rst) begin cnt <= 0;')}, RT_EN=0)
+    assert any(r[4] for r in sd if r[0] == 'D'), 'the old counter did not draw any frame lower'
+    with pytest.raises(AssertionError, match='rtl'):
+        replay(sd, src, RT_EN=0)
+
+
 def test_slow_source_needs_the_longer_lead():
     """A source at two thirds of the output rate with 14-line fields: the output reads a
     field much faster than it arrives (a PAL field into a 60 Hz output, exaggerated). With a
