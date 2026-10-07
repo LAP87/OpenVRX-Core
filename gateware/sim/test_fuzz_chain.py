@@ -481,7 +481,7 @@ def switch_windows(pix, starts):
 def check_display(sc, logs, frames, words, org, run, fd):
     pix = logs['pix']
     pf_all = pix_frames(pix)
-    starts = [int(ev[1]) for ev in pix if ev[0] == 'V']
+    starts = frame_starts(pix)
     sws = switch_windows(pix, starts)
 
     def in_switch(pc):
@@ -551,9 +551,23 @@ def check_display(sc, logs, frames, words, org, run, fd):
     return checked
 
 
+def frame_starts(pix):
+    """Pixel clocks of the frame starts (x = 0, y = 0). While the timing generator is held in
+    reset it sits at 0, 0 too; those clocks are not frame starts."""
+    out = []
+    for ev in pix:
+        if ev[0] == 'V':
+            pc = int(ev[1])
+            if out and pc - out[-1] < H_TOTAL:
+                out[-1] = pc
+            else:
+                out.append(pc)
+    return out
+
+
 def check_invariants(sc, logs, fd):
     pix = logs['pix']
-    starts = [int(ev[1]) for ev in pix if ev[0] == 'V']
+    starts = frame_starts(pix)
     sws = switch_windows(pix, starts)
     # 1. X/Z
     first_ok = starts[1] if len(starts) > 1 else 1 << 60
@@ -565,7 +579,7 @@ def check_invariants(sc, logs, fd):
                 break
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
     cuts = []
-    for i, (a, b) in enumerate(zip(starts, starts[1:])):
+    for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
         n = round((b - a) / H_TOTAL)
         if n < V_TOTAL - 1:
             cuts.append(i)
@@ -573,7 +587,7 @@ def check_invariants(sc, logs, fd):
             fd.add('output', 'long_frame', b * T_P, f'frame of {n} lines')
     for a, b in zip(cuts, cuts[1:]):
         if b - a < HOLD:
-            fd.add('output', 'short_frames', starts[b] * T_P, f'short frames {b - a} frames apart')
+            fd.add('output', 'short_frames', starts[b + 1] * T_P, f'short frames {b - a} frames apart')
     # a cut that skips the vsync lines: the sink sees one long frame (noted, not a fault)
     vs = [int(ev[1]) for ev in pix if ev[0] == 'S']
     for a, b in zip(vs, vs[1:]):

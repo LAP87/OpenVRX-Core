@@ -124,7 +124,8 @@ def main():
                 r = rs.get(f'-{c}')
                 if r:
                     g = r['first'] and f"{r['first']['block']}/{r['first']['kind']}"
-                    print(f'  without {c}: {r["result"]} {g}  -> {"not needed" if g == g0 else "NEEDED"}')
+                    still = g0 in r.get('groups', [])
+                    print(f'  without {c}: {r["result"]} {g} {r.get("groups")}  -> {"not needed" if still else "NEEDED"}')
 
 
 if __name__ == '__main__':
