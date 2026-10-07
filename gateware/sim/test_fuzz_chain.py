@@ -93,6 +93,10 @@ SUITE_SEEDS = (3, 5, 8, 13, 21, 34, 55, 89, 144, 233)
 LOW_LOCK_ISSUE = 'LAP87/OpenVRX-Core#17'
 LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/ll', 'output/xz')
 LOW_LOCK_FRAMES = 4             # frames after the switch
+# Output fields the word stream does not mark (same F bit, first line above the last one sent):
+# the store joins them to the field before. Age findings within three field periods after such a
+# start are counted against the issue.
+HIDDEN_ISSUE = 'LAP87/OpenVRX-Core#18'
 BLACK = fb.BLACK_WORD
 
 RTL = ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v', 'chan_capture.v', 'mix_chan.v',
@@ -166,6 +170,7 @@ class Findings:
 
     def __init__(self):
         self.items, self.edges, self.notes, self.known = [], [], [], []
+        self.hidden = []                # ns: output fields the stream does not mark (#18)
 
     def add(self, block, kind, t_ns, detail):
         self.items.append(dict(block=block, kind=kind, t=round(t_ns or 0.0), detail=str(detail)[:500]))
@@ -327,6 +332,14 @@ def check_mixer(sc, logs, recs, marks, fd):
             t2 = cyc_ns(dec[min(j, len(dec) - 1)][5]) if dec else 0
             fd.add('mixer', 'decision' if diff2[0] is not None else 'words', t2,
                    f'cycle-exact: {diff2[1]}; from the streams: {diff[1]}')
+    if not any(d['block'] == 'mixer' for d in fd.items):
+        prev = None
+        for (use, _, f, line), new, d in zip(m.trace, m.newfield, dec):
+            if not use:
+                continue
+            if new and prev is not None and f == prev[0] and line > prev[1]:
+                fd.hidden.append(cyc_ns(d[5]))
+            prev = (f, line)
     if ov is not None:
         fd.add('mixer', 'overflow', cyc_ns(ov), 'overflow set')
     elif m.overflow:
@@ -695,11 +708,15 @@ def sort_known(sc, logs, fd):
     for sw in sws:
         later = [s0 for s0 in starts if s0 > sw]
         wins.append((sw, later[LOW_LOCK_FRAMES] if len(later) > LOW_LOCK_FRAMES else 1 << 60))
+    g = fz.GEOM[sc.geometry][sc.std]
+    span = 3 * (g['vbi'] + g['var'][1] + 1) * g['line'] * fz.T_A
     keep = []
     for d in fd.items:
         pc = d['t'] / T_P
         if f"{d['block']}/{d['kind']}" in LOW_LOCK_GROUPS and any(a <= pc < b for a, b in wins):
             fd.known.append(dict(d, issue=LOW_LOCK_ISSUE))
+        elif d['block'] == 'age' and any(h <= d['t'] < h + span for h in fd.hidden):
+            fd.known.append(dict(d, issue=HIDDEN_ISSUE))
         else:
             keep.append(d)
     fd.items = keep
