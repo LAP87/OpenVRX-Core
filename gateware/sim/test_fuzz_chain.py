@@ -27,7 +27,8 @@ and against six invariants that do not depend on the models:
   4. no SDRAM protocol error (sdram_model.v STRICT);
   5. the mixer's overflow is never set;
   6. every line shown with video comes from a camera field at most two fields older than
-     the newest field the mixer had passed on when the frame started. Frames that a mode
+     the newest field the mixer had passed on when the frame started; a camera field that
+     never reached the output and in which the receivers never paired is not counted. Frames that a mode
      switch runs through are not checked (README: the frame in progress at a switch shows
      what the line buffer holds).
 
@@ -343,8 +344,11 @@ def word_origins(sc, recs, marks, dec, words):
                 ln = fz.camera_line(sc, ch, k - 4)       # the line's last byte before its EAV
                 queue[ch].append(ln.k if ln is not None else -1)
     heads, line_org = {0: 0, 1: 0}, []
+    pairs = {}                                           # camera field -> pairs decided in it
     for d in dec:
         use, pop = d[0], d[1]
+        if pop == 3 and heads[0] < len(queue[0]):
+            pairs[queue[0][heads[0]]] = pairs.get(queue[0][heads[0]], 0) + 1
         if use:
             src = 1 if use == lm.USE_B else 0
             line_org.append(queue[src][heads[src]] if heads[src] < len(queue[src]) else -1)
@@ -358,7 +362,20 @@ def word_origins(sc, recs, marks, dec, words):
         if k > newest:
             newest = k
             run.append((w[5], newest))
+    AGE_FIELDS.clear()
+    AGE_FIELDS.update(set(org) | {k for k, n in pairs.items() if n})
     return org, run
+
+
+# Camera fields that count for the age of a line (invariant 6): those the mixer passed words of,
+# and those in which the two receivers paired (both delivered them in step). A field that no
+# receiver delivered in step and that never reached the output (one silent, the other out of step
+# until N_DEAD of its lines have come: in the scaled geometry that is longer than a field) does not.
+AGE_FIELDS = set()
+
+
+def age(k, k_new):
+    return sum(1 for f in range(k + 1, k_new + 1) if f in AGE_FIELDS)
 
 
 def newest_at(run, cyc):
@@ -565,7 +582,7 @@ def check_display(sc, logs, frames, words, org, run, fd):
                     fd.add('display', 'll_word', t_frame, f"output line {y}: shows {pf['shown'][y]}, slot {slot} held {word}")
                     break
                 k = org[npop] if npop < len(org) else -1
-                if k >= 0 and k < k_new - 2:
+                if k >= 0 and age(k, k_new) > 2:
                     fd.add('age', 'll', t_frame, f'output line {y}: camera field {k}, newest passed on {k_new}')
                     break
                 checked += 1
@@ -595,7 +612,7 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('store', 'unstored', t_frame, f'output line {y} shows source line {s}, read from a line '
                        'not stored since its buffer was taken')
                 break
-            if k is not None and k >= 0 and k < fr.k_new - 2:
+            if k is not None and k >= 0 and age(k, fr.k_new) > 2:
                 fd.add('age', 'buf', t_frame, f'output line {y} (source line {s}): camera field {k}, '
                        f'newest passed on {fr.k_new}')
                 break
