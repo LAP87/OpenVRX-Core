@@ -102,16 +102,32 @@ module puck_ui #(
     end
 
     // ---- state
-    // The channel table lookup is registered (chan), and the decimal digits of the frequency are
-    // registered from that (f_th..f_u below): no combinational path runs from the menu state through
-    // the table into the RX5808 shift register or through the divisions into the text. The SPI write
-    // is started one clock after the channel register has the new channel (chan_step_d below).
+    // The channel table lookup is registered (chan), together with the decimal digits of its
+    // frequency (freq_bcd: the divisions act on constants, one per table entry, and fold away in
+    // synthesis). No combinational path runs from the menu state through the table into the RX5808
+    // shift register or the text. The SPI write starts one clock after chan has the new channel
+    // (chan_step_d below).
+    function [15:0] freq_bcd(input [5:0] i);
+        integer k;
+        reg [41:0] c;
+        reg [12:0] f, d3, d2, d1, d0;
+        begin
+            freq_bcd = 16'd0;
+            for (k = 0; k < 64; k = k + 1)
+                if (i == k) begin
+                    c = vtx_channel(k);
+                    f = c[32:20];
+                    d3 = f / 1000; d2 = (f / 100) % 10; d1 = (f / 10) % 10; d0 = f % 10;
+                    freq_bcd = {d3[3:0], d2[3:0], d1[3:0], d0[3:0]};
+                end
+        end
+    endfunction
     wire [5:0]  idx  = {band, ch};                         // band * 8 + ch
     reg  [41:0] chan;
-    always @(posedge clk) chan <= vtx_channel(idx);
+    reg  [15:0] fbcd;
+    always @(posedge clk) begin chan <= vtx_channel(idx); fbcd <= freq_bcd(idx); end
     wire        legal = chan[41];
     wire [7:0]  band_letter = chan[40:33];
-    wire [12:0] freq = chan[32:20];
     wire [19:0] synth = chan[19:0];
 
     always @(posedge clk) begin
@@ -238,10 +254,7 @@ module puck_ui #(
 
     // ---- text
     function [7:0] dig(input [3:0] d); dig = 8'h30 + d; endfunction
-    reg  [3:0] f_th, f_h, f_t, f_u;                        // registered from chan (see "state")
-    always @(posedge clk) begin
-        f_th <= freq / 1000; f_h <= (freq / 100) % 10; f_t <= (freq / 10) % 10; f_u <= freq % 10;
-    end
+    wire [3:0] f_th = fbcd[15:12], f_h = fbcd[11:8], f_t = fbcd[7:4], f_u = fbcd[3:0];   // see "state"
     wire [7:0] m_sel = (field == 3'd0) ? ">" : " ";
     wire [7:0] m_ch  = (field == 3'd1) ? ">" : " ";
     wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
