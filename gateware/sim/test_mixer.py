@@ -69,10 +69,15 @@ class Stream:
         self.rng = random.Random(seed)
         self.data = bytearray()
 
-    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None, late=0, extra=0):
+    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None, late=0, extra=0, lose=None):
         """late: SAV comes that many bytes late, EAV on time (the active part is shorter).
-        extra: that many more blanking bytes before SAV (the line is too long, its active part whole)."""
+        extra: that many more blanking bytes before SAV (the line is too long, its active part whole).
+        lose: both timing codes of this line are lost (blanking in their place), and that many more
+        blanking bytes: the line before runs on into this one."""
         act = bt656.blanking(1440) if v else active_bytes(fld, n, amp, self.rng)
+        if lose is not None:
+            self.data += bt656.blanking(4 + LINE - 1440 - 8 + lose + 4) + act
+            return
         self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8 + late + extra)
         self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 0) if sav is None else sav]) + act[:1440 - late]
 
@@ -317,6 +322,43 @@ def test_incomplete_line_check_is_tested():
     with pytest.raises(AssertionError, match='decision|word'):
         check('tb_mixer_incomplete_kept', a, b,
               alter={'mix_chan.v': (INCOMPLETE_KEEP, 'wire mark = marker && !full && !skipping;')})
+
+
+RUN_ON_WRAP = "if (act_count != 11'd2047) act_count <= act_count + 11'd1;"
+
+
+def run_on_streams():
+    """Lines that run on into the next ones (their EAV and SAV lost). A: line 6 of field 1 over one
+    line (3156 active bytes), line 4 of field 2 over three (6588). B: line 7 of field 1 over six
+    (11736: the bytes after the last multiple of 2048 are 1496, a whole line of words to an index
+    that wraps). Each is a complete line, bad by its length; the timing of the rest is kept."""
+    lose3 = {VBI + 5 + k: ('lose', 0) for k in range(3)}
+    lose6 = {VBI + 8 + k: ('lose', 0) for k in range(6)}
+    a = Stream(9).field(0).field(1, hooks={VBI + 7: ('lose', 0)}).field(2, hooks=lose3).done()
+    b = Stream(10).field(0).field(1, hooks=lose6).field(2).done()
+    return a, b
+
+
+def test_run_on_line_is_stored_whole():
+    """A line that runs on into the next one has its first 360 words in order: it is stored as
+    a complete line, bad by its length, and the words are its own (found by
+    sim/test_fuzz_chain.py, seed 2: bt656_rx's byte index wrapped at 2048, so the words started
+    again at 0 and the line was taken as incomplete, or stored with words from later bytes)."""
+    a, b = run_on_streams()
+    recs = bt656.Receiver().feed(a) + bt656.Receiver().feed(b)
+    assert sorted(r.length for r in recs if r.active_count == bt656.ACTIVE_MAX) == [3432, 6864, 12012]
+    m = check('tb_mixer_run_on', a, b)
+    for ch, data in ((0, a), (1, b)):
+        whole = sum(1 for r in bt656.Receiver().feed(data) if r.active_count >= 1440)
+        assert sum(1 for _, p, *_ in m.trace if p >> ch & 1) == whole, 'every whole line is decided, run-on ones too'
+
+
+def test_run_on_line_check_is_tested():
+    """Negative control: a bt656_rx.v whose byte index wraps at 2048 disagrees with the model."""
+    a, b = run_on_streams()
+    with pytest.raises(AssertionError, match='decision|word'):
+        check('tb_mixer_run_on_wrap', a, b,
+              alter={'bt656_rx.v': (RUN_ON_WRAP, "act_count <= act_count + 11'd1;")})
 
 
 LONG = ('extra', 8)           # the line is 8 bytes too long: bad (length), but whole and on time

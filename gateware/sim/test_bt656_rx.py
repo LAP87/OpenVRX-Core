@@ -77,6 +77,16 @@ async def f_stuck_fields(dut):
     assert [e['line_in_field'] for e in expected] == [0, 1, 2, 3, 4, 5] * 3      # the vector tests what it claims
 
 
+@cocotb.test()
+async def ntsc_run_on_lines(dut):
+    """Lines whose next EAV and SAV were lost run on into the next line (3156, 6588 and 3496
+    active bytes): the active count saturates at 2047 instead of wrapping, so the line's first
+    1440 bytes stay its first 1440 (found by sim/test_fuzz_chain.py, seed 2)."""
+    await run_vector(dut, 'ntsc_run_on_lines')
+    expected = json.loads((VECTORS / 'ntsc_run_on_lines.expected.json').read_text())
+    assert sum(e['active_count'] == 2047 for e in expected) == 3      # the vector tests what it claims
+
+
 def test_bt656_rx_matches_model():
     """pytest entry point: build with Icarus and run the cocotb tests above."""
     from cocotb_tools.runner import get_runner

@@ -83,7 +83,7 @@ class LineRecord:
     field: int
     line_in_field: int          # active line number since vertical blanking, counted on line starts (see Receiver)
     length: int                 # bytes from the EAV before this line to the EAV ending it (0 if unknown)
-    active_count: int           # bytes between SAV and EAV
+    active_count: int           # bytes between SAV and EAV, saturating at ACTIVE_MAX
     xy_corrected: int           # timing codes fixed by the protection bits
     xy_bad: int                 # timing codes that could not be decoded
     hf_energy: int              # sum |Y[n] - Y[n-1]| over the active luma samples
@@ -93,6 +93,9 @@ class LineRecord:
 
 
 LUMA_LO, LUMA_HI = 16, 235      # nominal luma range; BT.656 allows 1..254 in video data
+ACTIVE_MAX = 2047               # the active byte count saturates here (11 bits in bt656_rx.v): a line
+                                # whose EAV was lost runs on into the next one, and its first 1440
+                                # bytes stay its first 1440
 
 
 def luma_outside(active, lo=LUMA_LO, hi=LUMA_HI):
@@ -136,7 +139,7 @@ class Receiver:
     def _record(self, f):
         luma = list(self.active[1::2])
         hf = sum(abs(a - b) for a, b in zip(luma[1:], luma[:-1]))
-        rec = LineRecord(f, self.line_no, self.pos if self.seen_eav else 0, len(self.active),
+        rec = LineRecord(f, self.line_no, self.pos if self.seen_eav else 0, min(len(self.active), ACTIVE_MAX),
                          self.xy_corrected, self.xy_bad, hf, luma, bytes(self.active),
                          luma_outside(self.active))
         self.xy_corrected = self.xy_bad = 0

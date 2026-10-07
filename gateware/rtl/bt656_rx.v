@@ -27,7 +27,7 @@ module bt656_rx (
     output reg         rec_field,
     output reg  [9:0]  rec_line,       // active line within its field
     output reg  [15:0] rec_length,     // bytes between EAVs (0 = unknown)
-    output reg  [10:0] rec_active,     // active bytes
+    output reg  [10:0] rec_active,     // active bytes (saturates at 2047)
     output reg  [7:0]  rec_xy_corrected,
     output reg  [7:0]  rec_xy_bad,
     output reg  [19:0] rec_hf          // sum |Y[n]-Y[n-1]|
@@ -79,7 +79,8 @@ module bt656_rx (
     reg         in_active;
     reg  [7:0]  dl0, dl1, dl2;  // 3-byte delay of active bytes (dl2 oldest)
     reg  [2:0]  dl_v;
-    reg  [11:0] act_count;      // committed active bytes this line
+    reg  [10:0] act_count;      // committed active bytes this line, saturates at 2047
+    reg         act_odd;        // the next committed byte is luma (Cb Y Cr Y ...)
     reg  [7:0]  prev_y;
     reg         have_prev_y;
     reg  [19:0] hf;
@@ -106,14 +107,18 @@ module bt656_rx (
         begin
             px_valid <= 1'b1;
             px_data  <= dl2;
-            px_index <= act_count[10:0];
-            if (act_count[0]) begin                 // odd index = luma
+            // A line whose EAV was lost runs on into the next line. The index saturates instead
+            // of wrapping to 0, so the words after the first 360 never start the line again
+            // (word_packer, mix_chan's completeness check, luma_writer).
+            px_index <= act_count;
+            if (act_odd) begin                      // odd byte = luma
                 if (have_prev_y)
                     hf <= hf + ((dl2 > prev_y) ? dl2 - prev_y : prev_y - dl2);
                 prev_y      <= dl2;
                 have_prev_y <= 1'b1;
             end
-            act_count <= act_count + 12'd1;
+            act_odd <= ~act_odd;
+            if (act_count != 11'd2047) act_count <= act_count + 11'd1;
         end
     endtask
 
@@ -122,7 +127,7 @@ module bt656_rx (
         rec_valid <= 1'b0;
         if (rst) begin
             state <= 0; pos <= 0; seen_eav <= 0; in_active <= 0;
-            dl_v <= 0; act_count <= 0; hf <= 0; have_prev_y <= 0; prev_y <= 0;
+            dl_v <= 0; act_count <= 0; act_odd <= 1'b0; hf <= 0; have_prev_y <= 0; prev_y <= 0;
             xy_corr_cnt <= 0; xy_bad_cnt <= 0;
             ev_valid <= 0; ev_line <= 0; sav_since_eav <= 0; v_run <= 0; nf_pend <= 0;
             last_eav_valid <= 0; last_eav_v <= 0;
@@ -146,7 +151,7 @@ module bt656_rx (
                             rec_field        <= px_field;
                             rec_line         <= px_line;
                             rec_length       <= seen_eav ? pos_n : 16'd0;
-                            rec_active       <= act_count[10:0];
+                            rec_active       <= act_count;
                             rec_xy_corrected <= xy_corr_cnt + (st == 2'd1);
                             rec_xy_bad       <= xy_bad_cnt;
                             rec_hf           <= hf;
@@ -171,6 +176,7 @@ module bt656_rx (
                         if (st == 2'd1) xy_corr_cnt <= xy_corr_cnt + 8'd1;
                         in_active   <= ~v_d;
                         act_count   <= 0;
+                        act_odd     <= 1'b0;
                         hf          <= 0;
                         have_prev_y <= 1'b0;
                         px_field    <= f_d;

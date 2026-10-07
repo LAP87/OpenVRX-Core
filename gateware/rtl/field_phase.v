@@ -55,7 +55,9 @@ module field_phase #(
                 dly_s <= il ? dly_s - (dly_s >> 2) + (half >> 2) : half;
             end
         end
-        if (rst) begin cnt <= 0; d2 <= 0; have_d2 <= 1'b0; low <= 1'b0; il <= 1'b0; dly_s <= 0; end
+        // cnt starts saturated: the time from reset to the first reference line is not an
+        // interval between two fields, and must not count as one (model/fb_ref.py FieldPhase)
+        if (rst) begin cnt <= {W{1'b1}}; d2 <= 0; have_d2 <= 1'b0; low <= 1'b0; il <= 1'b0; dly_s <= 0; end
     end
 endmodule
 `default_nettype wire
