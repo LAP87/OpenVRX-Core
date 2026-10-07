@@ -14,11 +14,15 @@ What the seed controls
   * without any class: the camera's first line and byte, B's arrival offset against A
     (within +-3 us), the snow on every line of each receiver, the decoder start.
 
-Geometry (scaled down; the RTL runs at the real clock rates, see sim/test_fuzz_chain.py)
+Geometry (geometry='scaled', the default; the RTL runs at the real clock rates, see
+sim/test_fuzz_chain.py)
   NTSC  1716 bytes per line, 24 active lines per field standing for 243, 6 blanking
         lines, one more in every other field when interlaced (262/263 lines);
   PAL   1728 bytes per line, 29 active lines standing for 288, 7 blanking lines.
   N_FIELDS fields. Byte clock 37.0 ns on A (tb_mixer.v); the mixer and SDRAM clock 15.4 ns.
+geometry='full': 243 or 288 active lines and 19 or 24 blanking lines (262/263, 312/313),
+  N_FIELDS_FULL fields, the streams starting in the last fifth of the first one; LOW with PAL
+  is allowed there.
 
 The classes (name: what is injected)
   pal          PAL source (both channels)
@@ -76,9 +80,13 @@ START_NS = 600_000.0               # first byte of A after reset (the SDRAM is r
 ACTIVE = bt656.ACTIVE_BYTES
 
 GEOM = {
-    'ntsc': dict(line=1716, lines=24, vbi=6, var=(23, 25)),
-    'pal': dict(line=1728, lines=29, vbi=7, var=(28, 30)),
+    'scaled': {'ntsc': dict(line=1716, lines=24, vbi=6, var=(23, 25)),
+               'pal': dict(line=1728, lines=29, vbi=7, var=(28, 30))},
+    # the real thing: 262/263 and 312/313 lines per field
+    'full': {'ntsc': dict(line=1716, lines=243, vbi=19, var=(242, 244)),
+             'pal': dict(line=1728, lines=288, vbi=24, var=(286, 288))},
 }
+N_FIELDS_FULL = 4
 
 CLASSES = {                        # name: probability that a seed uses it
     'pal': 0.25, 'progressive': 0.15, 'field_len': 0.40, 'field_cut': 0.20,
@@ -148,6 +156,7 @@ class Scenario:
     ll0: int                       # ll_mode at reset
     ctl: list                      # [(ns after reset, kind CH_A / CH_B / LL, value)]
     lines: dict                    # channel -> [Line] as sent, with .pos (first byte) set
+    geometry: str
     camera: list                   # [(vbi, active lines)] per camera field
     silences: dict                 # channel -> [(first byte, bytes, fill)]
     end_ns: float = 0.0            # last byte of the longer stream, ns after reset
@@ -169,21 +178,23 @@ def _xy_bits(rng, code):
     return code, nb
 
 
-def generate(seed, classes=None, n_fields=N_FIELDS, force=()):
+def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
     """Scenario for one seed. classes: the classes allowed (None: all); each allowed class is
     used with its probability in CLASSES. force: classes used whatever their probability."""
+    if n_fields is None:
+        n_fields = N_FIELDS if geometry == 'scaled' else N_FIELDS_FULL
     enabled = tuple(sorted(set(CLASSES if classes is None else classes) | set(force)))
     unknown = set(enabled) - set(CLASSES)
     assert not unknown, f'unknown classes {unknown}'
     rngs = {c: _rng(seed, c) for c in CLASSES}
     on = {c for c in enabled if rngs[c].random() < CLASSES[c] or c in force}
-    if 'mode_switch' in on and 'pal' in on:
+    if 'mode_switch' in on and 'pal' in on and geometry == 'scaled':
         on.discard('mode_switch')                        # see the docstring
     used = {c: [] for c in sorted(on)}
     base = _rng(seed, 'base')
 
     std = 'pal' if 'pal' in on else 'ntsc'
-    g = GEOM[std]
+    g = GEOM[geometry][std]
     lb = g['line']
     hb0 = lb - ACTIVE - 8
     interlaced = 'progressive' not in on
@@ -214,6 +225,8 @@ def generate(seed, classes=None, n_fields=N_FIELDS, force=()):
     # ---- per channel lines
     snow = {0: _rng(seed, 'snow_a'), 1: _rng(seed, 'snow_b')}
     g0 = base.randrange(vbi[0] + act[0])                  # first camera line of the streams
+    if geometry != 'scaled':
+        g0 = (vbi[0] + act[0]) * 4 // 5 + g0 // 5
     lines = {}
     for ch in (0, 1):
         ls = []
@@ -567,7 +580,8 @@ def generate(seed, classes=None, n_fields=N_FIELDS, force=()):
 
     return Scenario(seed=seed, enabled=enabled, used=used, std=std, interlaced=interlaced,
                     a=bytes(data[0]), b=bytes(data[1]), t_a=T_A, t_b=t_b, start_a=start_a, start_b=start_b,
-                    ll0=ll0, ctl=ctl, lines=sent, camera=list(zip(vbi, act)), silences=silences, end_ns=end_ns)
+                    ll0=ll0, ctl=ctl, lines=sent, geometry=geometry, camera=list(zip(vbi, act)), silences=silences,
+                    end_ns=end_ns)
 
 
 def _silence(buf, p0, nb, fill):

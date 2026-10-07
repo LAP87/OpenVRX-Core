@@ -23,6 +23,7 @@ sys.path.insert(0, str(HERE))
 import test_fuzz_chain as t  # noqa: E402
 
 EST = 140.0                       # seconds one seed takes (about)
+EST_FULL = 450.0                  # the same in the full geometry
 
 
 def results(path):
@@ -32,15 +33,15 @@ def results(path):
 
 
 def _one(args):
-    seed, classes, work, force = args
+    seed, classes, work, force, geometry = args
     try:
-        return t.run_seed(seed, classes, work=Path(work), force=force)
+        return t.run_seed(seed, classes, work=Path(work), force=force, geometry=geometry)
     except Exception as err:      # a crash in the checks is a result too
         return dict(seed=seed, result='crash', groups=['bench/crash'], first=dict(block='bench', kind='crash', t=0,
                     detail=repr(err)[:500]), classes=[], enabled=None if classes is None else sorted(classes))
 
 
-def run_many(jobs_list, out_path, jobs, budget, tag, force=()):
+def run_many(jobs_list, out_path, jobs, budget, tag, force=(), geometry='scaled'):
     """jobs_list: [(key, seed, classes)]; runs those whose key is not in out_path yet."""
     done = {r.get('key', r['seed']) for r in results(out_path)}
     todo = [j for j in jobs_list if j[0] not in done]
@@ -49,10 +50,10 @@ def run_many(jobs_list, out_path, jobs, budget, tag, force=()):
     with cf.ProcessPoolExecutor(max_workers=jobs) as ex:
         running = {}
         while todo or running:
-            while todo and len(running) < jobs and time.time() - t0 + EST < budget:
+            while todo and len(running) < jobs and time.time() - t0 + (EST if geometry == 'scaled' else EST_FULL) < budget:
                 key, seed, classes = todo.pop(0)
                 work = HERE / 'build' / 'fuzz' / tag / f'{key}'
-                running[ex.submit(_one, (seed, classes, str(work), tuple(force)))] = key
+                running[ex.submit(_one, (seed, classes, str(work), tuple(force), geometry))] = key
             if not running:
                 break
             fin, _ = cf.wait(list(running), return_when=cf.FIRST_COMPLETED)
@@ -105,6 +106,7 @@ def main():
     ap.add_argument('--budget', type=float, default=540.0)
     ap.add_argument('--keep', default='')
     ap.add_argument('--force', default='')
+    ap.add_argument('--geometry', default='scaled')
     a = ap.parse_args()
     out = HERE / 'build' / 'fuzz'
     out.mkdir(parents=True, exist_ok=True)
@@ -112,7 +114,7 @@ def main():
         classes = a.classes.split(',') if a.classes else None
         jl = [(s, s, classes) for s in t.parse_seeds(a.seeds)]
         force = [c for c in a.force.split(',') if c]
-        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what, force)
+        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what, force, a.geometry)
     elif a.cmd == 'summary':
         summary(out / f'{a.what}.jsonl')
     else:

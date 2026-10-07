@@ -35,6 +35,9 @@ Scaled geometry (the clocks are the real ones): the fields of model/fuzz_stream.
 (24 or 29 active lines), an output frame of 87 lines of 1650 pixel clocks (1.92 ms,
 720p's line) with 72 active lines (3 per source line, as 720 for 243), RT_NTSC 4,
 RT_HYST 2, RT_PAL 8, RT_SPLIT 26 (between the scaled NTSC and PAL line counts).
+Full geometry (run_seed(geometry='full'), fuzz_campaign.py --geometry full): 243/288
+lines per field, 720p (750 lines, 720 active) and the field store's own thresholds;
+four fields, about seven minutes a seed.
 
 Seeds: FUZZ_SEEDS=0-199 (ranges and commas) runs those, FUZZ_CLASSES=a,b,c limits the
 classes, and each result is appended to build/fuzz/<FUZZ_ROUND>.jsonl. Without
@@ -64,9 +67,22 @@ import fuzz_stream as fz  # noqa: E402
 import line_mixer_ref as lm  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
-V_TOTAL, V_ACTIVE = 87, 72
+H_ALT = 330                     # 720p50 lines are this much longer (fb_backend.v H_FP_ALT 440 against 110)
 MAX_WAIT, HOLD = 8, 32
-RT = dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)
+GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
+    'scaled': dict(V_TOTAL=87, V_ACTIVE=72, V_FP=1, V_SYNC=1, RT=dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)),
+    'full': dict(V_TOTAL=750, V_ACTIVE=720, V_FP=5, V_SYNC=5, RT=dict(RT_NTSC=4, RT_PAL=44, RT_HYST=16, RT_SPLIT=270)),
+}
+
+
+def use_geometry(name):
+    """Set the module's output geometry (one seed at a time per process)."""
+    global V_TOTAL, V_ACTIVE, V_FP, V_SYNC, RT
+    g = GEOMETRIES[name]
+    V_TOTAL, V_ACTIVE, V_FP, V_SYNC, RT = g['V_TOTAL'], g['V_ACTIVE'], g['V_FP'], g['V_SYNC'], g['RT']
+
+
+use_geometry('scaled')
 T_PAIR = lm.T_PAIR_CYCLES
 EXT_DELAY = 3                   # a control change at cycle C reaches mix_chan's bad flag at C + 3
 EDGE_NS = 1000.0                # arrival differences this close to 0 or T_PAIR are reported as the edge
@@ -110,7 +126,7 @@ def run_sim(sc, work, alter=None, timeout=3000):
     (work / 'ctl.hex').write_text(''.join(f'{c << 3 | k << 1 | v:09x}\n' for c, k, v in ctl))
     p = dict(N_A=len(sc.a), N_B=len(sc.b), N_CTL=len(ctl), T_A=sc.t_a, T_B=round(sc.t_b, 6),
              START_A=round(sc.start_a, 3), START_B=round(sc.start_b, 3), LL=sc.ll0,
-             V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, **RT)
+             V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC, **RT)
     rtl = [GW / 'rtl' / n for n in RTL]
     for fname, (old, new) in (alter or {}).items():
         text = (GW / 'rtl' / fname).read_text()
@@ -619,9 +635,10 @@ def check_invariants(sc, logs, fd):
                 fd.add('display', 'switch_video', after[0] * T_P,
                        f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
+    alt = {int(ev[1]): num(ev[5]) for ev in pix if ev[0] == 'V' and len(ev) > 5}
     cuts = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
-        n = round((b - a) / H_TOTAL)
+        n = round((b - a) / (H_TOTAL + H_ALT * (alt.get(a) or 0)))
         if n < V_TOTAL - 1:
             cuts.append(i)
         elif n > V_TOTAL + MAX_WAIT:
@@ -665,10 +682,11 @@ def sort_known(sc, logs, fd):
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=fz.N_FIELDS, force=()):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled'):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes, n_fields=n_fields, force=force)
+    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry)
+    use_geometry(geometry)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
     try:
@@ -686,12 +704,12 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=fz.
         checked = check_display(sc, logs, frames, words, org, run, fd)
         check_invariants(sc, logs, fd)
         sort_known(sc, logs, fd)
-        if checked < 2 * V_ACTIVE:
+        if checked < (2 if geometry == 'scaled' else 1) * V_ACTIVE:
             fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
     if not keep and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
-               std=sc.std, ll0=sc.ll0,
+               std=sc.std, ll0=sc.ll0, geometry=geometry,
                result='fail' if fd.items else ('known' if fd.known else ('edge' if fd.edges else 'pass')),
                known=fd.known[:4],
                groups=fd.groups(), first=fd.first(), findings=fd.items[:12], edges=fd.edges[:4],
