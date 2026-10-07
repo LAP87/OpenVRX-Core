@@ -53,6 +53,20 @@ def cases():
                      + bytes([0xFF, 0, 0, bt656.xy(1, v, 0)]) + act)
     yield 'f_stuck_fields', bytes(data) + bytes([0xFF, 0, 0, bt656.xy(1, 1, 1)]) + bt656.blanking(1716 - 1440 - 8)
 
+    # lines that run on: the next line's EAV and SAV are lost (blanking in their place), so the
+    # active part goes on to the following EAV. NTSC lines 30-44: line 31 runs on over one line
+    # (3156 active bytes), line 34 over three (6588, past 4096), line 39 over one line that is
+    # 340 bytes long (3496: its bytes from 2048 on are 1448, a whole line of words to a counter
+    # that wraps). The active count saturates at 2047; the first 1440 bytes are the line's own.
+    lines = [bytearray(bt656.line_bytes('ntsc', n, bytes(b for x in range(720) for b in (0x80, ramp(n, x)))))
+             for n in range(30, 45)]
+    blank4 = bytes(bt656.blanking(4))
+    for i, extra in ((2, 0), (5, 0), (6, 0), (7, 0), (10, 340)):
+        lines[i][0:4] = blank4                                  # EAV
+        lines[i][272:276] = blank4                              # SAV (after 268 blanking bytes)
+        lines[i][4:4] = bt656.blanking(extra)
+    yield 'ntsc_run_on_lines', b''.join(lines) + bt656.line_bytes('ntsc', 45)
+
     # impulse noise for the out-of-range luma count (noise_stats.v): NTSC lines 16-56 (vertical
     # blanking, then 37 active lines from line 0). Luma spikes on both sides of 16..235, with the
     # boundary values 15/16 and 235/236; chroma spikes outside 16..240 that must not be counted;

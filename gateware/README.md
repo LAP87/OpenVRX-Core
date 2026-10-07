@@ -21,13 +21,13 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M2, M2s och M3 är ombyggda 2026-10-07 ur commit f13581c med `build.sh` (frysta indata, manifest i `build/<top>.build.json`); M6 2026-10-07 ur 330cc9a (låsflaggan i loggen; seedtabellen under "Bygget av M6" gäller a5b934f), M4 ur 2a23e05 (mixern lämnar ute rader som är dåliga i båda kanalerna); M1, M1s och M2a 2026-10-06 ur 62a69be, och deras RTL är oförändrad sedan dess. Kravet är 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (368 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (370 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
 | Modul | Vad | Test |
 |---|---|---|
-| `bt656_rx.v` | BT.656-mottagare + mått per rad (synkord med felrättning, radlängd, HF-energi). Radnummer räknas från vertikalsläckningen (två synkord i följd med V = 1), inte från F-biten | `sim/test_bt656_rx.py`: bitexakt mot `model/bt656.py` |
+| `bt656_rx.v` | BT.656-mottagare + mått per rad (synkord med felrättning, radlängd, HF-energi). Radnummer räknas från vertikalsläckningen (två synkord i följd med V = 1), inte från F-biten. Antalet aktiva byte mättas vid 2 047: en rad vars EAV har tappats löper vidare in i nästa, och dess första 1 440 byte förblir dess egna (till 2026-10-07 slog räknaren runt vid 2 048, så orden började om på 0 och raden räknades som ofullständig eller fick ord ur senare rader; hittat med `sim/test_fuzz_chain.py`) | `sim/test_bt656_rx.py`: bitexakt mot `model/bt656.py`; `sim/test_mixer.py::test_run_on_line_is_stored_whole` |
 | `luma_writer.v` | Varannan lumasampel → bildminnesadress (360 kolumner × 240 rader) | `sim/test_m1_input.py`: varje skrivning mot modellen |
 | `dual_clock_ram.v` | Bildminne, skriv på TVP-klockan, läs på pixelklockan (BSRAM) | via M1-bygget |
 | `tmds_encoder.v` | DVI TMDS 8b/10b (utan signerade jämförelser, se nedan) | `sim/test_video.py`: 4 200 symboler mot Python-implementation av DVI-specen |
