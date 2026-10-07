@@ -179,12 +179,13 @@ module tb_chain;
     end
 
     // ---- pixel domain log: frame geometry, source line and word per output line, the mode
-    integer pc = 0;
+    integer pc = 0, nl = 0;               // nl: line starts since the last frame start (line lengths may differ)
     always @(posedge pix_clk) begin
         pc <= pc + 1;
         if (!rst) begin
+            if (be.x == 0) nl <= (be.y == 0) ? 1 : nl + 1;
             if (be.x == 0 && be.y == 0)
-                $fwrite(fp, "V %0d %0d %0d %0d %0d\n", pc, be.disp.lines, be.disp.have_video, be.ll_p, be.timing.alt);
+                $fwrite(fp, "V %0d %0d %0d %0d %0d %0d\n", pc, be.disp.lines, be.disp.have_video, be.ll_p, be.timing.alt, nl);
             if (be.x == 4 && be.y == 0) $fwrite(fp, "B %0d\n", be.disp.low_r);
             if (be.x == 300 && be.y < V_ACTIVE) $fwrite(fp, "Y %0d %0d\n", be.y, be.disp.src_cur);
             // the word read for source pixel 104/105 (x = 300 is window pixel 140, source pixel 105)

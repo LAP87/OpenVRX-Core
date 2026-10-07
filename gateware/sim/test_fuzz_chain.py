@@ -68,7 +68,6 @@ import fuzz_stream as fz  # noqa: E402
 import line_mixer_ref as lm  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
-H_ALT = 330                     # 720p50 lines are this much longer (fb_backend.v H_FP_ALT 440 against 110)
 MAX_WAIT, HOLD = 8, 32
 GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
     'scaled': dict(V_TOTAL=87, V_ACTIVE=72, V_FP=1, V_SYNC=1, RT=dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)),
@@ -672,10 +671,12 @@ def check_invariants(sc, logs, fd):
                 fd.add('display', 'switch_video', after[0] * T_P,
                        f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
-    alt = {int(ev[1]): num(ev[5]) for ev in pix if ev[0] == 'V' and len(ev) > 5}
+    # lines of the frame that ends at each frame start, counted by the bench (720p50 lines are
+    # longer, and genlock_timing.v changes the length on a frame's last, waiting lines)
+    nlines = {int(ev[1]): num(ev[6]) for ev in pix if ev[0] == 'V' and len(ev) > 6}
     cuts = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
-        n = round((b - a) / (H_TOTAL + H_ALT * (alt.get(a) or 0)))
+        n = nlines[b] if nlines.get(b) is not None else round((b - a) / H_TOTAL)
         if n < V_TOTAL - 1:
             cuts.append(i)
         elif n > V_TOTAL + MAX_WAIT:
