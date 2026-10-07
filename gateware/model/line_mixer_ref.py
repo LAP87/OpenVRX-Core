@@ -38,6 +38,9 @@ use 0 (`omitted` says which ones were left out by this rule).
 Output order. Line numbers leave strictly increasing within a field. Each
 channel has a field counter (advanced when its own line number restarts); a
 line is admitted when it starts a new field or lies above the last line sent.
+Whether it starts a new field is judged on a channel that has a line in the
+current output field: for a pair whose current channel has none (the other one
+carried the field), on the partner.
 The F bit of the output is latched from the first line of each output field.
 
 Time is in ns, or in system clock edges. The RTL measures ages in system-clock
@@ -229,13 +232,15 @@ class Mixer:
             self._solo(min(due)[1])
             self._pairs()
 
-    def _admit(self, ch, e, owner, step):
-        """May this line leave now? Updates the output field state when it may."""
+    def _admit(self, ch, e, owner, step, judge=None):
+        """May this line leave now? Updates the output field state when it may. judge: the channel
+        whose output field state and field counter decide, if not ch (a pair, see _pair)."""
         f, l = e.rec.field, e.rec.line_in_field
+        jc, je = (ch, e) if judge is None else judge
         if not self.o_valid:
             ok = new = True
-        elif self.join[ch]:
-            if e.fc == self.o_fc[ch]:
+        elif self.join[jc]:
+            if je.fc == self.o_fc[jc]:
                 ok, new = l > self.o_line, False
             else:                                   # this channel has moved on to its next field
                 ok = new = owner or step
@@ -282,8 +287,11 @@ class Mixer:
     def _pair(self):
         a, b = self.q[0][0], self.q[1][0]
         use, self.cur = decide_pair(a.rec.hf_energy, b.rec.hf_energy, self.cur, a.bad, b.bad)
-        own = (a, b)[self.cur]
-        show = self._admit(self.cur, own, owner=True, step=True)
+        own, other = (a, b)[self.cur], 1 - self.cur
+        # a current channel with no line in this output field (the other one carried it) is judged
+        # on the partner's field counter: both lines carry the same number
+        judge = (other, (a, b)[other]) if not self.join[self.cur] and self.join[other] else None
+        show = self._admit(self.cur, own, owner=True, step=True, judge=judge)
         if show:
             other = 1 - self.cur
             self.join[other] = True

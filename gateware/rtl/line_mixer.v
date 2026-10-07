@@ -153,9 +153,13 @@ module line_mixer #(
     wire       c_step  = pair ? 1'b1 : in_step;
     wire       c_f     = c ? fb : fa;
     wire [9:0] c_l     = c ? lb : la;
-    wire [1:0] c_fc    = c ? fcb : fca;
-    wire       c_join  = c ? join_b : join_a;
-    wire [1:0] c_ofc   = c ? o_fc_b : o_fc_a;
+    // A pair whose current channel has no line in this output field (the other channel carried
+    // it) is judged on the partner's field counter: the two lines carry the same number, and only
+    // the partner knows whether it has moved on to its next field.
+    wire       c_alt   = pair && !(c ? join_b : join_a) && (c ? join_a : join_b);
+    wire [1:0] c_fc    = (c ^ c_alt) ? fcb : fca;
+    wire       c_join  = (c ^ c_alt) ? join_b : join_a;
+    wire [1:0] c_ofc   = (c ^ c_alt) ? o_fc_b : o_fc_a;
     reg adm_ok, adm_new;
     always @* begin
         if (!o_valid)                begin adm_ok = 1'b1;              adm_new = 1'b1; end

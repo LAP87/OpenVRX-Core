@@ -513,6 +513,44 @@ def test_channel_returns_with_wrong_line_numbers():
     complete(m.trace, 3)
 
 
+JUDGE = "wire       c_alt   = pair && !(c ? join_b : join_a) && (c ? join_a : join_b);"
+
+
+def return_streams():
+    """A is silent for the whole of field 1 after two blanking lines; B carries field 1 and
+    reports no lock from field 2's blanking to field 3's. A is the cleaner receiver."""
+    s = Stream(1).field(0, amp=0)
+    s.line(1, 1)                                  # two blanking lines close field 0, then nothing
+    s.line(1, 1)
+    s.gap(VBI - 2 + LINES)
+    a = s.field(2, amp=0).field(3, amp=0).done()
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).field(3, amp=25).done()
+    on = RST_NS + START_B + (2 * (VBI + LINES) + VBI // 2) * LINE * T_B
+    return a, b, on, on + (VBI + LINES) * LINE * T_B
+
+
+def test_returning_channel_starts_the_next_field():
+    """A is silent for field 1 and B carries it; in field 2 A is back in step and B reports no
+    lock, so every pair goes to A. A had no line in output field 1, and a pair was judged only on
+    the current channel's field counter: A's lines all lay below line 23, the last one sent, and
+    no field was shown again for as long as A stayed the cleaner receiver (found by
+    sim/test_fuzz_chain.py, round d1, seed 48). Such a pair is now judged on the partner, which
+    has moved on to its next field: fields 2 and 3 are shown whole, and the F bit is A's."""
+    a, b, on, off = return_streams()
+    m = check('tb_mixer_return_field', a, b, {'EXTB_ON': on, 'EXTB_OFF': off}, ext=lambda ev: (False, window(ev, on, off)))
+    got = out_fields(m.trace)
+    assert got == [(0, list(range(LINES))), (1, list(range(LINES))), (0, list(range(LINES))), (1, list(range(LINES)))],         [(f, len(ls)) for f, ls in got]
+
+
+def test_returning_channel_check_is_tested():
+    """Negative control: line_mixer.v judging the pair on the current channel only disagrees
+    with the model."""
+    a, b, on, off = return_streams()
+    with pytest.raises(AssertionError, match='decision|word'):
+        check('tb_mixer_return_field_old', a, b, {'EXTB_ON': on, 'EXTB_OFF': off},
+              ext=lambda ev: (False, window(ev, on, off)), alter={'line_mixer.v': (JUDGE, "wire       c_alt   = 1'b0;")})
+
+
 def test_unlocked_decoder_in_step_loses():
     """Decoder B reports no lock the whole time (I2C status): every line comes from A."""
     a = Stream(1).field(0).field(1).done()
