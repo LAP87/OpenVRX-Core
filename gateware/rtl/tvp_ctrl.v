@@ -12,11 +12,20 @@
 //              default and in TI's example 5.2.2 (C0h). Two decoders on noise can
 //              then not disagree about SECAM.
 //   0Dh = 47h  8-bit 4:2:2 ITU-R BT.656, embedded syncs
+//   28h = 00h  video standard: autoswitch (VIDEO_STD; SLES209E 3.21.32). Written although it is
+//              the default, so that both decoders are set alike after any reset. Not forced to
+//              NTSC or PAL: the puck takes cameras of either standard.
+//   02h = 20h  TV/VCR mode fixed to VCR (OP_MODE bits 5:4 = 10; SLES209E 3.21.3). In automatic
+//              mode a decoder switches to VCR on unstable or nonstandard sync (comb filter off,
+//              chroma trap on), and two decoders could then filter differently. All other bits
+//              of 02h at their defaults (0). Which fixed mode holds lock better is not measured.
 //   03h = 0Dh  YCbCr, sync and SCLK outputs enabled (default 01h keeps the bus off)
 // 03h goes last, and the list stops at the first write that is not
 // acknowledged. So 03h = 0Dh means the whole list arrived.
 //
 // Then every POLL_MS, per decoder, read
+// (88h bit 4 is cleared by the decoder when 88h is read, so each round's bit covers the time
+//  since the previous round; nothing else clears it)
 //   88h  status 1: bit0 VCR, bit1 H lock, bit2 V lock, bit3 colour lock, bit4 lost
 //        lock since the last read, bit5 field rate (0 = 60 Hz, 1 = 50 Hz), bit6 line
 //        alternating (PAL), bit7 peak white
@@ -43,7 +52,9 @@ module tvp_ctrl #(
     parameter [6:0] DEV0 = 7'h5C,
     parameter [6:0] DEV1 = 7'h5D,
     parameter POWER_MS = 20, RESET_MS = 2, BOOT_MS = 1, POLL_MS = 20,
-    parameter SPLIT_SDA = 0
+    parameter SPLIT_SDA = 0,
+    parameter [7:0] VIDEO_STD = 8'h00,    // register 28h, see above
+    parameter [7:0] OP_MODE = 8'h20       // register 02h, see above
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -59,18 +70,21 @@ module tvp_ctrl #(
     output reg  [1:0]  status_valid,      // the decoder's last poll round was whole and found it up
     output reg  [7:0]  reinit0,           // times decoder 0 was found reset and brought up again (stops at FFh)
     output reg  [7:0]  reinit1,
+    output reg  [1:0]  round_ok,          // pulse: a whole poll round found the decoder up (status words new now)
     input  wire        hold,              // another master on the same bus wants it: start nothing new
     output wire        active             // a transaction is starting or running
 );
     localparam MS = CLK_HZ / 1000;
-    localparam N_INIT = 4;
+    localparam N_INIT = 6;
     localparam [7:0] MISC_ON = 8'h0D;     // register 03h when the decoder is up
 
-    function [15:0] init_rom(input [1:0] i);
+    function [15:0] init_rom(input [2:0] i);
         case (i)
-            2'd0: init_rom = 16'h00_00;
-            2'd1: init_rom = 16'h04_FC;
-            2'd2: init_rom = 16'h0D_47;
+            3'd0: init_rom = 16'h00_00;
+            3'd1: init_rom = 16'h04_FC;
+            3'd2: init_rom = 16'h0D_47;
+            3'd3: init_rom = {8'h28, VIDEO_STD};
+            3'd4: init_rom = {8'h02, OP_MODE};
             default: init_rom = {8'h03, MISC_ON};
         endcase
     endfunction
@@ -81,14 +95,14 @@ module tvp_ctrl #(
             default: poll_reg = 8'h03;
         endcase
     endfunction
-    localparam [1:0] P_LAST = 2'd2;       // index of the read-back in poll_reg
+    localparam [2:0] P_LAST = 3'd2;       // index of the read-back in poll_reg
 
     localparam S_POWER = 3'd0, S_RESET = 3'd1, S_BOOT = 3'd2, S_INIT = 3'd3, S_WAIT = 3'd4, S_POLL = 3'd5,
                S_NEXT = 3'd6;
     reg [2:0]  st, ret;                   // ret: state after the running transaction
     reg [31:0] t;
     reg        di;                        // decoder index
-    reg [1:0]  ii;                        // init entry / poll register
+    reg [2:0]  ii;                        // init entry / poll register
     reg        again;                     // the running init list is a re-initialisation inside a poll round
     reg [7:0]  p88, p89;                  // the running poll round's status, published when the round is whole
 
@@ -111,6 +125,7 @@ module tvp_ctrl #(
 
     always @(posedge clk) begin
         start <= 1'b0;
+        round_ok <= 2'b00;
         case (st)
         S_POWER: begin tvp_resetb <= 1'b1; t <= t + 1; if (t == POWER_MS * MS) begin t <= 0; st <= S_RESET; end end
         S_RESET: begin tvp_resetb <= 1'b0; t <= t + 1; if (t == RESET_MS * MS) begin t <= 0; st <= S_BOOT; end end
@@ -133,7 +148,7 @@ module tvp_ctrl #(
                 if (nack) begin                                      // the round is void
                     dev_err[di] <= 1'b1; status_valid[di] <= 1'b0; st <= S_NEXT;
                 end else if (ii != P_LAST) begin                     // next register at once
-                    if (ii == 2'd0) p88 <= rdata; else p89 <= rdata;
+                    if (ii == 3'd0) p88 <= rdata; else p89 <= rdata;
                     ii <= ii + 1'b1; st <= S_POLL; t <= POLL_MS * MS;
                 end else begin                                       // a whole round: publish it
                     if (di) status1 <= {p89, p88}; else status0 <= {p89, p88};
@@ -145,6 +160,7 @@ module tvp_ctrl #(
                         again <= 1'b1; ii <= 0; st <= S_INIT;
                     end else begin
                         status_valid[di] <= 1'b1;
+                        round_ok[di] <= 1'b1;
                         st <= S_NEXT;
                     end
                 end
@@ -153,7 +169,7 @@ module tvp_ctrl #(
         S_POLL: begin
             if (t < POLL_MS * MS) t <= t + 1;
             else if (!busy && !start && !hold) begin
-                start <= 1'b1; rw <= 1'b1; dev <= di ? DEV1 : DEV0; addr <= poll_reg(ii);
+                start <= 1'b1; rw <= 1'b1; dev <= di ? DEV1 : DEV0; addr <= poll_reg(ii[1:0]);
                 st <= S_WAIT; ret <= S_POLL;
             end
         end
@@ -167,7 +183,7 @@ module tvp_ctrl #(
         if (rst) begin
             st <= S_POWER; t <= 0; tvp_resetb <= 1'b1; init_done <= 1'b0; dev_err <= 2'b00;
             status_valid <= 2'b00; status0 <= 0; status1 <= 0; di <= 0; ii <= 0; start <= 1'b0;
-            again <= 1'b0; reinit0 <= 0; reinit1 <= 0;
+            again <= 1'b0; reinit0 <= 0; reinit1 <= 0; round_ok <= 2'b00;
         end
     end
 endmodule

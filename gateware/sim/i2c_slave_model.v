@@ -2,7 +2,8 @@
 // auto-increment). Drives sda_low only while SCL is low.
 //
 // Register defaults are the TVP5150AM1's (SLES209E table 3-11) where the tests
-// look: 03h = 01h (outputs off), 04h = DCh (autoswitch mask). 0Dh starts at 00h
+// look: 03h = 01h (outputs off), 04h = DCh (autoswitch mask), 02h = 00h (TV/VCR
+// mode automatic), 28h = 00h (video standard autoswitch). 0Dh starts at 00h
 // instead of the real 47h, so that a test can see it being written.
 // Status as a healthy NTSC input reads (SLES209E 3.21.49, 3.21.50):
 //   88h = 0Eh  H, V and colour lock; bit5 = 0: 60 Hz; bit6 = 0: not line alternating
@@ -40,6 +41,7 @@ module i2c_slave_model #(
     task tvp_reset;
         begin
             regs[8'h00] = 8'h00; regs[8'h03] = 8'h01; regs[8'h04] = 8'hDC; regs[8'h0D] = 8'h00;
+            regs[8'h02] = 8'h00; regs[8'h28] = 8'h00;
         end
     endtask
     initial begin

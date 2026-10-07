@@ -40,9 +40,9 @@ module tb_probe;
     i2c_slave_model #(.ADDR(7'h5C)) tvp_b (.scl(scl), .sda(sda_b), .sda_low(s_b));
 
     // CLK_HZ only scales the millisecond timers (I2C start-up, UART, RX5808 writes) so the run stays
-    // short: one probe millisecond is 0.1 ms here. RX5808: first write after 2 ms, repeats 5 ms apart.
+    // short: one probe millisecond is 0.1 ms here. RX5808: first write after 2 ms, repeats 8 ms apart (after the first status read, ~8 ms).
     m3_probe #(.CLK_HZ(2_700_000), .WINDOW(WINDOW), .BAUD(2_700_000 / DIV), .POWER_MS(1),
-               .RX_FIRST_MS(20), .RX_REPEAT_MS(50)) dut (
+               .RX_FIRST_MS(20), .RX_REPEAT_MS(80)) dut (
         .clk(clk), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
         .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
         .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n), .led(led), .uart_txd(txd));
@@ -71,7 +71,7 @@ module tb_probe;
 
     // both decoders report lock from the start (the model's default) and lose it at UNLOCK;
     // decoder B is reset once at B_RESET (its registers fall back to their defaults)
-    localparam B_RESET = 12_000_000, UNLOCK = 32_000_000;
+    localparam B_RESET = 15_000_000, UNLOCK = 32_000_000;
     initial begin
         #(B_RESET);
         tvp_b.tvp_reset;

@@ -1,7 +1,7 @@
 """tvp_ctrl (I2C bring-up, status polling and re-initialisation of our own
 TVP5150AM1s) against behavioural I2C slaves.
 
-Start-up: RESETB pulse, four register writes per decoder (03h last), status
+Start-up: RESETB pulse, six register writes per decoder in a fixed order (03h last), status
 from 88h/89h. Afterwards 03h is read back in every poll round: a decoder whose
 registers are back at their defaults gets the list again, and that is counted.
 Controls: an undisturbed run counts nothing and writes nothing more; a decoder
@@ -25,6 +25,9 @@ sys.path.insert(0, str(HERE))
 import tvp_status  # noqa: E402
 
 INIT = ('0d', 'fc', '47')           # 03h, 04h, 0Dh after the init list (00h = 00h is the default anyway)
+SET = ('20', '00')                  # 02h (TV/VCR mode: VCR), 28h (video standard: autoswitch, also the default)
+INIT_LIST = [('00', '00'), ('04', 'fc'), ('0d', '47'), ('28', '00'), ('02', '20'), ('03', '0d')]
+N = len(INIT_LIST)
 ST_NTSC, ST_PAL = '000e', '306e'    # {89h, 88h} of the two decoder models: healthy NTSC and healthy PAL
 
 
@@ -73,7 +76,9 @@ def run(present1, split=0, scenario=0, alter=None):
     assert 'timeout' not in line, out[-2000:]
     mid = next((l for l in out.splitlines() if l.startswith('MID')), None)
     fields = lambda l: dict(re.findall(r'(\w+)=(\w+)', l))
-    return fields(line), fields(mid) if mid else None
+    r = fields(line)
+    r['log'] = re.findall(r'^I2C W (\w\w) (\w\w)$', out, re.M)       # decoder 0's writes, in order
+    return r, fields(mid) if mid else None
 
 
 def test_two_decoders():
@@ -82,7 +87,8 @@ def test_two_decoders():
     assert r['err'] == '0'
     assert (r['s0_03'], r['s0_04'], r['s0_0d'], r['s0_00']) == (*INIT, '00')
     assert (r['s1_03'], r['s1_04'], r['s1_0d']) == INIT
-    assert r['s0_writes'] == '4' and r['s1_writes'] == '4'          # nothing is written again
+    assert (r['s0_02'], r['s0_28']) == SET and (r['s1_02'], r['s1_28']) == SET
+    assert r['s0_writes'] == str(N) and r['s1_writes'] == str(N)    # nothing is written again
     assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL and r['valid'] == '3'
     assert r['reinit0'] == '0' and r['reinit1'] == '0'
 
@@ -100,7 +106,8 @@ def test_same_address_split_sda():
     r, _ = run(1, split=1)
     assert r['err'] == '0'
     assert (r['s0_03'], r['s0_04'], r['s0_0d']) == INIT and (r['s1_03'], r['s1_04'], r['s1_0d']) == INIT
-    assert r['s0_writes'] == '4' and r['s1_writes'] == '4'
+    assert (r['s0_02'], r['s0_28']) == SET and (r['s1_02'], r['s1_28']) == SET
+    assert r['s0_writes'] == str(N) and r['s1_writes'] == str(N)
     assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL and r['valid'] == '3'
 
 
@@ -109,9 +116,10 @@ def test_reset_decoder_is_brought_up_again():
     RESETB is not pulsed and decoder 0 is left alone."""
     for split in (0, 1):
         r, mid = run(1, split=split, scenario=1)
-        assert (mid['s1_03'], mid['s1_04'], mid['s1_0d']) == INIT and mid['reinit1'] == '1' and mid['s1_writes'] == '8'
-        assert (r['s1_03'], r['s1_04'], r['s1_0d']) == INIT and r['reinit1'] == '2' and r['s1_writes'] == '12'
-        assert r['reinit0'] == '0' and r['s0_writes'] == '4' and r['s0_03'] == '0d'
+        assert (mid['s1_03'], mid['s1_04'], mid['s1_0d']) == INIT and mid['reinit1'] == '1' and mid['s1_writes'] == str(2 * N)
+        assert (mid['s1_02'], mid['s1_28']) == SET
+        assert (r['s1_03'], r['s1_04'], r['s1_0d']) == INIT and r['reinit1'] == '2' and r['s1_writes'] == str(3 * N)
+        assert r['reinit0'] == '0' and r['s0_writes'] == str(N) and r['s0_03'] == '0d'
         assert r['err'] == '0' and r['reset_falls'] == '1'
 
 
@@ -120,8 +128,8 @@ def test_reinit_counter_saturates():
     (more than 255 of them in this run): the counter stops at 255."""
     r, _ = run(1, scenario=2)
     assert r['s1_03'] == '01' and r['reinit1'] == '255'
-    assert int(r['s1_writes']) > 4 * 256
-    assert r['reinit0'] == '0' and r['s0_writes'] == '4' and r['err'] == '0'
+    assert int(r['s1_writes']) > N * 256
+    assert r['reinit0'] == '0' and r['s0_writes'] == str(N) and r['err'] == '0'
     assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL            # status polling goes on
     assert r['valid'] == '1'                                     # ... but decoder 1 is never up
 
@@ -131,7 +139,7 @@ def test_sda_shorted_low_shows_in_the_counter():
     the error flag stays clear. What gives it away is status 0000 with the counter at 255."""
     r, _ = run(1, split=1, scenario=4)
     assert r['err'] == '0' and r['st1'] == '0000' and r['reinit1'] == '255' and r['s1_writes'] == '0'
-    assert r['reinit0'] == '0' and r['s0_writes'] == '4' and r['st0'] == ST_NTSC
+    assert r['reinit0'] == '0' and r['s0_writes'] == str(N) and r['st0'] == ST_NTSC
     assert r['valid'] == '1'                                     # 03h never reads 0Dh: decoder 1 never valid
 
 
@@ -144,7 +152,7 @@ def test_failed_poll_round_is_not_valid(scenario):
     r, mid = run(1, scenario=scenario)
     assert mid['err'] == '2' and mid['valid'] == '1' and mid['st1'] == ST_PAL, mid
     assert r['err'] == '0' and r['valid'] == '3' and r['st1'] == ST_PAL and r['st0'] == ST_NTSC, r
-    assert r['reinit1'] == '0' and r['s1_writes'] == '4'
+    assert r['reinit1'] == '0' and r['s1_writes'] == str(N)
 
 
 def test_failed_poll_round_check_is_tested():
@@ -158,7 +166,31 @@ def test_late_decoder_and_error_flag():
     """Decoder 1 is not on the bus at start (error flag set), joins later (brought up, flag
     cleared: it is no longer sticky) and leaves again (flag set)."""
     r, mid = run(0, scenario=3)
-    assert mid['err'] == '0' and mid['reinit1'] == '1' and mid['s1_writes'] == '4'
+    assert mid['err'] == '0' and mid['reinit1'] == '1' and mid['s1_writes'] == str(N)
     assert (mid['s1_03'], mid['s1_04'], mid['s1_0d']) == INIT and mid['valid'] == '3' and mid['st1'] == ST_PAL
-    assert r['err'] == '2' and r['reinit1'] == '1' and r['s1_writes'] == '4'
-    assert r['reinit0'] == '0' and r['s0_writes'] == '4'
+    assert r['err'] == '2' and r['reinit1'] == '1' and r['s1_writes'] == str(N)
+    assert r['reinit0'] == '0' and r['s0_writes'] == str(N)
+
+
+WRONG_OP_MODE = ("parameter [7:0] OP_MODE = 8'h20", "parameter [7:0] OP_MODE = 8'h30")
+WRONG_ORDER = ("3'd3: init_rom = {8'h28, VIDEO_STD};\n            3'd4: init_rom = {8'h02, OP_MODE};",
+               "3'd3: init_rom = {8'h02, OP_MODE};\n            3'd4: init_rom = {8'h28, VIDEO_STD};")
+
+
+def init_list_ok(r):
+    return r['log'] == INIT_LIST and (r['s0_02'], r['s0_28']) == SET
+
+
+def test_init_list_in_order():
+    """Decoder 0 gets exactly the init list, in order, once: 28h (autoswitch) and 02h (VCR mode)
+    are written explicitly, 03h last (SLES209E 3.21.3, 3.21.32; README under M4)."""
+    r, _ = run(1)
+    assert r['log'] == INIT_LIST, r['log']
+    assert init_list_ok(r)
+
+
+@pytest.mark.parametrize('alter', [WRONG_OP_MODE, WRONG_ORDER], ids=['op_mode_tv', 'order'])
+def test_init_list_check_is_tested(alter):
+    """Negative controls: 02h = 30h (TV mode instead of VCR), or 02h written before 28h."""
+    r, _ = run(1, alter=alter)
+    assert not init_list_ok(r), r['log']

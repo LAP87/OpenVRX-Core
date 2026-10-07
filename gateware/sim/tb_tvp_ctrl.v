@@ -1,5 +1,6 @@
 // tvp_ctrl + i2c_master against two behavioural I2C slaves.
-// Prints the slaves' registers and the controller's outputs for sim/test_tvp_ctrl.py.
+// Prints the slaves' registers and the controller's outputs for sim/test_tvp_ctrl.py;
+// decoder 0's slave also logs every register write and read ("I2C W rr dd").
 //   PRESENT1 = 0   decoder 1 is not on the bus at start
 //   SPLIT = 1      both slaves at 5Ch on separate SDA lines
 //   SCENARIO 0     nothing happens after start-up
@@ -35,7 +36,7 @@ module tb_tvp_ctrl;
         .scl_in(scl), .sda_in({sda1, sda0}), .init_done(init_done), .dev_err(dev_err),
         .status0(status0), .status1(status1), .status_valid(status_valid),
         .reinit0(reinit0), .reinit1(reinit1), .hold(1'b0), .active(active));
-    i2c_slave_model #(.ADDR(7'h5C)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
+    i2c_slave_model #(.ADDR(7'h5C), .LOG(1)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
     // an absent decoder sees an idle bus
     i2c_slave_model #(.ADDR(SPLIT ? 7'h5C : 7'h5D)) s1 (.scl(present1 ? scl : 1'b1), .sda(present1 ? sda1 : 1'b1),
                                                        .sda_low(s1_low_raw));
@@ -60,9 +61,10 @@ module tb_tvp_ctrl;
     task show(input at_end);
         begin
             if (at_end) $write("RESULT"); else $write("MID");
-            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d",
+            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_02=%02x s0_28=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_02=%02x s1_28=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d",
                      saw_reset_low, reset_falls, dev_err, s0.regs[8'h03], s0.regs[8'h04], s0.regs[8'h0D],
-                     s0.regs[8'h00], s0.writes, s1.regs[8'h03], s1.regs[8'h04], s1.regs[8'h0D], s1.writes,
+                     s0.regs[8'h00], s0.regs[8'h02], s0.regs[8'h28], s0.writes,
+                     s1.regs[8'h03], s1.regs[8'h04], s1.regs[8'h0D], s1.regs[8'h02], s1.regs[8'h28], s1.writes,
                      status0, status1, status_valid, reinit0, reinit1);
         end
     endtask

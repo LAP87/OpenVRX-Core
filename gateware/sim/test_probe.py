@@ -94,7 +94,7 @@ def test_probe_reports():
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
         assert i2c == 'OK' and st == '000E', l
-    # B is reset at 12 ms (window 2). The poll round that finds 03h back at its default writes the
+    # B is reset at 15 ms (window 2). The poll round that finds 03h back at its default writes the
     # list again and makes B's status not valid; the next whole round, after window 2's report,
     # makes it valid again (tvp_ctrl.v, review 2026-10-06 F2)
     for l, want in zip(b[1:3], ('----', '000E')):
@@ -107,7 +107,7 @@ def test_probe_reports():
     assert body.strip() == 'no SCLK' and int(f_dead) < WINDOW // 2, b[3]
     assert fields(a[3])[2].startswith('tog FF hi FF'), a[3]
 
-    # ri: decoder B's registers fell back to their defaults at 12 ms (during window 2) and were
+    # ri: decoder B's registers fell back to their defaults at 15 ms (during window 2) and were
     # written again; decoder A was never touched
     assert [fields(l)[5] for l in a] == ['00'] * len(a), a
     assert [fields(l)[5] for l in b] == ['00'] + ['01'] * (len(b) - 1), b
@@ -125,7 +125,7 @@ def test_probe_reports():
     assert len(beats) == 1 and abs(beats[0] - CLK_HZ // 2 * 37) < 20 * 37, beats
 
     # RX5808: every frame is the F4 word. One frame 2 ms after start (20 probe milliseconds), none
-    # while the decoders report lock, repeats 5 ms apart once both have been read as unlocked
+    # while the decoders report lock, repeats 8 ms apart once both have been read as unlocked
     # (the status is polled every 2 ms plus the I2C time, so that takes a few milliseconds).
     f4 = {(b, c): reg for b, c, f, reg, _ in vc.table()}[('F', 4)]
     want = sum(bit << i for i, bit in enumerate(vc.spi_frame(f4)))
@@ -135,5 +135,5 @@ def test_probe_reports():
     before = [t for t, _, _ in frames if t < unlock]
     after = [t for t, _, _ in frames if t >= unlock]
     assert len(before) == 1 and abs(before[0] - 2_000_000) < 100_000, frames
-    assert 1 <= len(after) <= 3 and 5_000_000 < after[0] - unlock < 12_000_000, (unlock, frames)
-    assert all(abs((b2 - b1) - 5_000_000) < 100_000 for b1, b2 in zip(after, after[1:])), frames
+    assert 1 <= len(after) <= 3 and 8_000_000 < after[0] - unlock < 15_000_000, (unlock, frames)
+    assert all(abs((b2 - b1) - 8_000_000) < 100_000 for b1, b2 in zip(after, after[1:])), frames
