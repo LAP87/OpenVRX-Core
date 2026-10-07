@@ -177,15 +177,17 @@ def out_of_step_receivers_are_not_mixed(seed, **kw):
     """Two good receivers out of step (B late by a fraction of a line, by whole lines, or
     both; B also numbers one field far too high). The output is A's lines, every one of them
     and nothing else: the current channel never changes, although each receiver is silent
-    for a blanking interval while the other delivers."""
+    for a blanking interval while the other delivers. A's isolated bad lines have no partner
+    and are left out (the field store covers them)."""
     rng = random.Random(seed)
     lost_a, lost_b = set(spots(rng, 8)), set(spots(rng, 8))
-    ra = receiver(rng, 0.0, fields=FIELDS + 1, lost=lost_a, bad=set(spots(rng, 4)))
+    bad_a = set(spots(rng, 4)) - lost_a
+    ra = receiver(rng, 0.0, fields=FIELDS + 1, lost=lost_a, bad=bad_a)
     rb = receiver(rng, out_of_step(rng), lost=lost_b, shift={rng.randrange(FIELDS): 64})
     m = run(ra, rb, **kw)
     assert set(m.curs) == {0}
-    assert all(use == (ref.USE_A if pop == 0b01 else 0) for use, pop, *_ in m.trace)
-    assert out_fields(m.trace) == [[n for n in range(LINES) if (f, n) not in lost_a] for f in range(FIELDS + 1)]
+    assert all(use == (ref.USE_A if pop == 0b01 and not o else 0) for (use, pop, *_), o in zip(m.trace, m.omitted))
+    assert out_fields(m.trace) == [[n for n in range(LINES) if (f, n) not in lost_a | bad_a] for f in range(FIELDS + 1)]
 
 
 def field_starts_are_bounded(seed, **kw):
@@ -209,8 +211,65 @@ def field_starts_are_bounded(seed, **kw):
     assert all(y - x >= 8 for x, y in zip(lone, lone[1:])), 'the current channel must not flap'
 
 
+BOTH_BAD = [('', 'ab'), ('a', 'b'), ('b', 'a')]            # (lost on, bad on): no good copy anywhere
+
+
+def lone_lines_bad_on_both_are_left_out(seed, **kw):
+    """Receivers in step; runs of one to three lines without a good copy (bad on both, or lost on
+    one and bad on the other), also at the first and last line of a field, next to isolated
+    damage on one receiver. A line is left out only if it has no good copy, never two in a row
+    within an output field, and exactly when the line shown before it in that field had a good
+    copy (or it is the first line shown in the field). Every other line is shown as before."""
+    rng = random.Random(seed)
+    lost, bad = (set(), set()), (set(), set())
+    taken = set()
+    for _ in range(12):
+        fld = rng.randrange(FIELDS)
+        start = rng.choice((0, LINES - 1, rng.randrange(1, LINES - 1)))
+        run_lines = [(fld, n) for n in range(start, min(start + rng.choice((1, 1, 2, 3)), LINES))]
+        if any((f, n + d) in taken for f, n in run_lines for d in (-1, 0, 1)):
+            continue
+        for place in run_lines:
+            lost_on, bad_on = rng.choice(BOTH_BAD)
+            for ch, name in enumerate('ab'):
+                if name in lost_on:
+                    lost[ch].add(place)
+                if name in bad_on:
+                    bad[ch].add(place)
+            taken.add(place)
+    for place in spots(rng, 6):                                  # isolated damage on one receiver
+        if not any((place[0], place[1] + d) in taken for d in (-1, 0, 1)):
+            ch = rng.randrange(2)
+            (lost if rng.randrange(2) else bad)[ch].add(place)
+            taken.add(place)
+    ra = receiver(rng, 0.0, lost=lost[0], bad=bad[0])
+    rb = receiver(rng, rng.uniform(-5000, 5000), lost=lost[1], bad=bad[1])
+    m, before = run(ra, rb, **kw), run(ra, rb, omit_bad=False)
+    # everything but the use of left-out lines is decided as before
+    assert m.curs == before.curs and [t[1:] for t in m.trace] == [t[1:] for t in before.trace]
+    assert all(t == b or (o and b[0]) for t, b, o in zip(m.trace, before.trace, m.omitted)), 'only shown lines are left out'
+
+    def no_good_copy(p):
+        return all(p in lost[ch] or p in bad[ch] for ch in (0, 1))
+    n_omitted, fld, prev, prev_shown, prev_omitted = 0, 0, -1, None, False
+    for (use, _, _, line), (use_before, *_), omitted in zip(m.trace, before.trace, m.omitted):
+        fld += line < prev
+        prev = line
+        if not use_before:
+            continue                                             # not shown before either
+        both = no_good_copy((fld, line))
+        first = prev_shown is None or prev_shown[0] != fld
+        want = both and (first or not no_good_copy(prev_shown))
+        assert omitted == want, f'field {fld} line {line}: omitted {omitted}, expected {want}'
+        assert not omitted or first or not prev_omitted, f'field {fld} line {line}: two left out in a row'
+        prev_shown, prev_omitted = (fld, line), omitted
+        n_omitted += omitted
+    assert n_omitted, 'scenario without a line to leave out'
+
+
 PROPERTIES = [in_step_every_good_line_is_shown_once, burst_loss_on_one_receiver_loses_nothing,
-              unlocked_receiver_is_not_shown, out_of_step_receivers_are_not_mixed, field_starts_are_bounded]
+              unlocked_receiver_is_not_shown, out_of_step_receivers_are_not_mixed, field_starts_are_bounded,
+              lone_lines_bad_on_both_are_left_out]
 
 
 @pytest.mark.parametrize('seed', SEEDS)
@@ -222,7 +281,8 @@ def test_mixer(prop, seed):
 @pytest.mark.parametrize('prop, kw', [(in_step_every_good_line_is_shown_once, {'n_step': 0}),
                                       (burst_loss_on_one_receiver_loses_nothing, {'n_step': 0}),
                                       (unlocked_receiver_is_not_shown, {'n_dead': 8}),
-                                      (out_of_step_receivers_are_not_mixed, {'n_dead': 16})],
+                                      (out_of_step_receivers_are_not_mixed, {'n_dead': 16}),
+                                      (lone_lines_bad_on_both_are_left_out, {'omit_bad': False})],
                          ids=lambda v: v.__name__ if callable(v) else '_'.join(f'{k}{x}' for k, x in v.items()))
 def test_mixer_needs_its_rules(prop, kw):
     """Negative controls: without gap filling (N_STEP = 0), or with N_DEAD shorter than a
