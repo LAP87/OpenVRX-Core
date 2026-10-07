@@ -7,7 +7,8 @@ disagree on it). The decision is the integer form of mixer/line_mixer.py `mix()`
     switch  when |ea - eb| * 256 >  SWITCH_Q8 * max(ea, eb)   towards the cleaner one
 with BLEND_Q8 = 38 (0.1484 ~ 0.15) and SWITCH_Q8 = 64 (0.25 exactly), plus a
 check the prototype does not have: a bad line (undecodable timing code, wrong
-length, decoder unlocked) loses against a good one.
+length, decoder unlocked) loses against a good one. A line with fewer than 360
+whole words is not stored at all (see push).
 
 Lone lines. A line whose partner has not arrived T_PAIR after it is resolved
 alone, oldest first. It is shown
@@ -134,7 +135,11 @@ class Mixer:
 
     def push(self, ch, rec, t):
         self._advance(t)
-        bad = is_bad(rec, **self.kw) or self._ext(ch, t)
+        # a line with fewer than 360 whole words (late SAV, short active part) is incomplete: it
+        # counts as bad for health, is not stored and is not a delivered line for the other
+        # channel's gap fill
+        complete = rec.active_count >= 4 * N_WORDS
+        bad = is_bad(rec, **self.kw) or self._ext(ch, t) or not complete
         h = self.hist[ch]
         h.append(bad)
         del h[:-8]
@@ -142,9 +147,12 @@ class Mixer:
         if p is not None and (rec.line_in_field <= p[1] or rec.field != p[0]):
             self.fc[ch] = (self.fc[ch] + 1) & 3
         self.prev[ch] = (rec.field, rec.line_in_field)
-        self.last_arr[ch] = t
+        if complete:
+            self.last_arr[ch] = t
         if len(self.q[ch]) == 4:
             self.overflow = True       # (the RTL also drops a line whose words were partly lost)
+            return
+        if not complete:
             return
         self.q[ch].append(_Line(rec, t, bad, self.fc[ch], self._sick(1 - ch), self._well(ch)))
         self._pairs()

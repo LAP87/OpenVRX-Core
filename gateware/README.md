@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (322 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (324 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -189,7 +189,7 @@ Vilken rad som blir ren på ett riktigt kort vet ingen förrän testet har kört
 `top/m4_dual_mix.v` → `build/m4_dual_mix.fs`. Två TVP5150-moduler, var och en matad med CVBS från en egen 5,8 GHz-mottagare på samma kanal. FPGA:n startar dekodrarna via I2C och startar om en dekoder som har återställts (`rtl/tvp_ctrl.v`); mixern väljer per rad den renaste kanalen eller blandar.
 
 Mixerns regler (`rtl/line_mixer.v`; i sin helhet i `model/line_mixer_ref.py`):
-- Två rader paras om de har samma radnummer och kommer inom 15,8 µs från varandra. Av ett par visas den renare raden (minst HF-energi), med hysteres, eller en blandning när de är ungefär lika rena. En dålig rad (trasigt synkord, fel längd, olåst dekoder, tvingad från menyn) förlorar mot en bra.
+- Två rader paras om de har samma radnummer och kommer inom 15,8 µs från varandra. Av ett par visas den renare raden (minst HF-energi), med hysteres, eller en blandning när de är ungefär lika rena. En dålig rad (trasigt synkord, fel längd, olåst dekoder, tvingad från menyn) förlorar mot en bra. En rad där inte alla 360 ord kom i följd (till exempel sen SAV med rätt radlängd) lagras inte alls, så ringens gamla ord kan inte visas; den räknas som dålig, och den andra kanalens rad med samma nummer får fylla luckan (granskningen 2026-10-06, F1; `sim/test_mixer.py::test_incomplete_line_is_not_stored`).
 - En rad utan partner avgörs 15,8 µs efter att den kom. Den visas om den kommer från den aktuella kanalen, eller som lucktätning när kanalerna går i takt och den andra kanalen inte levererade något intill den.
 - Utan parade rader byter mixern kanal när den aktuella kanalens åtta senaste rader är dåliga och den andras åtta bra, eller när den aktuella har varit tyst i 8 av den andras rader (i takt) eller 40 (ur takt, längre än en vertikalsläckning). Ingen tidsgräns i klocktid ingår i besluten.
 - Raderna lämnar mixern i stigande ordning inom ett fält, och utströmmens F-bit låses vid fältets första rad.

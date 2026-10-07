@@ -7,6 +7,12 @@
 // (EAV to EAV) is not NTSC or PAL within LEN_TOL bytes, or while ext_bad is
 // set (e.g. the decoder reports no horizontal/vertical lock).
 //
+// A line is complete when its words 0..359 arrived in order since the last
+// marker (a late SAV or a short active part gives fewer). An incomplete line is
+// not stored, so the mixer never shows ring words left from an older line; it
+// counts as bad for this channel's health, and it does not count as a line of
+// this channel for the other one's `near` (that line was not delivered).
+//
 // Per line the mixer also gets (see line_mixer.v and model/line_mixer_ref.py):
 //   age        system-clock cycles since the line was stored (saturates)
 //   fc         this channel's field counter (mod 4); it advances when the
@@ -74,7 +80,22 @@ module mix_chan #(
     endfunction
     reg [1:0] ext_s;
     always @(posedge clk) ext_s <= {ext_s[0], ext_bad};
-    wire bad_in = ext_s[1] || (in_data[20:17] != 4'd0) || !(in_tol(len, LEN_NTSC) || in_tol(len, LEN_PAL));
+
+    // completeness: word indices 0, 1, .. 359 in order since the last marker
+    reg  [8:0] w_next;                   // index the next word must carry
+    reg        w_broken;
+    wire [8:0] w_idx    = in_data[40:32];
+    wire       complete = !w_broken && w_next == 9'd360;
+    always @(posedge clk) begin
+        if (in_pop && !is_marker) begin
+            if (w_idx == 9'd0) begin w_next <= 9'd1; w_broken <= 1'b0; end      // a line's first word
+            else if (w_idx == w_next) w_next <= w_next + 1'b1;
+            else w_broken <= 1'b1;
+        end
+        if (in_pop && is_marker) begin w_next <= 9'd0; w_broken <= 1'b0; end
+        if (rst) begin w_next <= 9'd0; w_broken <= 1'b0; end
+    end
+    wire bad_in = ext_s[1] || (in_data[20:17] != 4'd0) || !(in_tol(len, LEN_NTSC) || in_tol(len, LEN_PAL)) || !complete;
 
     reg                 m_field [0:3];
     reg [9:0]           m_line  [0:3];
@@ -97,7 +118,7 @@ module mix_chan #(
 
     // per-channel state that follows every arriving line
     wire        marker    = in_pop && is_marker;
-    assign arrived = marker;
+    assign arrived = marker && complete;
     wire        m_fld     = in_data[51];
     wire [9:0]  m_ln      = in_data[50:41];
     reg         prev_valid, prev_field;
@@ -114,7 +135,7 @@ module mix_chan #(
 
     // a line that lost words because the ring was full is not stored at all
     reg  skipping;
-    wire mark = marker && !full && !skipping;
+    wire mark = marker && complete && !full && !skipping;
     wire rel  = pop_line && count != 3'd0;
     reg [$clog2(TIMEOUT+1)-1:0] idle;
     integer i;
@@ -133,7 +154,7 @@ module mix_chan #(
             hist <= hist_n;
             if (hcnt != 4'd8) hcnt <= hcnt + 1'b1;
             sick <= sick_n;
-            last_age <= 0;
+            if (complete) last_age <= 0;
             if (full || skipping) overflow <= 1'b1;
         end
         if (mark) begin

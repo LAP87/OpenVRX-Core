@@ -69,10 +69,11 @@ class Stream:
         self.rng = random.Random(seed)
         self.data = bytearray()
 
-    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None):
+    def line(self, f, v, fld=0, n=0, amp=0, eav=None, sav=None, late=0):
+        """late: SAV comes that many bytes late, EAV on time (the active part is shorter)."""
         act = bt656.blanking(1440) if v else active_bytes(fld, n, amp, self.rng)
-        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8)
-        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 0) if sav is None else sav]) + act
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 1) if eav is None else eav]) + bt656.blanking(LINE - 1440 - 8 + late)
+        self.data += bytes([0xFF, 0, 0, bt656.xy(f, v, 0) if sav is None else sav]) + act[:1440 - late]
 
     def field(self, fld, f=None, amp=None, hooks=None, lines=LINES, vbi=VBI):
         """Field `fld` (picture content; F bit fld & 1 unless given). amp: snow amplitude for all
@@ -137,7 +138,8 @@ def window(ev, on, off=None):
     return lambda t: t + RST_NS >= on and (off is None or t + RST_NS < off)
 
 
-def run_sim(a, b, work, params=None):
+def run_sim(a, b, work, params=None, alter=None):
+    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls)."""
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -151,6 +153,11 @@ def run_sim(a, b, work, params=None):
     p.update(params or {})
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v',
                                     'chan_capture.v', 'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'noise_stats.v', 'mixer2.v')]
+    for name, (old, new) in (alter or {}).items():
+        src = (GW / 'rtl' / name).read_text()
+        assert src.count(old) == 1, f'{name}: {old!r} not found once'
+        (work / name).write_text(src.replace(old, new))
+        rtl = [work / name if r.name == name else r for r in rtl]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_mixer',
                     *[f'-Ptb_mixer.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'tb_mixer.v')], cwd=work, env=env, check=True)
@@ -173,14 +180,14 @@ def run_sim(a, b, work, params=None):
     return dec, curs, out, end
 
 
-def check(name, a, b, params=None, ev_kw=None, **model_kw):
+def check(name, a, b, params=None, ev_kw=None, alter=None, **model_kw):
     """Run the RTL and the model on the same streams; they must agree on everything."""
     ev = events(a, b, **(ev_kw or {}))
     ext = model_kw.pop('ext', None)
     if ext:
         model_kw['ext_bad'] = ext(ev)
     m = model(ev, **model_kw)
-    dec, curs, out, end = run_sim(a, b, HERE / 'build' / name, params)
+    dec, curs, out, end = run_sim(a, b, HERE / 'build' / name, params, alter)
     assert end is not None, 'simulation did not finish'
     assert end[0] == 0 and not m.overflow, 'line slots overflowed'
     for i, (g, e) in enumerate(zip(zip(dec, curs), zip(m.trace, m.curs))):
@@ -262,6 +269,38 @@ def test_random_damage():
     got = out_fields(m.trace)
     assert [sorted(ls) for _, ls in got] == [sorted(h) for h in have], 'every line that a receiver had is shown'
     assert all(ls == sorted(ls) for _, ls in got) and 19 not in got[2][1]
+
+
+LATE = 4                      # SAV 4 bytes late, EAV on time: 1436 active bytes, 359 words
+INCOMPLETE_KEEP = 'wire mark = marker && complete && !full && !skipping;'
+
+
+def incomplete_streams():
+    """A: line 5 of field 1 incomplete. Both: line 8 of field 2 incomplete."""
+    a = Stream(5).field(0).field(1, hooks={VBI + 5: ('late', LATE)}).field(2, hooks={VBI + 8: ('late', LATE)}).done()
+    b = Stream(6).field(0).field(1).field(2, hooks={VBI + 8: ('late', LATE)}).done()
+    return a, b
+
+
+def test_incomplete_line_is_not_stored():
+    """A line whose SAV comes late (EAV distance and timing codes intact, 359 words) must not
+    be shown: its last ring word would be left from an older line (review 2026-10-06, F1).
+    It counts as bad and as not delivered, so B's line with the same number fills the gap;
+    where both receivers have it incomplete, the line is missing (the field store covers it)."""
+    a, b = incomplete_streams()
+    assert sorted({r.active_count for r in bt656.Receiver().feed(a)}) == [1440 - LATE, 1440]
+    m = check('tb_mixer_incomplete', a, b)
+    assert (ref.USE_B, 0b10, 1, 5) in m.trace, 'the gap is filled from B'
+    got = out_fields(m.trace)
+    assert [ls for _, ls in got] == [list(range(LINES)), list(range(LINES)), [n for n in range(LINES) if n != 8]]
+
+
+def test_incomplete_line_check_is_tested():
+    """Negative control: mix_chan.v storing the incomplete line again disagrees with the model."""
+    a, b = incomplete_streams()
+    with pytest.raises(AssertionError, match='decision|word'):
+        check('tb_mixer_incomplete_kept', a, b,
+              alter={'mix_chan.v': (INCOMPLETE_KEEP, 'wire mark = marker && !full && !skipping;')})
 
 
 def test_current_channel_goes_silent():
