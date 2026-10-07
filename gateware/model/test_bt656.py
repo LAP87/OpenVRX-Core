@@ -70,6 +70,20 @@ def test_hf_energy_rises_with_noise():
     assert b.hf_energy > 10 * a.hf_energy
 
 
+def test_luma_outside_counts_luma_only_in_whole_groups():
+    act = bytearray(b for x in range(720) for b in (0x80, 100))
+    for x, y in ((0, 15), (1, 16), (2, 235), (3, 236), (4, 1), (5, 254)):
+        act[2 * x + 1] = y
+    act[10] = act[12] = 1                                  # chroma outside the range does not count
+    assert bt656.luma_outside(bytes(act)) == 4             # 15, 236, 1, 254
+    assert bt656.luma_outside(bytes(act), 15, 236) == 2
+    act[-1] = 250
+    assert bt656.luma_outside(bytes(act)) == 5
+    assert bt656.luma_outside(bytes(act[:-2])) == 4        # a trailing partial Cb Y Cr Y group is not counted
+    rec, = bt656.Receiver().feed(bt656.line_bytes('pal', 100, bytes(act)) + bt656.line_bytes('pal', 101)[:4])
+    assert rec.luma_outside == 5
+
+
 def test_reserved_codes_rejected_in_video():
     with pytest.raises(AssertionError):
         bt656.line_bytes('pal', 100, bytes([0x80, 0xFF] * 720))

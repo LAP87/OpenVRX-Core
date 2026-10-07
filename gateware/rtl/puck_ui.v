@@ -48,6 +48,9 @@ module puck_ui #(
     input  wire [19:0] snow_a, snow_b,
     input  wire [10:0] use_a, use_b, use_mix,
     input  wire        snow_toggle_a, snow_toggle_b, use_toggle,
+    // noise meter (noise_stats.v, same domain and handshake): luma samples outside 16..235 per 1024 lines
+    input  wire [19:0] noise_a, noise_b,
+    input  wire        noise_toggle_a, noise_toggle_b,
     // mixer control
     output wire [1:0]  force_bad,         // [0] mark A bad, [1] mark B bad
     // RX5808
@@ -141,16 +144,19 @@ module puck_ui #(
     // ---- snow meter: copy values a few clocks after each toggle, flag stale channels,
     //      convert to decimal one value at a time
     localparam STALE = CLK_HZ / 4;                         // 250 ms without a new window = no lines
-    reg [2:0] tga, tgb, tgu;
-    reg [19:0] va, vb;
+    reg [2:0] tga, tgb, tgu, tna, tnb;
+    reg [19:0] va, vb, na, nb;
     reg [10:0] ua, ub, um;
     reg [$clog2(STALE+1)-1:0] age_a, age_b;
     always @(posedge clk) begin
         tga <= {tga[1:0], snow_toggle_a}; tgb <= {tgb[1:0], snow_toggle_b}; tgu <= {tgu[1:0], use_toggle};
+        tna <= {tna[1:0], noise_toggle_a}; tnb <= {tnb[1:0], noise_toggle_b};
         if (tga[2] != tga[1]) begin va <= snow_a; age_a <= 0; end else if (age_a != STALE) age_a <= age_a + 1'b1;
         if (tgb[2] != tgb[1]) begin vb <= snow_b; age_b <= 0; end else if (age_b != STALE) age_b <= age_b + 1'b1;
         if (tgu[2] != tgu[1]) begin ua <= use_a; ub <= use_b; um <= use_mix; end
-        if (rst) begin age_a <= STALE; age_b <= STALE; va <= 0; vb <= 0; ua <= 0; ub <= 0; um <= 0; end
+        if (tna[2] != tna[1]) na <= noise_a;
+        if (tnb[2] != tnb[1]) nb <= noise_b;
+        if (rst) begin age_a <= STALE; age_b <= STALE; va <= 0; vb <= 0; ua <= 0; ub <= 0; um <= 0; na <= 0; nb <= 0; end
     end
     wire stale_a = (age_a == STALE), stale_b = (age_b == STALE);
     function [6:0] pct(input [10:0] c);                    // c / 1024 * 100, 0..100
@@ -162,12 +168,12 @@ module puck_ui #(
     reg         conv_start;
     wire        conv_busy, conv_done;
     wire [23:0] conv_bcd;
-    reg  [23:0] bcd_a, bcd_b;
+    reg  [23:0] bcd_a, bcd_b, bcd_na, bcd_nb;
     reg  [11:0] bcd_ua, bcd_ub, bcd_um;
     reg  [19:0] conv_in;
     always @* case (conv_i)
         3'd0: conv_in = va; 3'd1: conv_in = vb; 3'd2: conv_in = pct(ua); 3'd3: conv_in = pct(ub);
-        default: conv_in = pct(um);
+        3'd4: conv_in = pct(um); 3'd5: conv_in = na; default: conv_in = nb;
     endcase
     bin2bcd #(.W(20), .D(6)) conv (.clk(clk), .start(conv_start), .bin(conv_in), .busy(conv_busy),
                                    .done(conv_done), .bcd(conv_bcd));
@@ -177,11 +183,14 @@ module puck_ui #(
         if (conv_done) begin
             case (conv_i)
                 3'd0: bcd_a <= conv_bcd; 3'd1: bcd_b <= conv_bcd; 3'd2: bcd_ua <= conv_bcd[11:0];
-                3'd3: bcd_ub <= conv_bcd[11:0]; default: bcd_um <= conv_bcd[11:0];
+                3'd3: bcd_ub <= conv_bcd[11:0]; 3'd4: bcd_um <= conv_bcd[11:0];
+                3'd5: bcd_na <= conv_bcd; default: bcd_nb <= conv_bcd;
             endcase
-            conv_i <= (conv_i == 3'd4) ? 3'd0 : conv_i + 1'b1;
+            conv_i <= (conv_i == 3'd6) ? 3'd0 : conv_i + 1'b1;
         end
-        if (rst) begin conv_i <= 0; bcd_a <= 0; bcd_b <= 0; bcd_ua <= 0; bcd_ub <= 0; bcd_um <= 0; end
+        if (rst) begin
+            conv_i <= 0; bcd_a <= 0; bcd_b <= 0; bcd_ua <= 0; bcd_ub <= 0; bcd_um <= 0; bcd_na <= 0; bcd_nb <= 0;
+        end
     end
     // log2 bar: one block per doubling above 32 (msb index - 5), at most 12 blocks
     function [3:0] bar_len(input [19:0] v);
@@ -268,8 +277,9 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || page;
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb ua_ ub_ um_ Bc ffff MOD o\r\n"  (43 bytes, zero-padded, ------ = no lines)
-    //   snow A, snow B, % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B),
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD o\r\n"  (57 bytes, zero-padded, ------ = no lines)
+    //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
+    //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B),
     //   o = "!" once the mixer has dropped a line because its line slots were full, else "-"
     function [47:0] z6(input [23:0] b, input stale);
         integer i;
@@ -283,14 +293,15 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    wire [343:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
+    localparam LOG_LEN = 57;
+    wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
+                             z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
                              dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ", ovf_s[1] ? "!" : "-", 16'h0D0A};
-    localparam LOG_LEN = 43;
     reg  [8:0] log_wait;
     reg  [5:0] log_i;
     reg        log_active, u_send;
-    reg  [343:0] log_buf;
+    reg  [LOG_LEN*8-1:0] log_buf;
     wire       u_busy;
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));

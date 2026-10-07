@@ -32,7 +32,11 @@ module mixer2 #(
     // 1024 lines and mixer usage over 1024 decisions; each toggle flips on new values
     output wire [19:0] snow_a, snow_b,
     output wire [10:0] use_a, use_b, use_mix,
-    output wire        snow_toggle_a, snow_toggle_b, use_toggle
+    output wire        snow_toggle_a, snow_toggle_b, use_toggle,
+    // noise meter (sys domain, see noise_stats.v): luma samples outside 16..235 per receiver,
+    // summed over 1024 arriving lines; each toggle flips on a new value. Not used by the mixer.
+    output wire [19:0] noise_a, noise_b,
+    output wire        noise_toggle_a, noise_toggle_b
 );
     reg [2:0] rst_a, rst_b, rst_s;
     always @(posedge a_clk   or posedge rst_async) if (rst_async) rst_a <= 3'b111; else rst_a <= {rst_a[1:0], 1'b0};
@@ -107,6 +111,14 @@ module mixer2 #(
         .dec_valid(dec_valid), .dec_use(dec_use),
         .mean_a(snow_a), .mean_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
         .toggle_a(snow_toggle_a), .toggle_b(snow_toggle_b), .toggle_use(use_toggle));
+
+    // taps the FIFO outputs mix_chan reads; per-line outputs are for tests only
+    noise_stats #(.LOG_N(10)) noise_a_st (
+        .clk(sys_clk), .rst(srst), .valid(!fa_empty), .data(fa_data),
+        .line_valid(), .line_field(), .line_no(), .line_count(), .sum(noise_a), .toggle(noise_toggle_a));
+    noise_stats #(.LOG_N(10)) noise_b_st (
+        .clk(sys_clk), .rst(srst), .valid(!fb_empty), .data(fb_data),
+        .line_valid(), .line_field(), .line_no(), .line_count(), .sum(noise_b), .toggle(noise_toggle_b));
 
     // same-clock FIFO (async_fifo on one clock is fine, just a few cycles of latency)
     async_fifo #(.W(52), .AW(5)) out_fifo (

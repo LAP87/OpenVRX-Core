@@ -31,6 +31,7 @@ module tb_puck_ui;
         .dec_present(2'b11), .dec_locked(dec_locked), .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
+        .noise_a(20'd17), .noise_b(20'd654321), .noise_toggle_a(tg), .noise_toggle_b(tg),
         .rx_spi_clk(sclk), .rx_spi_data(sdat), .rx_spi_sel_n(sel_n),
         .text_row(row), .text_col(col), .text_char(chr),
         .osd_row(2'd0), .osd_col(5'd0), .osd_char(osd_char), .osd_show(osd_show),

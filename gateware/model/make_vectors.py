@@ -53,6 +53,25 @@ def cases():
                      + bytes([0xFF, 0, 0, bt656.xy(1, v, 0)]) + act)
     yield 'f_stuck_fields', bytes(data) + bytes([0xFF, 0, 0, bt656.xy(1, 1, 1)]) + bt656.blanking(1716 - 1440 - 8)
 
+    # impulse noise for the out-of-range luma count (noise_stats.v): NTSC lines 16-56 (vertical
+    # blanking, then 37 active lines from line 0). Luma spikes on both sides of 16..235, with the
+    # boundary values 15/16 and 235/236; chroma spikes outside 16..240 that must not be counted;
+    # one run of 40 clipped samples; every fifth active line clean.
+    rng = random.Random(2)
+    data = bytearray()
+    for n in range(16, 57):
+        act = bytearray(b for x in range(720) for b in (0x80, ramp(n, x)))
+        k = n - 20                                 # active line number
+        if k >= 0 and k % 5 != 4:
+            for _ in range(rng.randint(1, 12)):
+                act[2 * rng.randrange(720) + 1] = rng.choice((1, 2, 15, 16, 17, 128, 234, 235, 236, 254))
+            for _ in range(rng.randint(1, 6)):
+                act[2 * rng.randrange(720)] = rng.choice((1, 15, 241, 254))
+        if k == 7:
+            act[2 * 300 + 1:2 * 340 + 1:2] = bytes([240] * 40)
+        data += bt656.line_bytes('ntsc', n, bytes(act))
+    yield 'ntsc_spikes', bytes(data) + bt656.line_bytes('ntsc', 57)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

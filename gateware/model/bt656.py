@@ -89,6 +89,21 @@ class LineRecord:
     hf_energy: int              # sum |Y[n] - Y[n-1]| over the active luma samples
     luma: list = field(default_factory=list, repr=False)
     active: bytes = field(default=b'', repr=False)   # the line's active bytes (Cb Y Cr Y ...)
+    luma_outside: int = 0       # luma samples outside 16..235, see luma_outside()
+
+
+LUMA_LO, LUMA_HI = 16, 235      # nominal luma range; BT.656 allows 1..254 in video data
+
+
+def luma_outside(active, lo=LUMA_LO, hi=LUMA_HI):
+    """Luma samples outside lo..hi in a line's active bytes (Cb Y Cr Y ...).
+
+    Reference for noise_stats.v, which counts in the words the capture path passes on:
+    whole Cb Y Cr Y groups only, at most 360 of them (word_packer.v), so a trailing
+    partial group of a truncated line is not counted.
+    """
+    n = 4 * min(360, len(active) // 4)
+    return sum(1 for y in active[1:n:2] if y < lo or y > hi)
 
 
 class Receiver:
@@ -122,7 +137,8 @@ class Receiver:
         luma = list(self.active[1::2])
         hf = sum(abs(a - b) for a, b in zip(luma[1:], luma[:-1]))
         rec = LineRecord(f, self.line_no, self.pos if self.seen_eav else 0, len(self.active),
-                         self.xy_corrected, self.xy_bad, hf, luma, bytes(self.active))
+                         self.xy_corrected, self.xy_bad, hf, luma, bytes(self.active),
+                         luma_outside(self.active))
         self.xy_corrected = self.xy_bad = 0
         return rec
 

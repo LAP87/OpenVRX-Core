@@ -6,7 +6,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -15,7 +16,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -24,7 +26,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -33,7 +36,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -42,7 +46,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -51,7 +56,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -60,7 +66,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -69,7 +76,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -78,7 +86,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -87,7 +96,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -96,7 +106,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -105,7 +116,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -114,7 +126,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -123,7 +136,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -132,7 +146,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -141,7 +156,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -150,7 +166,8 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  },
  {
   "field": 1,
@@ -159,6 +176,7 @@
   "active_count": 1440,
   "xy_corrected": 0,
   "xy_bad": 0,
-  "hf_energy": 1373
+  "hf_energy": 1373,
+  "luma_outside": 0
  }
 ]
