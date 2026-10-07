@@ -11,9 +11,17 @@ import snowlog  # noqa: E402
 
 
 def test_parse():
+    assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 MIX - L?') == {
+        'snow_a': 12345, 'snow_b': 2345, 'noise_a': 17, 'noise_b': 654321, 'use_a': 40, 'use_b': 34,
+        'use_mix': 25, 'channel': 'F4', 'mhz': 5800, 'mode': 'MIX', 'dropped': 0, 'lost_a': 1, 'lost_b': None}
+    r = snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 A   ! -L')
+    assert (r['dropped'], r['lost_a'], r['lost_b'], r['mode']) == (1, 0, 1, 'A')
+    assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 MIX - LX') is None
+    assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 MIX - L') is None
+    # bitstreams before the lost-lock field
     assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 MIX -') == {
         'snow_a': 12345, 'snow_b': 2345, 'noise_a': 17, 'noise_b': 654321, 'use_a': 40, 'use_b': 34,
-        'use_mix': 25, 'channel': 'F4', 'mhz': 5800, 'mode': 'MIX', 'dropped': 0}
+        'use_mix': 25, 'channel': 'F4', 'mhz': 5800, 'mode': 'MIX', 'dropped': 0, 'lost_a': None, 'lost_b': None}
     assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 A   !')['dropped'] == 1
     r = snowlog.parse('S ------ 002345 ------ 000000 000 100 000 A6 5765 B   -')
     assert (r['snow_a'], r['noise_a'], r['noise_b']) == (None, None, 0)
@@ -23,7 +31,7 @@ def test_parse():
     # older bitstreams: no noise values, with or without the dropped-line field
     assert snowlog.parse('S 012345 002345 040 034 025 F4 5800 MIX') == {
         'snow_a': 12345, 'snow_b': 2345, 'noise_a': None, 'noise_b': None, 'use_a': 40, 'use_b': 34,
-        'use_mix': 25, 'channel': 'F4', 'mhz': 5800, 'mode': 'MIX', 'dropped': 0}
+        'use_mix': 25, 'channel': 'F4', 'mhz': 5800, 'mode': 'MIX', 'dropped': 0, 'lost_a': None, 'lost_b': None}
     assert snowlog.parse('S 012345 002345 040 034 025 F4 5800 A   !')['dropped'] == 1
     assert snowlog.parse('S ------ 002345 000 100 000 A6 5765 B')['snow_a'] is None
     assert snowlog.parse('noise') is None
@@ -40,14 +48,14 @@ def fake_port(monkeypatch, data):
 def test_log_skips_damaged_lines(tmp_path, monkeypatch, capsys):
     """Three lines arrive in odd-sized pieces, the middle one damaged. No serial port is opened."""
     fake_port(monkeypatch, [b'S 000100 000200 000003 000000 050 040 010 F4 58',
-                            b'00 MIX -\r\nS 0001x0 000200 000003 000000 050 040 010 F4 5800 MIX -\r\n',
-                            b'S 000300 ------ 000012 ------ 100 000 000 F4 5800 A   -\r\n'])
+                            b'00 MIX - --\r\nS 0001x0 000200 000003 000000 050 040 010 F4 5800 MIX - --\r\n',
+                            b'S 000300 ------ 000012 ------ 100 000 000 F4 5800 A   - L?\r\n'])
     out = tmp_path / 'log.csv'
     snowlog.log(argparse.Namespace(port='COM5', label='t', seconds=0.3, out=str(out)))
     with open(out) as fh:
         rows = list(csv.DictReader(fh))
-    assert [(r['snow_a'], r['snow_b'], r['noise_a'], r['noise_b'], r['mode'], r['dropped']) for r in rows] == [
-        ('100', '200', '3', '0', 'MIX', '0'), ('300', '', '12', '', 'A', '0')]
+    assert [(r['snow_a'], r['snow_b'], r['noise_a'], r['noise_b'], r['mode'], r['dropped'], r['lost_a'], r['lost_b'])
+            for r in rows] == [('100', '200', '3', '0', 'MIX', '0', '0', '0'), ('300', '', '12', '', 'A', '0', '1', '')]
     assert '1 damaged lines skipped' in capsys.readouterr().out
 
 
@@ -69,10 +77,12 @@ def test_summary(tmp_path, capsys):
         for lab, a, n in (('hdmi_on', 900, 4000), ('hdmi_off', 600, 7000)):
             for i in range(5):
                 mark = '!' if lab == 'hdmi_on' and i == 3 else '-'
+                ll = 'L-' if lab == 'hdmi_on' and i in (1, 2) else '--'
                 w.writerow({'time': i, 'label': lab,
-                            **snowlog.parse(f'S {a + i:06d} 002000 {n + i:06d} 000000 050 040 010 F4 5800 MIX {mark}')})
+                            **snowlog.parse(f'S {a + i:06d} 002000 {n + i:06d} 000000 050 040 010 F4 5800 MIX {mark} {ll}')})
     snowlog.summary(p)
     out = capsys.readouterr().out
     assert 'hdmi_on' in out and '902' in out and '602' in out and '4002' in out and '7002' in out
     on, off = (next(l for l in out.splitlines() if l.startswith(lab)) for lab in ('hdmi_on', 'hdmi_off'))
     assert on.endswith('F4 !') and off.endswith('F4'), 'a run in which the mixer dropped lines is marked'
+    assert on.split()[-4:-2] == ['2', '0'] and off.split()[-3:-1] == ['0', '0'], 'lines with lost lock per decoder'

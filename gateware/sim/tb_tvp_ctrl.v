@@ -1,5 +1,6 @@
 // tvp_ctrl + i2c_master against two behavioural I2C slaves.
-// Prints the slaves' registers and the controller's outputs for sim/test_tvp_ctrl.py.
+// Prints the slaves' registers and the controller's outputs for sim/test_tvp_ctrl.py;
+// decoder 0's slave also logs every register write and read ("I2C W rr dd").
 //   PRESENT1 = 0   decoder 1 is not on the bus at start
 //   SPLIT = 1      both slaves at 5Ch on separate SDA lines
 //   SCENARIO 0     nothing happens after start-up
@@ -9,6 +10,7 @@
 //            4     decoder 1's SDA line is shorted to ground (use with SPLIT = 1)
 //            5/6/7 decoder 1 refuses register 88h / 89h / 03h until one poll round has failed
 //                  (MID is printed right after that round), then answers again
+//            8     decoder 0 sets 88h bit 4 (lost lock) once; reading 88h clears it
 `timescale 1ns/1ps
 `default_nettype none
 module tb_tvp_ctrl;
@@ -29,13 +31,20 @@ module tb_tvp_ctrl;
     wire [1:0] dev_err, status_valid;
     wire [15:0] status0, status1;
     wire [7:0] reinit0, reinit1;
+    wire [1:0] round_ok, lost_lock;
+    integer rounds0 = 0, rounds1 = 0, lost0 = 0, lost1 = 0;     // whole rounds, and those with 88h bit 4
+    always @(posedge clk) begin
+        if (round_ok[0]) begin rounds0 = rounds0 + 1; if (lost_lock[0]) lost0 = lost0 + 1; end
+        if (round_ok[1]) begin rounds1 = rounds1 + 1; if (lost_lock[1]) lost1 = lost1 + 1; end
+    end
     tvp_ctrl #(.CLK_HZ(1_000_000), .I2C_DIV(3), .POWER_MS(1), .RESET_MS(1), .BOOT_MS(1), .POLL_MS(2),
                .SPLIT_SDA(SPLIT), .DEV1(SPLIT ? 7'h5C : 7'h5D)) dut (
         .clk(clk), .rst(rst), .tvp_resetb(resetb), .scl_low(scl_low), .sda_low(m_sda_low),
         .scl_in(scl), .sda_in({sda1, sda0}), .init_done(init_done), .dev_err(dev_err),
         .status0(status0), .status1(status1), .status_valid(status_valid),
-        .reinit0(reinit0), .reinit1(reinit1), .hold(1'b0), .active(active));
-    i2c_slave_model #(.ADDR(7'h5C)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
+        .reinit0(reinit0), .reinit1(reinit1), .round_ok(round_ok), .lost_lock(lost_lock),
+        .hold(1'b0), .active(active));
+    i2c_slave_model #(.ADDR(7'h5C), .LOG(1)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
     // an absent decoder sees an idle bus
     i2c_slave_model #(.ADDR(SPLIT ? 7'h5C : 7'h5D)) s1 (.scl(present1 ? scl : 1'b1), .sda(present1 ? sda1 : 1'b1),
                                                        .sda_low(s1_low_raw));
@@ -60,10 +69,11 @@ module tb_tvp_ctrl;
     task show(input at_end);
         begin
             if (at_end) $write("RESULT"); else $write("MID");
-            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d",
+            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_02=%02x s0_28=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_02=%02x s1_28=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d rounds0=%0d rounds1=%0d lost0=%0d lost1=%0d",
                      saw_reset_low, reset_falls, dev_err, s0.regs[8'h03], s0.regs[8'h04], s0.regs[8'h0D],
-                     s0.regs[8'h00], s0.writes, s1.regs[8'h03], s1.regs[8'h04], s1.regs[8'h0D], s1.writes,
-                     status0, status1, status_valid, reinit0, reinit1);
+                     s0.regs[8'h00], s0.regs[8'h02], s0.regs[8'h28], s0.writes,
+                     s1.regs[8'h03], s1.regs[8'h04], s1.regs[8'h0D], s1.regs[8'h02], s1.regs[8'h28], s1.writes,
+                     status0, status1, status_valid, reinit0, reinit1, rounds0, rounds1, lost0, lost1);
         end
     endtask
 
@@ -88,6 +98,10 @@ module tb_tvp_ctrl;
                 s1.tvp_reset; #30_000_000;
             end
             2, 4: #2_000_000_000;                 // more than 255 poll rounds
+            8: begin
+                s0.regs[8'h88] = s0.regs[8'h88] | 8'h10;
+                #20_000_000;
+            end
             3: begin
                 set_present(1); #30_000_000;
                 show(0);

@@ -2,12 +2,15 @@
 // auto-increment). Drives sda_low only while SCL is low.
 //
 // Register defaults are the TVP5150AM1's (SLES209E table 3-11) where the tests
-// look: 03h = 01h (outputs off), 04h = DCh (autoswitch mask). 0Dh starts at 00h
+// look: 03h = 01h (outputs off), 04h = DCh (autoswitch mask), 02h = 00h (TV/VCR
+// mode automatic), 28h = 00h (video standard autoswitch). 0Dh starts at 00h
 // instead of the real 47h, so that a test can see it being written.
 // Status as a healthy NTSC input reads (SLES209E 3.21.49, 3.21.50):
 //   88h = 0Eh  H, V and colour lock; bit5 = 0: 60 Hz; bit6 = 0: not line alternating
 //   89h = 00h  no weak signal (bit6); bit4 follows the field, so 10h is as healthy
 // Healthy PAL reads 88h = 6Eh (50 Hz, line alternating); 89h bit5 is the PAL switch.
+// 88h bit 4 ("lost lock since status register #1 was last read", 3.21.49) is cleared
+// when 88h is read (not in the PAGED variant).
 // Testbench hooks: tvp_reset (registers back to defaults, as after RESETB or a
 // supply dip), wr_protect (writes are acknowledged but ignored), nack_data
 // (>= 0: the data byte with that index in a write, counted from 0 after the
@@ -40,6 +43,7 @@ module i2c_slave_model #(
     task tvp_reset;
         begin
             regs[8'h00] = 8'h00; regs[8'h03] = 8'h01; regs[8'h04] = 8'hDC; regs[8'h0D] = 8'h00;
+            regs[8'h02] = 8'h00; regs[8'h28] = 8'h00;
         end
     endtask
     initial begin
@@ -96,6 +100,7 @@ module i2c_slave_model #(
             if (reading) phase = 2;
             if (reading && send) begin
                 sh = regs[ix];
+                if (!PAGED && ix == 11'h088) regs[ix][4] = 1'b0;      // TVP5150: read clears "lost lock"
                 if (LOG) $display("I2C R %02x %02x", ptr, sh);
                 if (AUTO_INC) ptr = ptr + 1;
                 sda_low = !sh[7];

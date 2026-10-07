@@ -44,6 +44,10 @@ module puck_ui #(
     input  wire        view_b,            // mixer currently prefers B
     input  wire [1:0]  dec_present,       // decoder answered on I2C
     input  wire [1:0]  dec_locked,        // H + V lock
+    // decoder poll rounds (tvp_ctrl.v round_ok, this clock domain): a pulse per whole round that
+    // found the decoder up, and that round's 88h bit 4 ("lost lock since 88h was last read")
+    input  wire [1:0]  dec_round,
+    input  wire [1:0]  dec_lost,
     // snow meter from the mixer (snow_stats.v, other clock domain: values stable around each toggle)
     input  wire [19:0] snow_a, snow_b,
     input  wire [10:0] use_a, use_b, use_mix,
@@ -302,10 +306,22 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || page;
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD o\r\n"  (57 bytes, zero-padded, ------ = no lines)
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD o ll\r\n"  (60 bytes, zero-padded, ------ = no lines)
     //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
     //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B),
-    //   o = "!" once the mixer has dropped a line because its line slots were full, else "-"
+    //   o = "!" once the mixer has dropped a line because its line slots were full, else "-",
+    //   ll = decoder A, decoder B since the previous line: "L" a whole poll round read 88h bit 4
+    //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset)
+    reg [1:0] ll_round, ll_lost;                           // since the previous log line
+    wire      log_take;                                    // the line is copied this clock
+    function [7:0] ll_char(input round, input lost);
+        ll_char = lost ? "L" : round ? "-" : "?";
+    endfunction
+    always @(posedge clk) begin
+        if (log_take) begin ll_round <= dec_round; ll_lost <= dec_round & dec_lost; end
+        else begin ll_round <= ll_round | dec_round; ll_lost <= ll_lost | (dec_round & dec_lost); end
+        if (rst) begin ll_round <= 2'b00; ll_lost <= 2'b00; end
+    end
     function [47:0] z6(input [23:0] b, input stale);
         integer i;
         begin
@@ -318,16 +334,18 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 57;
+    localparam LOG_LEN = 60;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
-                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ", ovf_s[1] ? "!" : "-", 16'h0D0A};
+                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ", ovf_s[1] ? "!" : "-", " ",
+                             ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), 16'h0D0A};
     reg  [8:0] log_wait;
     reg  [5:0] log_i;
     reg        log_active, u_send;
     reg  [LOG_LEN*8-1:0] log_buf;
     wire       u_busy;
+    assign log_take = (log_wait == 9'd400);
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));
     always @(posedge clk) begin
