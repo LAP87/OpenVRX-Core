@@ -40,28 +40,34 @@ module noise_stats #(
     wire [8:0]  idx       = data[40:32];
     wire [1:0]  n_word    = {1'b0, outside(data[15:8])} + {1'b0, outside(data[31:24])};   // Y0, Y1
     reg  [9:0]  cnt;
-    wire [9:0]  base      = (idx == 9'd0) ? 10'd0 : cnt;
+    reg  [10:0] cnt_tag;                  // {field, line} of the words counted in cnt
+    wire [10:0] tag       = data[51:41];
+    // A line that starts again (an extra SAV) without a whole word before its EAV sends no word
+    // of its own: the words counted belong to the line before, whose marker never came.
+    wire [9:0]  base      = (idx == 9'd0 || tag != cnt_tag) ? 10'd0 : cnt;
     wire [10:0] cnt_n     = {1'b0, base} + {9'd0, n_word};
     reg  [LOG_N+9:0] acc;
     reg  [LOG_N-1:0] n_l;
 
     always @(posedge clk) begin
         line_valid <= 1'b0;
-        if (valid && !is_marker)
-            cnt <= cnt_n[10] ? 10'd1023 : cnt_n[9:0];
+        if (valid && !is_marker) begin
+            cnt     <= cnt_n[10] ? 10'd1023 : cnt_n[9:0];
+            cnt_tag <= tag;
+        end
         if (valid && is_marker) begin
             line_valid <= 1'b1;
             line_field <= data[51];
             line_no    <= data[50:41];
-            line_count <= cnt;
+            line_count <= (tag == cnt_tag) ? cnt : 10'd0;
             cnt        <= 10'd0;
             if (&n_l) begin
-                sum <= acc + cnt; acc <= 0; toggle <= ~toggle;
-            end else acc <= acc + cnt;
+                sum <= acc + ((tag == cnt_tag) ? cnt : 10'd0); acc <= 0; toggle <= ~toggle;
+            end else acc <= acc + ((tag == cnt_tag) ? cnt : 10'd0);
             n_l <= n_l + 1'b1;
         end
         if (rst) begin
-            cnt <= 0; acc <= 0; n_l <= 0; sum <= 0; toggle <= 1'b0; line_valid <= 1'b0;
+            cnt <= 0; cnt_tag <= 11'h7FF; acc <= 0; n_l <= 0; sum <= 0; toggle <= 1'b0; line_valid <= 1'b0;
         end
     end
 endmodule

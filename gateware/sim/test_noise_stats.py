@@ -33,6 +33,7 @@ MUTANTS = {
     'chroma': ("outside(data[15:8])} + {1'b0, outside(data[31:24])",
                "outside(data[7:0])} + {1'b0, outside(data[23:16])"),
 }
+RESTART_OLD = ("line_count <= (tag == cnt_tag) ? cnt : 10'd0;", "line_count <= cnt;")
 
 
 def vector(name):
@@ -51,20 +52,23 @@ def windows(lines):
     return [sum(c[i:i + n]) for i in range(0, len(c) - n + 1, n)]
 
 
-def run(mutant=None):
+def run(mutant=None, a_name='ntsc_spikes', b_name='pal_faults', alter=None):
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_noise_stats_{mutant or "rtl"}'
+    work = HERE / 'build' / f'tb_noise_stats_{mutant or "rtl"}_{a_name}{"_alt" if alter else ""}'
     work.mkdir(parents=True, exist_ok=True)
     src = (GW / 'rtl' / 'noise_stats.v').read_text()
     if mutant:
         old, new = MUTANTS[mutant]
         assert src.count(old) == 1, f'{mutant}: the text to alter is not in noise_stats.v once'
         src = src.replace(old, new)
+    if alter:
+        assert src.count(alter[0]) == 1
+        src = src.replace(*alter)
     (work / 'noise_stats.v').write_text(src)
-    a, b = vector('ntsc_spikes'), vector('pal_faults')
+    a, b = vector(a_name), vector(b_name)
     bt656.write_hex(work / 'a.hex', a)
     bt656.write_hex(work / 'b.hex', b)
     params = dict(N_A=len(a), N_B=len(b), LOG_N=LOG_N)
@@ -104,6 +108,23 @@ def test_noise_stats_matches_model():
     assert r['wa'] == windows(ea) and len(r['wa']) == 4, (r['wa'], windows(ea))
     assert r['wb'] == windows(eb) and len(r['wb']) == 1, (r['wb'], windows(eb))
     assert sum(c for _, _, c in eb) > 0, 'the snow line of pal_faults has luma outside the range'
+
+
+def test_line_started_again_counts_its_own_bytes():
+    """An extra SAV 1435 bytes into a line's active part starts a line with one active byte and
+    no whole word. Its count is 0, as luma_outside() gives; noise_stats.v gave it the spikes of
+    the line before, whose marker never came, because it reset its count only on word 0 (found
+    by sim/test_fuzz_chain.py, round r2, seed 166)."""
+    e = expected('ntsc_restart')
+    assert any(r.active_count == 1 for r in bt656.Receiver().feed(vector('ntsc_restart')))
+    r = run(a_name='ntsc_restart')
+    assert r['la'] == e, (r['la'], e)
+
+
+def test_line_started_again_check_is_tested():
+    """Negative control: the count taken at the marker whatever line its words came from."""
+    r = run(a_name='ntsc_restart', alter=RESTART_OLD)
+    assert len(r['la']) == len(expected('ntsc_restart')) and r['la'] != expected('ntsc_restart')
 
 
 @pytest.mark.parametrize('mutant', sorted(MUTANTS))
