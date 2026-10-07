@@ -682,10 +682,11 @@ def sort_known(sc, logs, fd):
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled'):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled',
+             density=1.0):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry)
+    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry, density=density)
     use_geometry(geometry)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
@@ -709,7 +710,7 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
     if not keep and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
-               std=sc.std, ll0=sc.ll0, geometry=geometry,
+               std=sc.std, ll0=sc.ll0, geometry=geometry, density=density, n_fields=n_fields,
                result='fail' if fd.items else ('known' if fd.known else ('edge' if fd.edges else 'pass')),
                known=fd.known[:4],
                groups=fd.groups(), first=fd.first(), findings=fd.items[:12], edges=fd.edges[:4],

@@ -178,16 +178,17 @@ def _xy_bits(rng, code):
     return code, nb
 
 
-def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
+def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', density=1.0):
     """Scenario for one seed. classes: the classes allowed (None: all); each allowed class is
-    used with its probability in CLASSES. force: classes used whatever their probability."""
+    used with its probability in CLASSES, times density (capped at 1). force: classes used
+    whatever their probability."""
     if n_fields is None:
         n_fields = N_FIELDS if geometry == 'scaled' else N_FIELDS_FULL
     enabled = tuple(sorted(set(CLASSES if classes is None else classes) | set(force)))
     unknown = set(enabled) - set(CLASSES)
     assert not unknown, f'unknown classes {unknown}'
     rngs = {c: _rng(seed, c) for c in CLASSES}
-    on = {c for c in enabled if rngs[c].random() < CLASSES[c] or c in force}
+    on = {c for c in enabled if rngs[c].random() < min(1.0, CLASSES[c] * density) or c in force}
     if 'mode_switch' in on and 'pal' in on and geometry == 'scaled':
         on.discard('mode_switch')                        # see the docstring
     used = {c: [] for c in sorted(on)}
