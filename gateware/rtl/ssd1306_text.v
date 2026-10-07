@@ -61,6 +61,7 @@ module ssd1306_text #(
     wire [7:0] rdata;
     i2c_master #(.DIV(I2C_DIV)) i2c (
         .clk(clk), .rst(rst), .start(start), .rw(1'b0), .dev(DEV), .addr(ctrl), .wdata(byte_out),
+        .wextra(8'd0), .wreq(),                                   // single-byte writes only
         .busy(busy), .done(done), .nack(nack), .rdata(rdata),
         .scl_low(scl_low), .sda_low(sda_low), .scl_in(scl_in), .sda_in(sda_in));
 

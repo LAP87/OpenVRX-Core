@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (314 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (318 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -43,7 +43,7 @@ Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/mod
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
 | `rx5808_spi.v`, `rx5808_tune.v`, `vtx_channels.vh` (genererad), `ssd1306_text.v`, `font5x7.vh` (genererad), `puck_ui.v`, `snow_stats.v`, `bin2bcd.v`, `osd_overlay.v`, `uart_tx.v` | Puck: RX5808-kanalstyrning (SPI) och när kanalen skrivs (0,5 s efter start, vid kanalbyte, varannan sekund utan lås), 48 kanaler med svensk-bandflagga, OLED-text 4×21 tecken utan bildbuffert, meny med två knappar, delad I2C-buss med `tvp_ctrl` (hold/active) | `sim/test_puck_ui.py`: SPI-ord bit för bit mot `model/vtx_channels.py`, skärmbilden (huvud- och mätarsida) avläst ur pixlarna via teckensnittet, inga busskollisioner; `sim/test_rx5808_tune.py`: skrivtidpunkterna mot en modell av regeln; `sim/test_snow_stats.py`, `sim/test_osd.py`; UART-loggen och OSD-visningen i `sim/test_puck_ui.py`; `tools/test_snowlog.py` |
 | `noise_stats.v` | Brusmått per mottagare: lumasampel utanför 16–235 per rad och summerat över 1 024 rader, räknat på orden ur kanalens FIFO i mixerns klockdomän. Mixern läser det inte; det går till M6-loggen | `sim/test_noise_stats.py`: varje rad och varje fönster mot `luma_outside()` i `model/bt656.py` på vektorn `ntsc_spikes` (injicerade spikar, gränsvärdena 15/16/235/236, krominans utanför intervallet); negativa kontroller: intervallet 15–236 och räkning av krominans ger andra tal |
-| `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/04h/0Dh/03h; 04h maskar SECAM ur autoswitchen), pollning av status 88h/89h, och ny uppstart av en dekoder som har återställts (03h läses tillbaka vid varje pollning, räknare per dekoder) | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder, återställd dekoder, dekoder som inte tar emot skrivningar, SDA kortsluten låg, dekoder som kommer in sent) |
+| `i2c_master.v`, `tvp_ctrl.v` | I2C; uppstart av egna TVP5150AM1 (reset, 00h/04h/0Dh/03h; 04h maskar SECAM ur autoswitchen), pollning av status 88h/89h, och ny uppstart av en dekoder som har återställts (03h läses tillbaka vid varje pollning, räknare per dekoder). `i2c_master.v` kan skriva upp till 256 databyte efter registeradressen i en transaktion (`wextra`, `wreq`); `tvp_ctrl.v` och `ssd1306_text.v` skriver en byte i taget | `sim/test_tvp_ctrl.py` mot I2C-slavmodeller (två adresser, delad adress med separata SDA, saknad dekoder, återställd dekoder, dekoder som inte tar emot skrivningar, SDA kortsluten låg, dekoder som kommer in sent); `sim/test_i2c_master.py`: skrivningar om 1, 2, 8 och 256 byte, NACK mitt i och på första databyten, frånvarande adress, återläsning, allt mot `model/i2c_ref.py` (bussen bit för bit, lagrade register); negativa kontroller: slav utan autoinkrement, master som inte avbryter efter NACK |
 
 ## Verktyg (allt i projektmappen, inget på systemet)
 
@@ -207,6 +207,13 @@ Till 2026-10-05 räknade mixern en kanal som död efter 1,0 ms utan rader, vilke
 | Jord | J6-20 / J5-2, J5-15 | |
 
 Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per dekoder. Kontrollera modulernas matning och IO-nivå (3,3 V) innan inkoppling. Stift 52–56 (konfigurationsstift) används inte.
+
+**Flerbyteskrivning och TI:s firmware-patch.** `i2c_master.v` skriver registeradressen och sedan upp till 256 databyte i samma transaktion; dekoderns registerpekare räknar upp mellan dem. Nästa byte begärs med `wreq` och ska ligga på `wdata` inom 32 × `DIV` klockor. En flerbyteskrivning avslutas med STOP direkt efter första byte som inte kvitteras. Simulerat mot slavmodellen (`sim/test_i2c_master.py`), inte provat mot en TVP5150AM1. Dekoderns init-lista är oförändrad och patchen används inte. För att använda den krävs:
+- patchdata och laddningsordning från TI. Datan är TI:s och ligger inte i repot; licensen avgör om den kan ligga där eller måste läsas från flash;
+- ett laddsteg i `tvp_ctrl.v` som matar `wreq` ur block-RAM eller flash, i den ordning TI anger relativt reset och init-listan, och som görs om när en återställd dekoder startas om;
+- en kontroll av att patchen är laddad, som M3-proben kan visa;
+- tid: vid 99 kHz tar varje byte 91 µs, alltså ungefär 0,1 s per kilobyte och dekoder;
+- prov på kortet med och utan patch.
 
 M4 ställer själv båda mottagarna på F4 5800 MHz (`rtl/rx5808_tune.v`, samma stift som M3 och M6): 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst. Testat mot en modell av regeln i `sim/test_rx5808_tune.py`.
 

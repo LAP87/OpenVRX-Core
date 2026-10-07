@@ -95,6 +95,7 @@ module tvp_ctrl #(
     assign sda_low = {sel1 & m_sda_low, ~sel1 & m_sda_low};
     i2c_master #(.DIV(I2C_DIV)) i2c (
         .clk(clk), .rst(rst), .start(start), .rw(rw), .dev(dev), .addr(addr), .wdata(wdata),
+        .wextra(8'd0), .wreq(),                                   // single-byte writes only
         .busy(busy), .done(done), .nack(nack), .rdata(rdata),
         .scl_low(scl_low), .sda_low(m_sda_low), .scl_in(scl_in), .sda_in(sel1 ? sda_in[1] : sda_in[0]));
 
