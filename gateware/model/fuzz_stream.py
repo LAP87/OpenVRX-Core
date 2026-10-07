@@ -55,6 +55,9 @@ The classes (name: what is injected)
   mode_switch  ll_mode (BUF/LOW) switched 1-2 times while video runs, sometimes LOW from
                reset; NTSC only (fb_backend.v takes PAL from a line count of 270, which
                the scaled fields never reach)
+  b_edge       B's lines arrive 1024 + k mixer clocks (k = -3..3, plus a fraction of a clock)
+               after or before A's: the edge of the pairing window. Never drawn at random;
+               generate(force=('b_edge',)) uses it
 
 The reference models are not changed by anything here: the streams go through
 bt656.Receiver, line_mixer_ref.Mixer and fb_ref.FieldStore in sim/test_fuzz_chain.py.
@@ -85,6 +88,7 @@ CLASSES = {                        # name: probability that a seed uses it
     'field_drop': 0.10, 'bit_error': 0.30, 'luma_click': 0.30, 'noise_line': 0.25,
     'b_silent': 0.25, 'b_offset': 0.15, 'b_swap': 0.15, 'b_drift': 0.20,
     'dec_reset': 0.15, 'ext_nolock': 0.20, 'mode_switch': 0.30,
+    'b_edge': 0.0,                 # only when forced (generate(force=...)), so older seeds stay as they were
 }
 CH_A, CH_B, LL = 0, 1, 2           # control kinds (tb_chain.v ctl.hex)
 
@@ -165,14 +169,14 @@ def _xy_bits(rng, code):
     return code, nb
 
 
-def generate(seed, classes=None, n_fields=N_FIELDS):
+def generate(seed, classes=None, n_fields=N_FIELDS, force=()):
     """Scenario for one seed. classes: the classes allowed (None: all); each allowed class is
-    used with its probability in CLASSES."""
-    enabled = tuple(sorted(CLASSES if classes is None else classes))
+    used with its probability in CLASSES. force: classes used whatever their probability."""
+    enabled = tuple(sorted(set(CLASSES if classes is None else classes) | set(force)))
     unknown = set(enabled) - set(CLASSES)
     assert not unknown, f'unknown classes {unknown}'
     rngs = {c: _rng(seed, c) for c in CLASSES}
-    on = {c for c in enabled if rngs[c].random() < CLASSES[c]}
+    on = {c for c in enabled if rngs[c].random() < CLASSES[c] or c in force}
     if 'mode_switch' in on and 'pal' in on:
         on.discard('mode_switch')                        # see the docstring
     used = {c: [] for c in sorted(on)}
@@ -454,6 +458,12 @@ def generate(seed, classes=None, n_fields=N_FIELDS):
         off_lines = rr.choice((-1, 1)) * rr.randint(1, 7)
         frac = rr.uniform(-0.45, 0.45) * line_ns
         used['b_offset'].append(f'B {off_lines:+d} lines {frac:+.0f} ns')
+    if 'b_edge' in on:
+        rr = rngs['b_edge']
+        k = rr.randint(-3, 3)
+        frac = rr.choice((-1, 1)) * ((1024 + k) * T_S + rr.uniform(0.0, T_S))
+        off_lines = 0
+        used['b_edge'].append(f'B {frac:+.1f} ns from A (1024 {k:+d} clocks and a fraction)')
     start_b = start_a + off_lines * line_ns + frac
     if start_b < 400_000.0:                               # keep both after the SDRAM is ready
         d = 400_000.0 - start_b

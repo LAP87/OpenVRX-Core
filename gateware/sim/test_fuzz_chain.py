@@ -665,10 +665,10 @@ def sort_known(sc, logs, fd):
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=fz.N_FIELDS):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=fz.N_FIELDS, force=()):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes, n_fields=n_fields)
+    sc = fz.generate(seed, classes, n_fields=n_fields, force=force)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
     try:

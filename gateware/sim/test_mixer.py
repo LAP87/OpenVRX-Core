@@ -12,7 +12,9 @@ better receiver, nothing from an unlocked one, no extra field boundaries.
 Arrival times: the model gets the time each line record completes in the byte
 stream. The RTL sees it a fraction of a microsecond later (FIFO crossing), the
 same for both channels, so the scenarios keep arrival differences away from 0
-and from the pairing window (checked in `events`).
+and from the pairing window (checked in `events`). test_pairing_window_edge sits
+on the window's edge instead, with the model on the exact clock edge at which
+mix_chan takes each line (line_mixer_ref.arrival_cycle).
 
 Run:  .venv/bin/python -m pytest -q gateware/sim/test_mixer.py
 """
@@ -206,6 +208,56 @@ def check(name, a, b, params=None, ev_kw=None, alter=None, **model_kw):
         assert g == e, f'word {i}: rtl {g} model {e}'
     assert end[1] == m.cur
     return m
+
+
+def events_exact(a, b, start_a=START_A, start_b=START_B, t_a=T_A, t_b=T_B):
+    """Line records in arrival order, timed in mixer clock edges: the edge at which mix_chan takes
+    each line's marker in tb_mixer.v (line_mixer_ref.arrival_cycle). Exact, also at the edges."""
+    out = []
+    for ch, data, t0, per in ((0, a, start_a, t_a), (1, b, start_b, t_b)):
+        rx = bt656.Receiver()
+        for k, byte in enumerate(data):
+            n = len(rx.records)
+            rx.push(byte)
+            if len(rx.records) > n:
+                r = rx.records[-1]
+                out.append((ref.arrival_cycle(RST_NS + t0, 2 * round(per / 2, 3), k, r.active_count, T_S), ch, r))
+    return sorted(out, key=lambda e: e[:2])
+
+
+def check_exact(name, a, b, params, ev_kw, t_pair=ref.T_PAIR_CYCLES):
+    """As check(), with the model on exact arrival cycles (no distance from the edges needed)."""
+    ev = events_exact(a, b, **ev_kw)
+    m = model(ev, t_pair=t_pair)
+    dec, curs, out, end = run_sim(a, b, HERE / 'build' / name, params)
+    assert end is not None and end[0] == 0 and not m.overflow
+    for i, (g, e) in enumerate(zip(zip(dec, curs), zip(m.trace, m.curs))):
+        assert g == e, f'decision {i}: rtl {g} model {e}'
+    assert len(dec) == len(m.trace) and out == m.out and end[1] == m.cur
+    return m, ev
+
+
+@pytest.mark.parametrize('sign', [1, -1])
+def test_pairing_window_edge(sign):
+    """B's lines arrive 1023.5 mixer clocks after A's (sign 1) or before them (-1): the edge of
+    the pairing window. The clock phases make each difference 1023 or 1024 clocks, so some lines
+    pair and some do not. On the edge at which mix_chan takes each line (line_mixer_ref.
+    arrival_cycle) the model agrees with the RTL on every decision and word. Negative control:
+    the model with a window one clock longer or shorter disagrees with the same run."""
+    start = START_A + ref.T_PAIR_CYCLES * T_S
+    kw = {'START_A': start, 'START_B': start + sign * (ref.T_PAIR_CYCLES - 0.5) * T_S, 'T_B': T_A}
+    a = Stream(11).field(0).field(1).done()
+    b = Stream(12).field(0).field(1).done()
+    ev_kw = {'start_a': start, 'start_b': kw['START_B'], 't_b': T_A}
+    m, ev = check_exact(f'tb_mixer_edge{sign:+d}', a, b, kw, ev_kw)
+    ta = {(r.field, r.line_in_field): t for t, ch, r in ev if ch == 0}
+    d = {abs(t - ta[(r.field, r.line_in_field)]) for t, ch, r in ev if ch == 1 and (r.field, r.line_in_field) in ta}
+    assert min(d) < ref.T_PAIR_CYCLES <= max(d), f'the differences do not straddle the edge: {sorted(d)}'
+    pairs = sum(1 for _, p, *_ in m.trace if p == 0b11)
+    assert 0 < pairs < 2 * LINES, f'{pairs} pairs: all or none of the lines paired'
+    for t_pair in (ref.T_PAIR_CYCLES - 1, ref.T_PAIR_CYCLES + 1):
+        other = model(ev, t_pair=t_pair)
+        assert other.trace != m.trace, f'a window of {t_pair} clocks gives the same decisions'
 
 
 # ---- what the trace must look like

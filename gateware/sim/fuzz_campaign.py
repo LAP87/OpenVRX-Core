@@ -1,6 +1,6 @@
 """Fuzz campaign through the picture chain (test_fuzz_chain.py), outside pytest.
 
-  fuzz_campaign.py run ROUND SEEDS [--classes a,b] [--jobs 10] [--budget 540]
+  fuzz_campaign.py run ROUND SEEDS [--classes a,b] [--force c] [--jobs 10] [--budget 540]
       Runs the seeds of SEEDS (e.g. 0-99) that build/fuzz/ROUND.jsonl does not have yet,
       JOBS at a time, and stops starting new ones when BUDGET seconds are nearly used up.
       Each result is appended as one JSON line, so the next call carries on.
@@ -32,15 +32,15 @@ def results(path):
 
 
 def _one(args):
-    seed, classes, work = args
+    seed, classes, work, force = args
     try:
-        return t.run_seed(seed, classes, work=Path(work))
+        return t.run_seed(seed, classes, work=Path(work), force=force)
     except Exception as err:      # a crash in the checks is a result too
         return dict(seed=seed, result='crash', groups=['bench/crash'], first=dict(block='bench', kind='crash', t=0,
                     detail=repr(err)[:500]), classes=[], enabled=None if classes is None else sorted(classes))
 
 
-def run_many(jobs_list, out_path, jobs, budget, tag):
+def run_many(jobs_list, out_path, jobs, budget, tag, force=()):
     """jobs_list: [(key, seed, classes)]; runs those whose key is not in out_path yet."""
     done = {r.get('key', r['seed']) for r in results(out_path)}
     todo = [j for j in jobs_list if j[0] not in done]
@@ -52,7 +52,7 @@ def run_many(jobs_list, out_path, jobs, budget, tag):
             while todo and len(running) < jobs and time.time() - t0 + EST < budget:
                 key, seed, classes = todo.pop(0)
                 work = HERE / 'build' / 'fuzz' / tag / f'{key}'
-                running[ex.submit(_one, (seed, classes, str(work)))] = key
+                running[ex.submit(_one, (seed, classes, str(work), tuple(force)))] = key
             if not running:
                 break
             fin, _ = cf.wait(list(running), return_when=cf.FIRST_COMPLETED)
@@ -104,13 +104,15 @@ def main():
     ap.add_argument('--jobs', type=int, default=10)
     ap.add_argument('--budget', type=float, default=540.0)
     ap.add_argument('--keep', default='')
+    ap.add_argument('--force', default='')
     a = ap.parse_args()
     out = HERE / 'build' / 'fuzz'
     out.mkdir(parents=True, exist_ok=True)
     if a.cmd == 'run':
         classes = a.classes.split(',') if a.classes else None
         jl = [(s, s, classes) for s in t.parse_seeds(a.seeds)]
-        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what)
+        force = [c for c in a.force.split(',') if c]
+        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what, force)
     elif a.cmd == 'summary':
         summary(out / f'{a.what}.jsonl')
     else:

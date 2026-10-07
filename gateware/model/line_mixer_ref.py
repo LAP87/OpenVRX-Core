@@ -40,9 +40,13 @@ channel has a field counter (advanced when its own line number restarts); a
 line is admitted when it starts a new field or lies above the last line sent.
 The F bit of the output is latched from the first line of each output field.
 
-Time is in ns. The RTL measures ages in system-clock cycles from the moment a
-line's marker is stored; decisions that fall within a few cycles of T_PAIR can
-differ from this model, so tests keep clear of that boundary.
+Time is in ns, or in system clock edges. The RTL measures ages in system-clock
+cycles from the edge at which mix_chan takes a line's marker from its FIFO;
+arrival_cycle() gives that edge from the byte stream. On those times the model is
+exact also at the edge of the pairing window (sim/test_mixer.py::
+test_pairing_window_edge, sim/test_fuzz_chain.py). On times in ns from the byte
+stream alone, decisions within a few cycles of T_PAIR can differ, so the other
+mixer tests keep clear of that boundary.
 """
 from collections import deque
 
