@@ -378,7 +378,7 @@ def checksum(ws):
 class Frame:
     def __init__(self, show, prev, low, rt, cyc, lines, k_new):
         self.show, self.prev, self.low, self.rt, self.cyc, self.lines, self.k_new = show, prev, low, rt, cyc, lines, k_new
-        self.want, self.got, self.org = [], [], []
+        self.want, self.got, self.org, self.bad = [], [], [], []
 
 
 def check_store(logs, words, org, run, fd):
@@ -475,11 +475,15 @@ def check_store(logs, words, org, run, fd):
                 if (v[0] == '1') != (src[0] == fb.BLANK):
                     fd.add('store', 'read', 0, f'black line where {src} was due, or the reverse')
                 want = 'x' if None in content else f'{checksum(content):08x}'
-                if v[2] != want:
-                    fd.add('store', 'read', 0, f'line {src}: checksum {v[2]}, the SDRAM held {want}')
+                # a read that does not match what the SDRAM held when it started (a line being written):
+                # checked where the line is shown (frames without video show nothing)
+                bad = None if v[2] == want else f'line {src}: checksum {v[2]}, the SDRAM held {want} when the read began'
                 if fr is not None:
                     fr.got.append(content)
                     fr.org.append(o)
+                    fr.bad.append(bad)
+                elif bad:
+                    fd.notes.append('read outside a frame: ' + bad)
         except AssertionError as err:                   # the model refuses the event
             fd.add('store', 'model', 0, f'{ev}: {err}')
     return [f for f in frames if f is not None]
@@ -579,6 +583,9 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('display', 'not_read', t_frame, f'output line {y}: source line {s} was not read')
                 break
             j = fr.want.index(s)
+            if fr.bad[j]:
+                fd.add('store', 'read', t_frame, f'output line {y}: {fr.bad[j]}')
+                break
             want = fr.got[j][52]
             if pf['shown'][y] != want:
                 fd.add('display', 'word', t_frame, f"output line {y}: shows {pf['shown'][y]}, line read had {want}")
