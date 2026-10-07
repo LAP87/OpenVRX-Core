@@ -7,6 +7,8 @@
 //            2     decoder 1 acknowledges writes but ignores them: 03h never reads back 0Dh
 //            3     decoder 1 joins the bus after start-up (use with PRESENT1 = 0) and leaves it again
 //            4     decoder 1's SDA line is shorted to ground (use with SPLIT = 1)
+//            5/6/7 decoder 1 refuses register 88h / 89h / 03h until one poll round has failed
+//                  (MID is printed right after that round), then answers again
 `timescale 1ns/1ps
 `default_nettype none
 module tb_tvp_ctrl;
@@ -69,9 +71,17 @@ module tb_tvp_ctrl;
         #3000 rst = 0;
         wait (init_done);
         wait (status_valid[0]);
-        if (PRESENT1) wait (status_valid[1]);
+        // a decoder whose outputs never come on (2, 4) never has valid status
+        if (PRESENT1 && SCENARIO != 2 && SCENARIO != 4) wait (status_valid[1]);
         #20_000_000;
         case (SCENARIO)
+            5, 6, 7: begin
+                s1.nack_reg = (SCENARIO == 5) ? 8'h88 : (SCENARIO == 6) ? 8'h89 : 8'h03;
+                wait (dev_err[1]);
+                @(posedge clk); show(0);
+                s1.nack_reg = -1;
+                #30_000_000;
+            end
             1: begin
                 s1.tvp_reset; #30_000_000;
                 show(0);

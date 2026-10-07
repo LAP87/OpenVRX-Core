@@ -24,6 +24,12 @@
 //   03h  read-back. Anything but 0Dh means the decoder has been reset (supply dip,
 //        glitch on RESETB) and its outputs are off: the init list is written again
 //        and reinitN counts it. RESETB is not pulsed, the other decoder keeps running.
+// A poll round counts as a whole: its status words are published and dev_err
+// cleared only when all three reads were acknowledged, and status_valid is set
+// only if 03h also read 0Dh. A NACK on any read ends the round with dev_err set
+// and status_valid cleared (the words from before stay, no longer valid). A
+// reset decoder publishes its words but clears status_valid until a later
+// whole round finds it up. A later ACK never makes a failed round valid.
 //
 // I2C addresses 5Ch (B8h) and 5Dh (BAh), set by YOUT7's pull at reset. Two
 // identical modules have the same address (the pull is fixed on the module):
@@ -47,10 +53,10 @@ module tvp_ctrl #(
     input  wire        scl_in,
     input  wire [1:0]  sda_in,
     output reg         init_done,         // the init list has been tried on every decoder
-    output reg  [1:0]  dev_err,           // the decoder's last transaction was not acknowledged
-    output reg  [15:0] status0,           // {89h, 88h} of decoder 0
+    output reg  [1:0]  dev_err,           // the decoder's last init list or poll round had a NACK
+    output reg  [15:0] status0,           // {89h, 88h} of decoder 0, from its last round with all reads acknowledged
     output reg  [15:0] status1,
-    output reg  [1:0]  status_valid,      // a poll result has arrived since reset
+    output reg  [1:0]  status_valid,      // the decoder's last poll round was whole and found it up
     output reg  [7:0]  reinit0,           // times decoder 0 was found reset and brought up again (stops at FFh)
     output reg  [7:0]  reinit1,
     input  wire        hold,              // another master on the same bus wants it: start nothing new
@@ -84,6 +90,7 @@ module tvp_ctrl #(
     reg        di;                        // decoder index
     reg [1:0]  ii;                        // init entry / poll register
     reg        again;                     // the running init list is a re-initialisation inside a poll round
+    reg [7:0]  p88, p89;                  // the running poll round's status, published when the round is whole
 
     reg        start, rw;
     reg [6:0]  dev;
@@ -114,8 +121,8 @@ module tvp_ctrl #(
             st <= S_WAIT; ret <= S_INIT;
         end
         S_WAIT: if (done) begin
-            dev_err[di] <= nack;
             if (ret == S_INIT) begin
+                dev_err[di] <= nack;
                 if (ii == N_INIT - 1 || nack) begin                  // list done, or nobody there
                     ii <= 0;
                     if (again) begin again <= 1'b0; st <= S_NEXT; end
@@ -123,20 +130,24 @@ module tvp_ctrl #(
                     else begin di <= di + 1'b1; st <= S_INIT; end
                 end else begin ii <= ii + 1'b1; st <= S_INIT; end
             end else begin
-                if (!nack) case (ii)
-                    2'd0: if (di) status1[7:0] <= rdata; else status0[7:0] <= rdata;
-                    2'd1: begin
-                        if (di) status1[15:8] <= rdata; else status0[15:8] <= rdata;
+                if (nack) begin                                      // the round is void
+                    dev_err[di] <= 1'b1; status_valid[di] <= 1'b0; st <= S_NEXT;
+                end else if (ii != P_LAST) begin                     // next register at once
+                    if (ii == 2'd0) p88 <= rdata; else p89 <= rdata;
+                    ii <= ii + 1'b1; st <= S_POLL; t <= POLL_MS * MS;
+                end else begin                                       // a whole round: publish it
+                    if (di) status1 <= {p89, p88}; else status0 <= {p89, p88};
+                    dev_err[di] <= 1'b0;
+                    if (rdata != MISC_ON) begin                      // ... but the decoder has been reset
+                        if (di) begin if (reinit1 != 8'hFF) reinit1 <= reinit1 + 1'b1; end
+                        else    begin if (reinit0 != 8'hFF) reinit0 <= reinit0 + 1'b1; end
+                        status_valid[di] <= 1'b0;
+                        again <= 1'b1; ii <= 0; st <= S_INIT;
+                    end else begin
                         status_valid[di] <= 1'b1;
+                        st <= S_NEXT;
                     end
-                    default: ;
-                endcase
-                if (ii != P_LAST) begin ii <= ii + 1'b1; st <= S_POLL; t <= POLL_MS * MS; end   // next register at once
-                else if (!nack && rdata != MISC_ON) begin            // the decoder has been reset
-                    if (di) begin if (reinit1 != 8'hFF) reinit1 <= reinit1 + 1'b1; end
-                    else    begin if (reinit0 != 8'hFF) reinit0 <= reinit0 + 1'b1; end
-                    again <= 1'b1; ii <= 0; st <= S_INIT;
-                end else st <= S_NEXT;
+                end
             end
         end
         S_POLL: begin

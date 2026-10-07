@@ -94,10 +94,13 @@ def test_probe_reports():
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
         assert i2c == 'OK' and st == '000E', l
-    for l in b[1:3]:
+    # B is reset at 12 ms (window 2). The poll round that finds 03h back at its default writes the
+    # list again and makes B's status not valid; the next whole round, after window 2's report,
+    # makes it valid again (tvp_ctrl.v, review 2026-10-06 F2)
+    for l, want in zip(b[1:3], ('----', '000E')):
         _, _, body, i2c, st, _ = fields(l)
         assert body.startswith('tog DB hi DF len --------- ln 00000 fld 000 xe 0000'), l
-        assert i2c == 'OK' and st == '000E', l
+        assert i2c == 'OK' and st == want, l
 
     # B's clock has stopped: the line says so instead of repeating stale values
     _, f_dead, body, _, _, _ = fields(b[3])

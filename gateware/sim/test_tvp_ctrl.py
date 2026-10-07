@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 GW = HERE.parent
 PROJECT = GW.parent
@@ -44,17 +46,27 @@ def test_status_words_mean_what_the_datasheet_says():
     assert not tvp_status.healthy(0x0000, 'ntsc')
 
 
-def run(present1, split=0, scenario=0):
-    """Returns the testbench's RESULT line as a dict, and its MID line (or None)."""
+KEEP_VALID = ("dev_err[di] <= 1'b1; status_valid[di] <= 1'b0; st <= S_NEXT;", "dev_err[di] <= 1'b1; st <= S_NEXT;")
+
+
+def run(present1, split=0, scenario=0, alter=None):
+    """Returns the testbench's RESULT line as a dict, and its MID line (or None).
+    alter: (text, replacement) in a copy of tvp_ctrl.v (negative controls)."""
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}'
+    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}{"_alt" if alter else ""}'
     work.mkdir(parents=True, exist_ok=True)
+    ctrl = GW / 'rtl' / 'tvp_ctrl.v'
+    if alter:
+        text = ctrl.read_text()
+        assert text.count(alter[0]) == 1
+        ctrl = work / 'tvp_ctrl.v'
+        ctrl.write_text(text.replace(*alter))
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_tvp_ctrl', f'-Ptb_tvp_ctrl.PRESENT1={present1}',
                     f'-Ptb_tvp_ctrl.SPLIT={split}', f'-Ptb_tvp_ctrl.SCENARIO={scenario}',
-                    str(GW / 'rtl' / 'i2c_master.v'), str(GW / 'rtl' / 'tvp_ctrl.v'),
+                    str(GW / 'rtl' / 'i2c_master.v'), str(ctrl),
                     str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_tvp_ctrl.v')], cwd=work, env=env, check=True)
     out = subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True, text=True).stdout
     line = next(l for l in out.splitlines() if l.startswith('RESULT'))
@@ -111,6 +123,7 @@ def test_reinit_counter_saturates():
     assert int(r['s1_writes']) > 4 * 256
     assert r['reinit0'] == '0' and r['s0_writes'] == '4' and r['err'] == '0'
     assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL            # status polling goes on
+    assert r['valid'] == '1'                                     # ... but decoder 1 is never up
 
 
 def test_sda_shorted_low_shows_in_the_counter():
@@ -119,6 +132,26 @@ def test_sda_shorted_low_shows_in_the_counter():
     r, _ = run(1, split=1, scenario=4)
     assert r['err'] == '0' and r['st1'] == '0000' and r['reinit1'] == '255' and r['s1_writes'] == '0'
     assert r['reinit0'] == '0' and r['s0_writes'] == '4' and r['st0'] == ST_NTSC
+    assert r['valid'] == '1'                                     # 03h never reads 0Dh: decoder 1 never valid
+
+
+@pytest.mark.parametrize('scenario', [5, 6, 7])
+def test_failed_poll_round_is_not_valid(scenario):
+    """Decoder 1 refuses 88h, 89h or 03h in one poll round; the other reads of that round
+    succeed (review 2026-10-06, F2: a NACK on 88h was hidden by the ACK on 89h). Right after
+    the round its status is not valid and the error flag is set; the words from before stay.
+    The next whole round makes it valid again. A refused 03h is not a reset decoder."""
+    r, mid = run(1, scenario=scenario)
+    assert mid['err'] == '2' and mid['valid'] == '1' and mid['st1'] == ST_PAL, mid
+    assert r['err'] == '0' and r['valid'] == '3' and r['st1'] == ST_PAL and r['st0'] == ST_NTSC, r
+    assert r['reinit1'] == '0' and r['s1_writes'] == '4'
+
+
+def test_failed_poll_round_check_is_tested():
+    """Negative control: a copy of tvp_ctrl.v that sets the error flag but leaves the status
+    valid after a failed round is caught."""
+    _, mid = run(1, scenario=5, alter=KEEP_VALID)
+    assert mid['err'] == '2' and mid['valid'] == '3', mid
 
 
 def test_late_decoder_and_error_flag():

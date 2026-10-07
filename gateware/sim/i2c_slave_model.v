@@ -12,7 +12,8 @@
 // supply dip), wr_protect (writes are acknowledged but ignored), nack_data
 // (>= 0: the data byte with that index in a write, counted from 0 after the
 // register byte, is not acknowledged and not stored, nor is anything after it
-// until the next START).
+// until the next START), nack_reg (>= 0: a register byte with that value is not
+// acknowledged, so a read or write of that register fails).
 // AUTO_INC = 0 gives a slave whose register pointer does not advance (negative
 // control for multi-byte writes in sim/test_i2c_master.py).
 `timescale 1ns/1ps
@@ -34,6 +35,7 @@ module i2c_slave_model #(
     reg       wr_protect;
     integer   writes;
     integer   nack_data, dcount;              // see above; data bytes seen in this write
+    integer   nack_reg;                       // >= 0: the register byte with this value is not acknowledged
     integer i;
     task tvp_reset;
         begin
@@ -46,7 +48,7 @@ module i2c_slave_model #(
         tvp_reset;
         regs[8'h80] = 8'h51; regs[8'h81] = 8'h50;          // device ID 5150
         regs[8'h88] = 8'h0E; regs[8'h89] = 8'h00;          // healthy NTSC
-        sda_low = 0; active = 0; writes = 0; wr_protect = 0; nack_data = -1; dcount = 0;
+        sda_low = 0; active = 0; writes = 0; wr_protect = 0; nack_data = -1; nack_reg = -1; dcount = 0;
     end
 
     always @(negedge sda) if (scl === 1'b1) begin          // START / repeated START
@@ -74,7 +76,9 @@ module i2c_slave_model #(
                 sda_low = me; phase = 1;
             end else if (me) begin
                 sda_low = 1;
-                if (phase == 1) begin ptr = sh; phase = 2; end
+                if (phase == 1 && sh == nack_reg) begin            // refuse this register (writes and reads)
+                    me = 0; sda_low = 0;
+                end else if (phase == 1) begin ptr = sh; phase = 2; end
                 else if (dcount == nack_data) begin
                     if (LOG) $display("I2C N %02x %02x", ptr, sh);
                     me = 0; sda_low = 0;                    // NACK, and nothing more in this write

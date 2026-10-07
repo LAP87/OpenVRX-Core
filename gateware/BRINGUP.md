@@ -114,7 +114,7 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 00
 | `fld` | `060` (PAL `050`) | fältbyten per sekund |
 | `xe` | `0000` | synkord med bitfel som inte gick att rätta |
 | `i2c` | `OK` | dekodern svarade på den senaste I2C-frågan (`NA`: inget svar, `--`: uppstarten är inte klar) |
-| `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan |
+| `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan. `----`: ingen giltig status, för att senaste pollrundan inte fick svar på alla tre läsningarna (88h, 89h, 03h) eller för att dekodern hittades återställd och inte har lästs hel sedan dess |
 | `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |
 
 **Statusregistren** (TI SLES209E avsnitt 3.21.49 och 3.21.50). De två sista siffrorna i `st` är register 88h:
@@ -146,7 +146,7 @@ Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot 
 | `i2c OK` men låsbitarna i `st` är nollor (sista siffran inte `E`) | ingen videosignal: mottagaren, kanalen eller videokabeln |
 | `st` börjar på `4`–`7` (t.ex. `400E`) | dekodern flaggar svag signal: antenn, avstånd, eller mottagaren på fel kanal |
 | `ri` stiger då och då | dekodern återställs under drift: glapp i matningen eller på RESETB-tråden |
-| `ri` går till `FF` på några sekunder, `st 0000` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
+| `ri` går till `FF` på några sekunder, `st ----` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
 
 **Pull-testet** hittar glapp utan mätinstrument:
 
