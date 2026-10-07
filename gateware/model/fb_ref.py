@@ -10,10 +10,12 @@ SDRAM clock domain in the order they happen:
     word(f, line, idx, t) a word is taken (t in cycles)
     line_stored(line)     the last group of a line has been written
     frame_start()         first line request of an output frame
-    fetch(line)           a line request; returns (buffer, line) to read
+    fetch(line)           a line request; returns (buffer, line) to read, or (BLANK, line)
 sim/test_fb.py replays the events of a simulation and compares every decision.
 """
 N_BUF = 4
+BLANK = -1          # "buffer" of a black line, written without reading the SDRAM
+BLACK_WORD = 0x10801080                     # {Y1, Cr, Y0, Cb} = 16, 128, 16, 128
 
 
 def src_line(j, lines, v_active, low=False):
@@ -151,7 +153,8 @@ class FieldStore:
         return self.show, (self.prev if self.prev_ok else None), self.frame_low, rt
 
     def fetch(self, line):
-        """Where line `line` of this frame is read from: (buffer, line)."""
+        """Where line `line` of this frame is read from: (buffer, line), or (BLANK, line) for a
+        black line when there is neither a line above in this frame nor a stored fallback line."""
         if line in self.ok[self.show]:
             src, self.miss = (self.show, line), 0
             self.rep = src
@@ -164,5 +167,5 @@ class FieldStore:
             elif self.rep is not None:
                 src = self.rep
             else:
-                src = self.rep = (self.show, line)
+                src = (BLANK, line)                              # nothing to fall back on
         return src

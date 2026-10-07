@@ -100,7 +100,8 @@ module tb_fb;
         if (dut.fb.stored) $fwrite(fs, "M %0d\n", dut.fb.grp_line);
         if (dut.fb.accept) $fwrite(fs, "F %0d\n", dut.fb.fetch_line);
         look3_d <= dut.fb.look == 2'd3;
-        if (look3_d) $fwrite(fs, "S %0d %0d\n", dut.fb.f_buf, dut.fb.f_src);
+        if (look3_d && dut.fb.f_blank) $fwrite(fs, "S blank %0d\n", dut.fb.f_src);
+        else if (look3_d) $fwrite(fs, "S %0d %0d\n", dut.fb.f_buf, dut.fb.f_src);
         if (dut.fb.first_word) $fwrite(fs, "A %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.cur_buf);
         if (dut.fb.discard) $fwrite(fs, "J %0d %0d %0d\n", dut.fb.e_field, dut.fb.e_line, dut.fb.nxt);
         if (dut.fb.publish)
@@ -111,12 +112,18 @@ module tb_fb;
             w_have <= 1; w_f <= dut.fb.e_field; w_line <= dut.fb.e_line;
         end
         // a line read from the SDRAM into the line buffer: tag and line of its first word,
-        // and whether all 360 words belonged to that line
+        // and whether all 360 words belonged to that line; or a black line, and whether all
+        // 360 words were black
         if (dut.fb.lb_we) begin
             if (dut.fb.lb_addr[8:0] == 0) rd_bad = 0;
-            if (dut.fb.lb_data[8:0] != dut.fb.lb_addr[8:0] || dut.fb.lb_data[18:9] != dut.fb.f_src) rd_bad = 1;
-            if (dut.fb.lb_addr[8:0] == 359)
-                $fwrite(fs, "R %0d %0d %0d %0d\n", dut.fb.lb_data[30:19], dut.fb.lb_data[18:9], dut.fb.lb_addr[10:9], rd_bad);
+            if (dut.fb.f_blank) begin
+                if (dut.fb.lb_data !== 32'h10801080) rd_bad = 1;
+                if (dut.fb.lb_addr[8:0] == 359) $fwrite(fs, "R blank blank %0d %0d\n", dut.fb.lb_addr[10:9], rd_bad);
+            end else begin
+                if (dut.fb.lb_data[8:0] != dut.fb.lb_addr[8:0] || dut.fb.lb_data[18:9] != dut.fb.f_src) rd_bad = 1;
+                if (dut.fb.lb_addr[8:0] == 359)
+                    $fwrite(fs, "R %0d %0d %0d %0d\n", dut.fb.lb_data[30:19], dut.fb.lb_data[18:9], dut.fb.lb_addr[10:9], rd_bad);
+            end
         end
         // low-latency mode: field starts, lines completed and frame triggers
         if (dut.ll_take && (!dut.ll_have || dut.ll_new_field)) $fwrite(fs, "G\n");

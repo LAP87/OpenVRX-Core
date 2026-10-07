@@ -54,7 +54,8 @@ def source(n_fields, period=P_NTSC, lines=LINES, vbi=VBI, interlaced=False, f_st
     return out
 
 
-def run_sim(name, src, **params):
+def run_sim(name, src, alter=None, **params):
+    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls)."""
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -68,6 +69,11 @@ def run_sim(name, src, **params):
     p.update(params)
     rtl = [GW / 'rtl' / n for n in ('async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
                                     'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')]
+    for fname, (old, new) in (alter or {}).items():
+        text = (GW / 'rtl' / fname).read_text()
+        assert text.count(old) == 1, f'{fname}: {old!r} not found once'
+        (work / fname).write_text(text.replace(old, new))
+        rtl = [work / fname if r.name == fname else r for r in rtl]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_fb', *[f'-Ptb_fb.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_fb.v')], cwd=work, env=env, check=True)
     subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True)
@@ -137,10 +143,16 @@ def replay(sd, src, **model_kw):
             frames[-1].stored = content.get((v[0], v[1]))
         elif ev == 'R':
             fr = frames[-1]
+            if v[0] == -1:                              # a black line, written without reading the SDRAM
+                assert fr.src[-1][0] == fb.BLANK, f'frame {len(frames) - 1}: black line where {fr.src[-1]} was due'
+                assert v[3] == 0, f'frame {len(frames) - 1}: the black line for {fr.src[-1]} is not black'
+                fr.got.append('blank')
+                continue
             assert v[3] == 0, f'frame {len(frames) - 1}: line read from {fr.src[-1]} is not one whole line'
-            if fr.stored is not None:
-                assert (v[0], v[1]) == fr.stored, f'frame {len(frames) - 1}: {fr.src[-1]} holds {fr.stored}, read {v[:2]}'
-            fr.got.append((v[0], v[1]) if fr.stored is not None else None)
+            # independent of the model: what is read must be a line the writer stored there
+            assert fr.stored is not None, f'frame {len(frames) - 1}: read {fr.src[-1]}, which was never stored'
+            assert (v[0], v[1]) == fr.stored, f'frame {len(frames) - 1}: {fr.src[-1]} holds {fr.stored}, read {v[:2]}'
+            fr.got.append((v[0], v[1]))
     assert not pending
     return frames[1:], st
 
@@ -186,10 +198,21 @@ def check_display(frames, pixf):
             assert pf['src'][y] == s, f"output line {y}: source line {pf['src'][y]}, model {s}"
             assert s in fr.want, f'line {s} was never asked for'
             got = fr.got[fr.want.index(s)]
-            if got is not None:
+            if got == 'blank':
+                assert pf['shown'][y] == BLACK_FIELDS, f"output line {y}: shows {pf['shown'][y]}, not the black line"
+            else:
                 assert pf['shown'][y] == (*got, 52), f"output line {y}: shows {pf['shown'][y]}, the store read {got}"
-                checked += 1
+            checked += 1
     return checked
+
+
+# the black word as the pixel log prints it: bits 30:19, 18:9, 8:0
+BLACK_FIELDS = (fb.BLACK_WORD >> 19 & 0xFFF, fb.BLACK_WORD >> 9 & 0x3FF, fb.BLACK_WORD & 0x1FF)
+
+
+def unknown_in_video(pix):
+    """Output frames with video on which a word read from the line buffer had an X/Z bit."""
+    return [f for f in pix_frames(pix) if f['video'] and any(-1 in w for w in f['shown'].values())]
 
 
 def fresh(frames, src):
@@ -247,6 +270,34 @@ def test_source_faster_than_output():
     live = settled(frames)
     assert len(live) >= 8 and all(fr.src == [(fr.show, n) for n in fr.want] for fr in live)
     assert all(g == (fr.tag, n) for fr in live for n, g in zip(fr.want, fr.got)), 'a frame shows one field, whole'
+
+
+FIRST_MISSING = {(1, 0)}                     # line 0 of the first field the store keeps (field 0 is joined)
+OLD_FALLBACK = ("else begin f_src <= f_line; f_blank <= 1'b1; rep_v <= 1'b0; end",
+                "else begin f_buf <= show_buf; f_src <= f_line; rep_buf <= show_buf; rep_line <= f_line; end")
+
+
+@pytest.mark.parametrize('rt', [0, 1])
+def test_missing_first_line_is_black(rt):
+    """Line 0 missing from the first field the store publishes: there is no line above and no
+    fallback field, so the store writes a black line instead of reading a line that was never
+    stored (review 2026-10-06, F3: frames with video then had unknown line buffer words).
+    Decisions match the model, every line read was stored, the black line is shown black."""
+    src = source(5, drop=FIRST_MISSING)
+    sd, pix = run_sim(f'tb_fb_first_missing_{rt}', src, RT_EN=rt, TAIL=1_000_000)
+    frames, st = replay(sd, src, RT_EN=rt)
+    check_display(frames, pix_frames(pix))
+    assert not unknown_in_video(pix), 'a frame with video shows words that were never written'
+    black = [f for f in pix_frames(pix) if f['video'] and BLACK_FIELDS in f['shown'].values()]
+    assert black, 'no frame with video showed the black line'
+
+
+def test_missing_first_line_old_fallback_reads_unwritten():
+    """Negative control: with the earlier fallback (read the missing line from the shown buffer)
+    a frame with video shows unknown words again."""
+    src = source(5, drop=FIRST_MISSING)
+    sd, pix = run_sim('tb_fb_first_missing_old', src, alter={'fb_sdram.v': OLD_FALLBACK}, RT_EN=0, TAIL=1_000_000)
+    assert unknown_in_video(pix)
 
 
 def test_missing_lines_are_covered():

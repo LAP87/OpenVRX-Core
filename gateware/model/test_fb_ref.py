@@ -71,11 +71,12 @@ def test_field_phase_needs_its_window():
     assert not any(low for low, _, _ in phases(interlaced(12), t_eq=5000, t_max=12000))
 
 
-def store_run(seed, **kw):
+def store_run(seed, cls=None, **kw):
     """Random fields (5 to 20 lines, some missing, some fields cut short), with frame starts and
-    line requests in between. Checks at every step what the display relies on."""
+    line requests in between. Checks at every step what the display relies on: every line read
+    is a stored one (or the black line), from the field shown or its fallback."""
     rng = random.Random(seed)
-    st = fb.FieldStore(rt_hyst=2, **kw)
+    st = (cls or fb.FieldStore)(rt_hyst=2, **kw)
     t, shown_once, in_use = 0, False, set()
 
     def frame():
@@ -83,13 +84,12 @@ def store_run(seed, **kw):
         show, prev, _, rt = st.frame_start()
         shown_once = True
         in_use = {show} | ({prev} if prev is not None else set())
-        seen = False
         for line in range(rng.randrange(8, 22)):
             buf, src = st.fetch(line)
+            if buf == fb.BLANK:
+                continue                                 # a black line: nothing is read
             assert buf in in_use, 'read from a buffer that is neither shown nor the fallback'
-            stored = src in st.ok[buf]
-            assert stored or not seen, 'a line that is not stored was read although a stored one had been shown'
-            seen = seen or stored
+            assert src in st.ok[buf], 'a line that is not stored was read'
 
     for k in range(40):
         lines = rng.randrange(5, 21)
@@ -116,6 +116,29 @@ def store_run(seed, **kw):
 def test_store_never_hands_out_what_is_on_screen(seed):
     store_run(seed)
     store_run(seed, rt_en=False)
+
+
+class _ReadsUnstored(fb.FieldStore):
+    """The policy before 2026-10-07: with nothing to fall back on, read the missing line anyway."""
+
+    def fetch(self, line):
+        buf, src = super().fetch(line)
+        if buf == fb.BLANK:
+            buf, src = self.rep = (self.show, line)
+        return buf, src
+
+
+def test_reading_an_unstored_line_is_caught():
+    """Negative control: the earlier policy (review 2026-10-06, F3) reads lines that were never
+    stored, and the check in store_run finds it for most seeds."""
+    failed = 0
+    for seed in range(30):
+        try:
+            store_run(seed, cls=_ReadsUnstored)
+        except AssertionError as e:
+            assert 'not stored' in str(e)
+            failed += 1
+    assert failed > 10, failed
 
 
 def test_three_buffers_are_not_enough(monkeypatch):

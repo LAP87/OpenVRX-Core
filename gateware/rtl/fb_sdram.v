@@ -24,8 +24,11 @@
 // Line requests: a line that is stored in the shown field is read from it. A
 // line that is not is replaced by the line above for up to two lines in a row,
 // then by the same line of the fallback field if that one is stored, else by
-// the line above again. So the display never shows a line that was not written
-// as a whole, whatever the writer is doing.
+// the line above again. Where there is no line above in this frame and no
+// stored line in the fallback (a missing first line of the first field), a
+// black line is written into the line buffer without reading the SDRAM. So the
+// display never shows a line that was not written as a whole, whatever the
+// writer is doing.
 //
 // Line count: the display scales by `pub_lines`, the smaller of the last two
 // fields' line counts when they differ by at most 2 (243/244, 287/288). A
@@ -130,6 +133,8 @@ module fb_sdram #(
     reg [5:0]  f_burst;
     reg [8:0]  f_idx;
     reg        ok_s;
+    reg        f_blank;                  // this fetch writes a black line instead of reading the SDRAM
+    localparam [31:0] BLACK = 32'h10801080;   // {Y1, Cr, Y0, Cb} = 16, 128, 16, 128
     reg        rep_v;                    // the source of the line fetched last in this frame
     reg [1:0]  rep_buf;
     reg [9:0]  rep_line;
@@ -190,7 +195,7 @@ module fb_sdram #(
             done_any <= 0; max_done <= 0; sweeping <= 0; mk_have <= 0;
             latest <= 0; older <= 0; latest_v <= 0; older_v <= 0; low_of <= 0; n1_v <= 0; pub_lines <= 0;
             show_buf <= 0; prev_buf <= 0; prev_ok <= 0; rt_prev <= 0; frame_low <= 0;
-            look <= 0; rep_v <= 0; miss <= 0;
+            look <= 0; rep_v <= 0; miss <= 0; f_blank <= 0;
         end else begin
             // ---- writer: take words from the FIFO ----
             if (sweeping) begin
@@ -249,7 +254,7 @@ module fb_sdram #(
             if (look == 2'd1) begin look <= 2'd2; ok_ra <= {prev_buf, f_line[9:3]}; end
             if (look == 2'd2) begin look <= 2'd3; ok_s <= ok_rd[f_line[2:0]]; end
             if (look == 2'd3) begin
-                look <= 2'd0; fetching <= 1'b1; f_burst <= 0; f_idx <= 0; rep_v <= 1'b1;
+                look <= 2'd0; fetching <= 1'b1; f_burst <= 0; f_idx <= 0; rep_v <= 1'b1; f_blank <= 1'b0;
                 if (ok_s) begin
                     f_buf <= show_buf; f_src <= f_line; rep_buf <= show_buf; rep_line <= f_line; miss <= 2'd0;
                 end else begin
@@ -258,8 +263,15 @@ module fb_sdram #(
                     else if (prev_ok && ok_rd[f_line[2:0]]) begin
                         f_buf <= prev_buf; f_src <= f_line; rep_buf <= prev_buf; rep_line <= f_line;
                     end else if (rep_v) begin f_buf <= rep_buf; f_src <= rep_line; end
-                    else begin f_buf <= show_buf; f_src <= f_line; rep_buf <= show_buf; rep_line <= f_line; end
+                    else begin f_src <= f_line; f_blank <= 1'b1; rep_v <= 1'b0; end         // nothing to fall back on
                 end
+            end
+            if (fetching && f_blank) begin                    // write the black line, one word per clock
+                lb_we   <= 1'b1;
+                lb_addr <= {f_slot, f_idx};
+                lb_data <= BLACK;
+                f_idx   <= f_idx + 9'd1;
+                if (f_idx == 9'd359) fetching <= 1'b0;
             end
             if (rdata_valid && rd_inflight) begin
                 lb_we   <= 1'b1;
@@ -284,7 +296,7 @@ module fb_sdram #(
                 end
             end
             if (!req_valid && !writing && !rd_inflight) begin
-                if (fetching && f_burst < 6'd45) begin
+                if (fetching && !f_blank && f_burst < 6'd45) begin
                     req_valid <= 1'b1; req_write <= 1'b0;
                     req_addr  <= word_addr(f_buf, f_src, f_burst);
                     f_burst   <= f_burst + 6'd1;

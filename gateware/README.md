@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M1, M1s, M2, M2s, M2a, M3, M4 och M6 är alla ombyggda 2026-10-06 ur commit 62a69be, med kravet 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (324 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (328 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -309,7 +309,7 @@ Två lägen, valbara i menyn medan det kör (`LOW_LATENCY=1` i M4 väljer `LOW`)
 **`BUF`** (`rtl/fb_sdram.v`): fälten skrivs till fyra buffertar i SDRAM, och utgången går i fast 720p60.
 - Vilken buffert en bild visar bestäms i SDRAM-domänen, där skrivaren finns, vid bildens första radbegäran. Skrivaren får aldrig bufferten som visas, dess reserv eller den nyss publicerade. (Förut skickade visningen sitt val över klockdomänsgränsen, och en källa snabbare än utgången kunde få bufferten som visades.)
 - En bild visar fältet som håller på att skrivas om skrivaren ligger minst 4 rader före (44 för fält över 270 rader, som en 60 Hz-utgång läser fortare än de kommer). Annars visas senaste hela fält. `RT_EN = 0` ger bara hela fält.
-- En bit per rad och buffert säger att raden är lagrad i sin helhet. En rad som saknas ersätts av raden ovanför (högst två i följd) och därefter av samma rad i fältet före. Visningen får alltså aldrig en halvskriven rad, vad skrivaren än gör.
+- En bit per rad och buffert säger att raden är lagrad i sin helhet. En rad som saknas ersätts av raden ovanför (högst två i följd) och därefter av samma rad i fältet före. Finns ingen rad ovanför i bilden och ingen lagrad rad i fältet före (en saknad första rad i det första fältet), skrivs en svart rad i radbufferten utan att SDRAM läses (granskningen 2026-10-06, F3; `sim/test_fb.py::test_missing_first_line_is_black`). Visningen får alltså aldrig en halvskriven rad, vad skrivaren än gör.
 - Bilden skalas efter det mindre av de två senaste fältens radantal när de skiljer högst 2 rader (243/244, 287/288). Ett avklippt fält ändrar inte skalan.
 
 **`LOW`**: utan bildbuffert. Mixerns rader skrivs direkt till en ringbuffert på 16 rader i FPGA:ns block-RAM, och 720p-utgången låses till ingångens fält (`genlock_timing.v`). Varje utbild startar när rad 1 i ett nytt fält har kommit, och raderna läses medan de kommer in.
