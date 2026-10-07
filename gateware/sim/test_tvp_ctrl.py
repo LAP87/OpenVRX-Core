@@ -91,6 +91,7 @@ def test_two_decoders():
     assert r['s0_writes'] == str(N) and r['s1_writes'] == str(N)    # nothing is written again
     assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL and r['valid'] == '3'
     assert r['reinit0'] == '0' and r['reinit1'] == '0'
+    assert int(r['rounds0']) >= 3 and int(r['rounds1']) >= 3 and r['lost0'] == '0' and r['lost1'] == '0'
 
 
 def test_missing_decoder_flagged():
@@ -194,3 +195,21 @@ def test_init_list_check_is_tested(alter):
     """Negative controls: 02h = 30h (TV mode instead of VCR), or 02h written before 28h."""
     r, _ = run(1, alter=alter)
     assert not init_list_ok(r), r['log']
+
+
+WRONG_BIT = ("lost_lock[di] <= p88[4];", "lost_lock[di] <= p88[3];")
+
+
+def test_lost_lock_flag():
+    """Decoder 0 sets 88h bit 4 ("lost lock since 88h was last read") once. The next whole round
+    reports it with its round_ok pulse, and only that round: reading 88h cleared the bit. Decoder 1
+    never sets it (its 88h is 6Eh)."""
+    r, _ = run(1, scenario=8)
+    assert r['lost0'] == '1' and r['lost1'] == '0' and int(r['rounds0']) >= 3, r
+    assert r['st0'] == ST_NTSC and r['valid'] == '3'
+
+
+def test_lost_lock_bit_is_checked():
+    """Negative control: bit 3 (colour lock, set on a healthy signal) taken for bit 4."""
+    r, _ = run(1, scenario=8, alter=WRONG_BIT)
+    assert r['lost0'] != '1' or r['lost1'] != '0', r

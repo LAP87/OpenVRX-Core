@@ -71,6 +71,7 @@ module tvp_ctrl #(
     output reg  [7:0]  reinit0,           // times decoder 0 was found reset and brought up again (stops at FFh)
     output reg  [7:0]  reinit1,
     output reg  [1:0]  round_ok,          // pulse: a whole poll round found the decoder up (status words new now)
+    output reg  [1:0]  lost_lock,         // 88h bit 4 of the decoder's last whole round (valid with round_ok)
     input  wire        hold,              // another master on the same bus wants it: start nothing new
     output wire        active             // a transaction is starting or running
 );
@@ -161,6 +162,7 @@ module tvp_ctrl #(
                     end else begin
                         status_valid[di] <= 1'b1;
                         round_ok[di] <= 1'b1;
+                        lost_lock[di] <= p88[4];
                         st <= S_NEXT;
                     end
                 end
@@ -183,7 +185,7 @@ module tvp_ctrl #(
         if (rst) begin
             st <= S_POWER; t <= 0; tvp_resetb <= 1'b1; init_done <= 1'b0; dev_err <= 2'b00;
             status_valid <= 2'b00; status0 <= 0; status1 <= 0; di <= 0; ii <= 0; start <= 1'b0;
-            again <= 1'b0; reinit0 <= 0; reinit1 <= 0; round_ok <= 2'b00;
+            again <= 1'b0; reinit0 <= 0; reinit1 <= 0; round_ok <= 2'b00; lost_lock <= 2'b00;
         end
     end
 endmodule

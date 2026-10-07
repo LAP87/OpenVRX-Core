@@ -54,13 +54,13 @@ module m6_puck_proto #(
     always @(posedge clk) begin por <= {por[2:0], 1'b0}; rst_c <= {rst_c[1:0], por[3]}; end
     wire scl_low, init_done;
     wire [1:0] sda_low;
-    wire [1:0] dev_err, st_valid;
+    wire [1:0] dev_err, st_valid, round_ok, lost_lock;
     wire [15:0] st0, st1;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-                   .hold(oled_hold), .active(tvp_active));
+                   .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold), .active(tvp_active));
     // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl (one master at a time)
     wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack;
     wire [1:0] trow, force_bad, sel_n;
@@ -86,6 +86,7 @@ module m6_puck_proto #(
                 .clk(clk), .rst(rst_c[2]), .btn_ok(rst_i), .btn_next(key_i), .view_b(cur),
                 .dec_present({init_done & ~dev_err[1], init_done & ~dev_err[0]}),
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
+                .dec_round(round_ok), .dec_lost(lost_lock),                 // 88h bit 4, see tvp_ctrl.v
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
                 .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb),

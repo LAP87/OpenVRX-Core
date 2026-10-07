@@ -6,12 +6,14 @@
     python gateware/tools/snowlog.py --summary emi.csv
 On Windows the port is COM5 and the like (set up with the `mode` command; not tried on a real port yet).
 
-Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD o
+Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD o ll
 snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), noise A, noise B
 (luma samples outside 16..235 in the last 1024 lines), % of mixer decisions from A / B /
-blended, band+channel, MHz, mode, and "!" once the mixer has dropped a line since reset
-(else "-"). Lines from older bitstreams (no noise values, possibly no "!"/"-") are read
-too; their noise columns stay empty. The Tang Nano 20K's BL616 shows up as two ttyUSB
+blended, band+channel, MHz, mode, "!" once the mixer has dropped a line since reset
+(else "-"), and per decoder A, B since the previous line: "L" a poll round read the
+"lost lock" bit (88h bit 4), "-" it did not, "?" no whole poll round. Lines from older
+bitstreams (no lost-lock field, no noise values, possibly no "!"/"-") are read too; the
+missing columns stay empty. The Tang Nano 20K's BL616 shows up as two ttyUSB
 ports; the UART is usually the second one.
 
 Only compare runs with the same camera scene: the snow value also depends on the
@@ -28,12 +30,17 @@ import time
 from collections import defaultdict
 
 FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
-          'mhz', 'mode', 'dropped']
+          'mhz', 'mode', 'dropped', 'lost_a', 'lost_b']
 
 
 def parse(line):
     """A log line as a dict, or None for anything else (also a line damaged on the way)."""
     p = line.split()
+    lost = None
+    if len(p) == 13:                                   # with the lost-lock field
+        lost, p = p[12], p[:12]
+        if len(lost) != 2 or any(c not in '-L?' for c in lost):
+            return None
     if len(p) == 12:                                   # current format, with the noise values
         noise, p = p[3:5], p[:3] + p[5:]
     elif len(p) in (9, 10):                            # older bitstreams: no noise values
@@ -43,11 +50,13 @@ def parse(line):
     if p[0] != 'S' or (len(p) == 10 and p[9] not in '-!'):
         return None
     num = lambda s: None if s.startswith('-') else int(s)  # noqa: E731
+    flag = lambda f, i: None if f is None or f[i] == '?' else int(f[i] == 'L')  # noqa: E731
     try:
         return {'snow_a': num(p[1]), 'snow_b': num(p[2]),
                 'noise_a': num(noise[0]) if noise else None, 'noise_b': num(noise[1]) if noise else None,
                 'use_a': int(p[3]), 'use_b': int(p[4]), 'use_mix': int(p[5]), 'channel': p[6], 'mhz': int(p[7]),
-                'mode': p[8], 'dropped': int(len(p) == 10 and p[9] == '!')}
+                'mode': p[8], 'dropped': int(len(p) == 10 and p[9] == '!'),
+                'lost_a': flag(lost, 0), 'lost_b': flag(lost, 1)}
     except ValueError:
         return None
 
@@ -121,13 +130,15 @@ def summary(path):
         for r in csv.DictReader(fh):
             rows[r['label']].append(r)
     print(f'{"label":16s} {"n":>5s} {"snowA med":>10s} {"snowB med":>10s} {"noiseA med":>10s} {"noiseB med":>10s} '
-          f'{"A%":>5s} {"B%":>5s} {"mix%":>5s}  channels   (! = the mixer dropped lines)')
+          f'{"A%":>5s} {"B%":>5s} {"mix%":>5s} {"lostA":>5s} {"lostB":>5s}  channels   (! = the mixer dropped lines)')
     for label, rs in rows.items():
         med = lambda k: statistics.median([int(r[k]) for r in rs if r.get(k) not in (None, '', 'None')] or [0])  # noqa: E731
         chans = sorted({r['channel'] for r in rs})
+        lost = lambda k: sum(r.get(k) == '1' for r in rs)  # noqa: E731  lines on which "lost lock" was seen
         print(f'{label:16s} {len(rs):5d} {med("snow_a"):10.0f} {med("snow_b"):10.0f} '
               f'{med("noise_a"):10.0f} {med("noise_b"):10.0f} '
-              f'{med("use_a"):5.0f} {med("use_b"):5.0f} {med("use_mix"):5.0f}  {",".join(chans)}'
+              f'{med("use_a"):5.0f} {med("use_b"):5.0f} {med("use_mix"):5.0f} {lost("lost_a"):5d} {lost("lost_b"):5d}'
+              f'  {",".join(chans)}'
               + (' !' if any(r.get('dropped') == '1' for r in rs) else ''))
 
 

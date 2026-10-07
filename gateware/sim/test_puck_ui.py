@@ -128,9 +128,14 @@ def test_puck_ui():
     # UART log: fixed-width lines, the last one reflects the final state
     text = ''.join(chr(int(h, 16)) for h in re.findall(r'^U (\w\w)$', log, re.M))
     lines = [l for l in text.split('\r\n') if l]
-    assert lines and all(len(l) == 55 for l in lines), lines[:3]
-    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX -' in lines, lines[:5]
-    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   !', lines[-3:]  # the mixer dropped a line
+    assert lines and all(len(l) == 58 for l in lines), lines[:3]
+    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX - --' in lines, lines[:5]
+    # the mixer dropped a line; decoder B has had no whole poll round since "unlock" (its stale bit 4 is ignored)
+    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   ! -?', lines[-3:]
+    # decoder A read 88h bit 4 ("lost lock") in one poll round: exactly one line says so
+    lost = [l for l in lines if l[-2] == 'L']
+    assert len(lost) == 1 and lost[0].endswith(' L-'), [l[-4:] for l in lines]
+    assert all(l[-1] in '-?' for l in lines)
     # OSD: shown after reset, hidden after OSD_MS, back on a button press, held on the meter page
     osd = [(int(t), int(v)) for t, v in re.findall(r'^OSD (\d+) (\d)$', log, re.M)]
     vals = [v for _, v in osd]

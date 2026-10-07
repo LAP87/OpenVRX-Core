@@ -24,11 +24,26 @@ module tb_puck_ui;
     wire [6:0] osd_char;
     reg  [1:0] dec_locked = 2'b01;                // decoder A locked, B not
     reg  mix_overflow = 0;                        // set after the "final" mark
+    // decoder poll rounds (tvp_ctrl round_ok): both every 20 ms. A's round reads 88h bit 4 once,
+    // after the "lat" mark. B's rounds stop at the "unlock" mark; its bit 4 then stays at 1
+    // (a stale status word), which must not count without a round.
+    reg  [1:0] dec_round = 2'b00;
+    reg        lost_a = 0, lost_a_once = 0, rounds_b = 1;
+    integer    rt = 0;
+    always @(posedge clk) begin
+        dec_round <= 2'b00;
+        rt <= (rt == 19_999) ? 0 : rt + 1;
+        if (rt == 19_999) begin
+            dec_round <= {rounds_b, 1'b1}; lost_a <= lost_a_once; lost_a_once <= 0;
+        end
+    end
+    wire [1:0] dec_lost = {!rounds_b, lost_a};
     // RX5808: first write 5 ms after reset, repeats every 40 ms while no decoder is locked
     puck_ui #(.CLK_HZ(1_000_000), .DEBOUNCE_MS(3), .OSD_MS(150), .BAUD(50_000),
               .RX_FIRST_MS(5), .RX_REPEAT_MS(40)) ui (
         .clk(clk), .rst(rst), .btn_ok(btn_ok), .btn_next(btn_next), .view_b(view_b),
-        .dec_present(2'b11), .dec_locked(dec_locked), .force_bad(force_bad),
+        .dec_present(2'b11), .dec_locked(dec_locked), .dec_round(dec_round), .dec_lost(dec_lost),
+        .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
         .noise_a(20'd17), .noise_b(20'd654321), .noise_toggle_a(tg), .noise_toggle_b(tg),
@@ -118,12 +133,14 @@ module tb_puck_ui;
         press(1);                                 // BUF -> LOW
         wait_frames(2);
         $display("MARK lat low_lat=%0d", low_lat);
+        lost_a_once = 1;                          // decoder A's next poll round reads 88h bit 4
         press(0);                                 // field -> page
         press(1);                                 // page -> meter
         wait_frames(2);
         $display("MARK meter page=%0d", page);
         dec_locked = 2'b00;                       // both decoders lose lock: the channel is written again
         $display("MARK unlock %0d", $time);
+        rounds_b = 0;                             // decoder B's poll rounds stop (its last bit 4 stays 1)
         #130_000_000;                             // three repeats, 40 ms apart
         dec_locked = 2'b10;                       // B locks: no more repeats (the next was due after 30 ms)
         $display("MARK relock %0d", $time);
