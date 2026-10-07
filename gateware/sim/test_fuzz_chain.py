@@ -605,10 +605,10 @@ def check_invariants(sc, logs, fd):
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=fz.N_FIELDS):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes)
+    sc = fz.generate(seed, classes, n_fields=n_fields)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
     try:
@@ -667,3 +667,31 @@ def test_chain_seed(seed):
         append_result(res, os.environ.get('FUZZ_ROUND', 'adhoc'))
     assert res['result'] != 'fail', json.dumps(dict(classes=res['classes'], first=res['first'],
                                                     groups=res['groups']), indent=1)
+
+
+# Negative controls: an altered copy of one RTL file, a short seed, and the check that must see it.
+NEGATIVE = {
+    'rx': (0, [], {'bt656_rx.v': ('hf <= hf + ((dl2 > prev_y) ? dl2 - prev_y : prev_y - dl2);',
+                                  "hf <= hf + ((dl2 > prev_y) ? dl2 - prev_y : 8'd0);")}, 'rx/record'),
+    'mixer': (0, [], {'line_mixer.v': ("avg = ({1'b0, p} + {1'b0, q} + 9'd1) >> 1;",
+                                       "avg = ({1'b0, p} + {1'b0, q}) >> 1;")}, 'mixer/'),
+    'store': (0, [], {'fb_sdram.v': ("latest <= cur_buf; latest_v <= 1'b1;",
+                                     "latest <= cur_buf; latest_v <= 1'b0;")}, 'store/decision'),
+    'display': (0, [], {'fb_display.v': ("lb_raddr <= {ll ? src_cur[3:2] : 2'b00, src_cur[1:0], sx[9:1]};",
+                                         "lb_raddr <= {ll ? src_cur[3:2] : 2'b00, src_cur[1:0], sx[9:1] + 9'd1};")},
+                'display/word'),
+    'ring': (49, ['mode_switch'], {'fb_backend.v': ("wire [12:0] lbw_addr = ll_s ? {e_line[3:0], e_idx} : {2'b00, lb_waddr};",
+                                                    "wire [12:0] lbw_addr = ll_s ? {e_line[3:0] + 4'd1, e_idx} : {2'b00, lb_waddr};")},
+             'display/ll_word'),
+}
+
+
+@pytest.mark.parametrize('block', sorted(NEGATIVE))
+def test_chain_checks_catch_faults(block):
+    """Negative controls for the checks above: each altered RTL file is seen by the check of its
+    block (the receiver's HF, the mixer's rounding in a blend, the field store's latest field,
+    the display's read address, the low-latency ring's slot). The 'ring' seed runs BUF, then LOW
+    from 3.3 ms; the others have no disturbance. Six fields each."""
+    seed, classes, alter, group = NEGATIVE[block]
+    res = run_seed(seed, classes, work=HERE / 'build' / 'fuzz' / f'neg_{block}', alter=alter, n_fields=6)
+    assert any(g.startswith(group) for g in res['groups']), (block, res['groups'], res['first'])
