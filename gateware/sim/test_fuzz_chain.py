@@ -177,6 +177,7 @@ def receiver_records(sc):
 def byte_ns(sc, ch, k):
     """When byte k of channel ch is on the decoder pins (tb_chain.v drives them at negedge)."""
     t0, per = (sc.start_a, sc.t_a) if ch == 0 else (sc.start_b, sc.t_b)
+    per = 2 * round(per / 2, 3)                  # the bench's half period is rounded to 1 ps
     n0 = -(-(fz.RST_NS + t0) // per)
     return n0 * per + k * per
 
@@ -500,6 +501,11 @@ def check_display(sc, logs, frames, words, org, run, fd):
         if not pf['video'] or in_switch(pf['pc']) or pf['pc'] > end_pc:
             continue
         t_frame = pf['pc'] * T_P
+        if pf['lines'] > V_ACTIVE:
+            # fb_display.v steps at most one source line per output line: it scales up only. The
+            # default of 240 lines (no line count yet) is more than the scaled frame's 72 lines.
+            fd.notes.append(f"frame at {t_frame / 1e6:.2f} ms has {pf['lines']} source lines for {V_ACTIVE}: not checked")
+            continue
         for y in range(V_ACTIVE):
             s = fb.src_line(y, pf['lines'], V_ACTIVE, pf['low'])
             if pf['src'][y] != s:
@@ -507,8 +513,6 @@ def check_display(sc, logs, frames, words, org, run, fd):
                        f"({pf['lines']} lines, low {pf['low']})")
                 break
         if pf['ll']:
-            if pf['lines'] == 240:
-                fd.notes.append(f"LOW frame at {t_frame / 1e6:.2f} ms scaled from 240 lines: no line count from the ring yet")
             k_new = newest_at(run, int(t_frame / T_S))
             for y in range(V_ACTIVE):
                 slot = pf['src'][y] & 15
