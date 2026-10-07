@@ -102,11 +102,32 @@ module puck_ui #(
     end
 
     // ---- state
-    wire [5:0]  idx  = {3'd0, band} * 6'd8 + {3'd0, ch};
-    wire [41:0] chan = vtx_channel(idx);
+    // The channel table lookup is registered (chan), together with the decimal digits of its
+    // frequency (freq_bcd: the divisions act on constants, one per table entry, and fold away in
+    // synthesis). No combinational path runs from the menu state through the table into the RX5808
+    // shift register or the text. The SPI write starts one clock after chan has the new channel
+    // (chan_step_d below).
+    function [15:0] freq_bcd(input [5:0] i);
+        integer k;
+        reg [41:0] c;
+        reg [12:0] f, d3, d2, d1, d0;
+        begin
+            freq_bcd = 16'd0;
+            for (k = 0; k < 64; k = k + 1)
+                if (i == k) begin
+                    c = vtx_channel(k);
+                    f = c[32:20];
+                    d3 = f / 1000; d2 = (f / 100) % 10; d1 = (f / 10) % 10; d0 = f % 10;
+                    freq_bcd = {d3[3:0], d2[3:0], d1[3:0], d0[3:0]};
+                end
+        end
+    endfunction
+    wire [5:0]  idx  = {band, ch};                         // band * 8 + ch
+    reg  [41:0] chan;
+    reg  [15:0] fbcd;
+    always @(posedge clk) begin chan <= vtx_channel(idx); fbcd <= freq_bcd(idx); end
     wire        legal = chan[41];
     wire [7:0]  band_letter = chan[40:33];
-    wire [12:0] freq = chan[32:20];
     wire [19:0] synth = chan[19:0];
 
     always @(posedge clk) begin
@@ -135,10 +156,14 @@ module puck_ui #(
 
     // ---- RX5808: both modules get the channel RX_FIRST_MS after reset, at once when the band or
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
+    //      (band/ch change on the clock after ev_next, chan one clock later: write_now is delayed one
+    //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
     wire chan_step  = ev_next && (field == 3'd0 || field == 3'd1);
+    reg  chan_step_d;
+    always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
     rx5808_tune #(.CLK_HZ(CLK_HZ), .FIRST_MS(RX_FIRST_MS), .REPEAT_MS(RX_REPEAT_MS)) rx (
-        .clk(clk), .rst(rst), .synth(synth), .write_now(chan_step), .any_locked(any_locked),
+        .clk(clk), .rst(rst), .synth(synth), .write_now(chan_step_d), .any_locked(any_locked),
         .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(rx_spi_sel_n));
 
     // ---- snow meter: copy values a few clocks after each toggle, flag stale channels,
@@ -229,7 +254,7 @@ module puck_ui #(
 
     // ---- text
     function [7:0] dig(input [3:0] d); dig = 8'h30 + d; endfunction
-    wire [3:0] f_th = freq / 1000, f_h = (freq / 100) % 10, f_t = (freq / 10) % 10, f_u = freq % 10;
+    wire [3:0] f_th = fbcd[15:12], f_h = fbcd[11:8], f_t = fbcd[7:4], f_u = fbcd[3:0];   // see "state"
     wire [7:0] m_sel = (field == 3'd0) ? ">" : " ";
     wire [7:0] m_ch  = (field == 3'd1) ? ">" : " ";
     wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
