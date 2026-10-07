@@ -747,7 +747,10 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
         check_invariants(sc, logs, fd)
         sort_known(sc, logs, fd)
         if checked < (2 if geometry == 'scaled' else 1) * V_ACTIVE:
-            fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
+            if any(k == fz.LL for _, k, _ in sc.ctl):     # switch windows leave few frames: noted
+                fd.notes.append(f'only {checked} output lines checked (mode switches)')
+            else:
+                fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
     if not keep and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
