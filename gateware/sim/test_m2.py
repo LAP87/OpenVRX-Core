@@ -245,7 +245,7 @@ def _run_m2(testcase):
     build = HERE / 'build' / 'tb_m2'
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v', 'field_phase.v',
                                     'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v', 'ycbcr2rgb.v',
-                                    'fb_display.v', 'fb_backend.v', 'm2_core.v')]
+                                    'cdc_sync.v', 'fb_display.v', 'fb_backend.v', 'm2_core.v')]
     r.build(sources=rtl + [HERE / 'sdram_model.v', HERE / 'tb_m2.v'], hdl_toplevel='tb_m2',
             build_dir=build, always=True, timescale=('1ns', '1ps'))
     r.test(hdl_toplevel='tb_m2', test_module='test_m2', test_dir=HERE, build_dir=build, testcase=testcase)

@@ -67,7 +67,7 @@ def run_sim(name, src, **params):
     p = dict(N_LINES=len(src), V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, **RT)
     p.update(params)
     rtl = [GW / 'rtl' / n for n in ('async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
-                                    'genlock_timing.v', 'ycbcr2rgb.v', 'fb_display.v', 'fb_backend.v')]
+                                    'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_fb', *[f'-Ptb_fb.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_fb.v')], cwd=work, env=env, check=True)
     subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True)

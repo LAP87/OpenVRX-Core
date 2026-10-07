@@ -119,7 +119,7 @@ def test_m5c_bt1120():
     build = HERE / 'build' / 'tb_m5c'
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v', 'field_phase.v',
                                     'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v', 'ycbcr2rgb.v',
-                                    'fb_display.v', 'fb_backend.v', 'm2_core.v', 'tvp_sync_rx.v', 'bt1120_tx.v')]
+                                    'cdc_sync.v', 'fb_display.v', 'fb_backend.v', 'm2_core.v', 'tvp_sync_rx.v', 'bt1120_tx.v')]
     r.build(sources=rtl + [HERE / 'sdram_model.v', HERE / 'tb_m5c.v'], hdl_toplevel='tb_m5c',
             build_dir=build, always=True, timescale=('1ns', '1ps'))
     r.test(hdl_toplevel='tb_m5c', test_module='test_m5c', test_dir=HERE, build_dir=build)

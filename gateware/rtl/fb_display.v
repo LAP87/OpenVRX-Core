@@ -57,17 +57,18 @@ module fb_display #(
     output reg         have_video
 );
     // ---- publications ----
-    reg [2:0] pt;
-    reg [9:0] latest_lines;
+    // crossings: cdc_sync.v (proven in formal/toggle_props.v and formal/level_props.v)
+    wire       pub_ev, fl_q, lw_q;          // lw_q, fl_q: frame_low, ll_low synchronised
+    wire [9:0] latest_lines;
+    toggle_rx #(.W(10)) pub_rx (.clk(clk), .rst(rst), .tgl(pub_toggle), .din(pub_lines),
+        .event_now(pub_ev), .q(latest_lines));
+    sync2 fl_sync (.clk(clk), .d(frame_low), .q(fl_q));
+    sync2 lw_sync (.clk(clk), .d(ll_low), .q(lw_q));
     reg       have_pub;
     reg [23:0] since_pub;               // frames are 16.7 ms; ~0.2 s without a field -> no video
-    reg [1:0] fl_s, lw_s;               // frame_low, ll_low synchronised
     always @(posedge clk) begin
-        pt <= {pt[1:0], pub_toggle};
-        fl_s <= {fl_s[0], frame_low};
-        lw_s <= {lw_s[0], ll_low};
-        if (pt[2] != pt[1]) begin
-            latest_lines <= pub_lines; have_pub <= 1'b1; since_pub <= 0;
+        if (pub_ev) begin
+            have_pub <= 1'b1; since_pub <= 0;
         end else if (since_pub != {24{1'b1}}) since_pub <= since_pub + 1'b1;
         if (since_pub[23]) have_pub <= 1'b0;
         // In low-latency mode the field store is held in reset and its buffers go stale. Forget the
@@ -75,7 +76,7 @@ module fb_display #(
         // blank until a field has been published again (the same as the first frame after a switch
         // to low latency), instead of showing whatever buffer 0 held before.
         if (ll) have_pub <= 1'b0;
-        if (rst) begin have_pub <= 1'b0; since_pub <= 0; latest_lines <= 0; end
+        if (rst) begin have_pub <= 1'b0; since_pub <= 0; end
     end
 
     // ---- frame start: line count of the field to show ----
@@ -113,7 +114,7 @@ module fb_display #(
             fetch_toggle <= ~fetch_toggle;
         end
         if (line_start && y < V_ACTIVE) src_cur <= src_next;
-        if (line_start && y == 0) low_r <= (BOB != 0) && (ll ? lw_s[1] : fl_s[1]);
+        if (line_start && y == 0) low_r <= (BOB != 0) && (ll ? lw_q : fl_q);
         if (x == 1 && y == 0) begin                             // output line 0
             started <= base >= V4;
             acc     <= (base >= V4) ? base - V4 : base;
@@ -176,5 +177,36 @@ module fb_display #(
         else                       {rr, gg, bb} <= 24'h000000;
     end
     assign {r, g, b} = {rr, gg, bb};
+
+`ifdef FORMAL
+    // Proven by formal/run.sh (formal/linebuf_props.v: genlock_timing + fb_display in a small
+    // picture, all other inputs free): a line requested during an active output line goes to a
+    // line buffer slot that the display does not read for the rest of that line; the first
+    // request of a frame (slot 0, which the display then reads) is made on a blanking line.
+    // That the SDRAM side has written the slot before the next line start is a matter of
+    // SDRAM latency and is not part of the proof (gateware/formal/README.md).
+    reg        f_t_q, f_rst_q, f_pend;
+    reg [1:0]  f_slot;
+    reg [11:0] f_y;                                             // the line in which the request was made
+    wire       f_req = fetch_toggle != f_t_q && !f_rst_q;       // a request was made in the last clock
+    always @(posedge clk) begin
+        f_t_q <= fetch_toggle; f_rst_q <= rst; f_y <= y;
+        if (line_start || rst) f_pend <= 1'b0;
+        else if (f_req && !fetch_first) begin f_pend <= 1'b1; f_slot <= fetch_slot; end
+    end
+    wire [9:0] f_ahead = src_next - src_cur;
+    always @* begin
+        if (f_req && !fetch_first) assert (f_y < V_ACTIVE - 1 && fetch_slot != src_cur[1:0]);
+        if (f_req && fetch_first) assert (f_y >= V_ACTIVE);
+        if (f_pend) assert (f_slot != src_cur[1:0] && f_slot == fetch_slot);
+`ifndef FORMAL_NO_STRENGTHEN
+        // induction strengthening: the next line is at most one ahead of the line read, and level
+        // with it from the start of an active line until its request
+        assert (f_ahead <= 1);
+        if (y < V_ACTIVE && (x == 1 || x == 2)) assert (f_ahead == 0);
+        if (f_pend || (f_req && !fetch_first)) assert (f_ahead == 1 && fetch_slot == src_next[1:0]);
+`endif
+    end
+`endif
 endmodule
 `default_nettype wire
