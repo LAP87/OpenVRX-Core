@@ -11,7 +11,7 @@
 module tb_fb;
     parameter N_LINES = 1;                    // entries in lines.hex
     parameter LL = 0;                         // 1: low-latency mode (the mode at reset)
-    parameter SW1 = 0, SW2 = 0;               // SDRAM clock cycle at which ll_mode goes to 1 / to 0 (0 = never)
+    parameter SW1 = 0, SW2 = 0, SW3 = 0;      // SDRAM clock cycle at which ll_mode goes to 1 / to 0 / to 1 (0 = never)
     parameter FAULT = 0;                      // bit mask of test-bench side faults for negative controls (test_fb.py):
                                               // bit 0: one source word of field FAULT_TAG carries a wrong tag
                                               // bit 1: the observed r has an X for one pixel clock at pixel clock FAULT_PC
@@ -37,6 +37,7 @@ module tb_fb;
     always @(posedge sd_clk) begin
         if (SW1 != 0 && cyc == SW1) ll_mode_r <= 1'b1;
         if (SW2 != 0 && cyc == SW2) ll_mode_r <= 1'b0;
+        if (SW3 != 0 && cyc == SW3) ll_mode_r <= 1'b1;
     end
 
     // ---- source: lines.hex entries {start cycle[31:0], field, line[9:0], tag[11:0]}
