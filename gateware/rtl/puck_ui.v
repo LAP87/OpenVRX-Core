@@ -102,8 +102,13 @@ module puck_ui #(
     end
 
     // ---- state
-    wire [5:0]  idx  = {3'd0, band} * 6'd8 + {3'd0, ch};
-    wire [41:0] chan = vtx_channel(idx);
+    // The channel table lookup is registered (chan), and the decimal digits of the frequency are
+    // registered from that (f_th..f_u below): no combinational path runs from the menu state through
+    // the table into the RX5808 shift register or through the divisions into the text. The SPI write
+    // is started one clock after the channel register has the new channel (chan_step_d below).
+    wire [5:0]  idx  = {band, ch};                         // band * 8 + ch
+    reg  [41:0] chan;
+    always @(posedge clk) chan <= vtx_channel(idx);
     wire        legal = chan[41];
     wire [7:0]  band_letter = chan[40:33];
     wire [12:0] freq = chan[32:20];
@@ -135,10 +140,14 @@ module puck_ui #(
 
     // ---- RX5808: both modules get the channel RX_FIRST_MS after reset, at once when the band or
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
+    //      (band/ch change on the clock after ev_next, chan one clock later: write_now is delayed one
+    //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
     wire chan_step  = ev_next && (field == 3'd0 || field == 3'd1);
+    reg  chan_step_d;
+    always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
     rx5808_tune #(.CLK_HZ(CLK_HZ), .FIRST_MS(RX_FIRST_MS), .REPEAT_MS(RX_REPEAT_MS)) rx (
-        .clk(clk), .rst(rst), .synth(synth), .write_now(chan_step), .any_locked(any_locked),
+        .clk(clk), .rst(rst), .synth(synth), .write_now(chan_step_d), .any_locked(any_locked),
         .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(rx_spi_sel_n));
 
     // ---- snow meter: copy values a few clocks after each toggle, flag stale channels,
@@ -229,7 +238,10 @@ module puck_ui #(
 
     // ---- text
     function [7:0] dig(input [3:0] d); dig = 8'h30 + d; endfunction
-    wire [3:0] f_th = freq / 1000, f_h = (freq / 100) % 10, f_t = (freq / 10) % 10, f_u = freq % 10;
+    reg  [3:0] f_th, f_h, f_t, f_u;                        // registered from chan (see "state")
+    always @(posedge clk) begin
+        f_th <= freq / 1000; f_h <= (freq / 100) % 10; f_t <= (freq / 10) % 10; f_u <= freq % 10;
+    end
     wire [7:0] m_sel = (field == 3'd0) ? ">" : " ";
     wire [7:0] m_ch  = (field == 3'd1) ? ">" : " ";
     wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
