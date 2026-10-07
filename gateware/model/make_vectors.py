@@ -67,6 +67,17 @@ def cases():
         lines[i][4:4] = bt656.blanking(extra)
     yield 'ntsc_run_on_lines', b''.join(lines) + bt656.line_bytes('ntsc', 45)
 
+    # a line that starts again: NTSC lines 20-27, line 22 has luma spikes in its first 1400 bytes
+    # and an extra SAV 1435 bytes into its active part, so the line it starts has one active byte
+    # and no whole word before the EAV (noise_stats.v must count 0 for it, not line 22's spikes)
+    lines = [bytearray(bt656.line_bytes('ntsc', n, bytes(b for x in range(720) for b in (0x80, ramp(n, x)))))
+             for n in range(20, 28)]
+    act = len(lines[2]) - 1440
+    for x in range(10, 700, 37):
+        lines[2][act + 2 * x + 1] = 1 if x % 2 else 254
+    lines[2][act + 1435:act + 1439] = bytes([0xFF, 0, 0, bt656.xy(0, 0, 0)])
+    yield 'ntsc_restart', b''.join(lines) + bt656.line_bytes('ntsc', 28)
+
     # impulse noise for the out-of-range luma count (noise_stats.v): NTSC lines 16-56 (vertical
     # blanking, then 37 active lines from line 0). Luma spikes on both sides of 16..235, with the
     # boundary values 15/16 and 235/236; chroma spikes outside 16..240 that must not be counted;

@@ -681,6 +681,35 @@ def test_low_after_switch_shows_whole_fields():
         assert len(tags) == 1 and -1 not in tags, f"frame at {round(f['pc'] / H_TOTAL)} lines shows fields {sorted(tags)}"
 
 
+PAD_BLACK = "if (!grp_mask[i]) begin grp[i] <= BLACK; grp_mask[i] <= 1'b1; end"
+
+
+def mid_line_run(name, alter=None):
+    """LOW from reset, then BUF 100 words into line 4 of field 3 (tag 4)."""
+    t = next(t for t, _, line, tag in MS_SRC if tag == 4 and line == 4)
+    return run_sim(name, MS_SRC, LL=1, SW2=t + 100, alter=alter, **LL_V)
+
+
+def test_writer_starting_mid_line_writes_no_unknown_words():
+    """The field store leaves LOW in the middle of a line, so its first group lacks its first words.
+    fb_sdram.v filled such holes from grp[0], a register that had never been written after reset
+    in LOW, and sent X to the SDRAM (found by sim/test_fuzz_chain.py, seed 156: sdram_model.v
+    STRICT stops the run). The holes are now black. No protocol error (run_sim), and the frames
+    with video after the switch to BUF show no unknown words (frames in LOW before it: #17)."""
+    sd, pix = mid_line_run('tb_fb_mid_line')
+    sw = next(v[0] for ev, *v in pix if ev == 'M' and v[1] == 0)
+    after = [f for f in pix_frames(pix) if f['pc'] > sw and f['video']]
+    assert len(after) >= 5, 'too few frames with video after the switch to BUF'
+    assert not any(-1 in w for f in after for w in f['shown'].values()), 'unknown words in a frame after the switch'
+
+
+
+def test_writer_starting_mid_line_check_is_tested():
+    """Negative control: the holes filled from grp[0] again send X to the SDRAM."""
+    with pytest.raises(AssertionError, match='SDRAM protocol errors'):
+        mid_line_run('tb_fb_mid_line_old', alter={'fb_sdram.v': (PAD_BLACK, PAD_BLACK.replace('BLACK', 'grp[0]'))})
+
+
 def test_mode_switch_checks_catch_faults():
     """Negative control for test_mode_switch_buf_low_buf: the same run with faults made in the
     test bench (not the RTL), each of which the matching check must catch. Fault 1: one word
