@@ -7,11 +7,12 @@ ring) -> fb_display. Each block is checked against its model on the input it rea
   rx       every line marker against bt656.Receiver (field, line, HF, timing-code counts,
            length, complete); the noise meter's line counts against luma_outside()
   mixer    every decision, the current channel after it and every word against
-           line_mixer_ref.Mixer. Arrival times come from the byte streams. Where that run
-           differs, the model runs again on the cycles at which the RTL took each marker
-           from its FIFO; if that run agrees, the difference lies in the arrival times
-           (the pairing window's edge, two arrivals in one cycle) and is counted as an
-           edge case, not as a fault.
+           line_mixer_ref.Mixer, on arrival cycles computed from the byte streams
+           (line_mixer_ref.arrival_cycle: the capture path's latency and the FIFO's
+           synchroniser, clock edge for clock edge). Where that run differs, the model runs
+           again on the cycles at which the RTL took each marker from its FIFO; if that run
+           agrees, the arrival model is what differs, and the run counts as an edge case
+           (logged, not a fault).
   store    every decision of the field store against fb_ref.FieldStore (as test_fb.py);
            every line read into the line buffer has the checksum of what the SDRAM held
   display  every output line shows the source line fb_ref.src_line gives and word 52 of
@@ -20,8 +21,8 @@ ring) -> fb_display. Each block is checked against its model on the input it rea
 and against six invariants that do not depend on the models:
   1. no X/Z on r, g, b, de, hsync, vsync after the first frame, and after the first frame
      following a mode switch;
-  2. every frame, vsync to vsync, has V_TOTAL - 1 .. V_TOTAL + MAX_WAIT lines; shorter
-     frames (genlock cuts) at least HOLD frames apart;
+  2. every frame, frame start to frame start, has V_TOTAL - 1 .. V_TOTAL + MAX_WAIT lines;
+     shorter frames (genlock cuts) at least HOLD frames apart;
   3. every line read for a frame is stored in the buffer it is read from, or black;
   4. no SDRAM protocol error (sdram_model.v STRICT);
   5. the mixer's overflow is never set;
@@ -68,7 +69,6 @@ MAX_WAIT, HOLD = 8, 32
 RT = dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)
 T_PAIR = lm.T_PAIR_CYCLES
 EXT_DELAY = 3                   # a control change at cycle C reaches mix_chan's bad flag at C + 3
-RX_LATENCY_NS = 200.0           # the byte that completes a line -> its marker leaves the FIFO (about)
 EDGE_NS = 1000.0                # arrival differences this close to 0 or T_PAIR are reported as the edge
 SUITE_SEEDS = (3, 5, 8, 13, 21, 34, 55, 89, 144, 233)
 BLACK = fb.BLACK_WORD
@@ -174,12 +174,11 @@ def receiver_records(sc):
     return out
 
 
-def byte_ns(sc, ch, k):
-    """When byte k of channel ch is on the decoder pins (tb_chain.v drives them at negedge)."""
+def arrival_cycle(sc, ch, k, rec):
+    """The SDRAM clock count at which mix_chan takes the marker of a line whose EAV timing code
+    ends at byte k of channel ch (tb_chain.v clocks; see line_mixer_ref.arrival_cycle)."""
     t0, per = (sc.start_a, sc.t_a) if ch == 0 else (sc.start_b, sc.t_b)
-    per = 2 * round(per / 2, 3)                  # the bench's half period is rounded to 1 ps
-    n0 = -(-(fz.RST_NS + t0) // per)
-    return n0 * per + k * per
+    return lm.arrival_cycle(fz.RST_NS + t0, 2 * round(per / 2, 3), k, rec.active_count, T_S)
 
 
 def check_rx(logs, recs, fd):
@@ -277,10 +276,19 @@ def near_edge(ev):
 
 
 def check_mixer(sc, logs, recs, marks, fd):
-    """The RTL mixer against the model. Returns (rtl decisions, rtl words)."""
+    """The RTL mixer against the model. Arrival cycles come from the streams
+    (line_mixer_ref.arrival_cycle); where the model then differs from the RTL, it runs again on
+    the cycles the RTL took the markers at. Returns (rtl decisions, rtl words)."""
     dec, words, ov = mixer_rtl(logs)
     ctl = ctl_cycles(sc)
-    ev = sorted(((byte_ns(sc, ch, k) + RX_LATENCY_NS) / T_S - 0.5, ch, r) for ch in (0, 1) for k, r in recs[ch])
+    ev = sorted((arrival_cycle(sc, ch, k, r), ch, r) for ch in (0, 1) for k, r in recs[ch])
+    for ch in (0, 1):                     # the arrival model itself
+        for i, (mk, (k, r)) in enumerate(zip(marks[ch], recs[ch])):
+            a = arrival_cycle(sc, ch, k, r)
+            if mk[0] != a:
+                fd.edges.append(dict(t=round(cyc_ns(mk[0])), detail=f'{"AB"[ch]} marker {i} taken at cycle {mk[0]}, '
+                                     f'arrival model {a} (active {r.active_count})', near=[]))
+                break
     m = mixer_model(ev, ctl)
     diff = compare_mixer(m, dec, words)
     if diff:
@@ -356,13 +364,14 @@ def check_store(logs, words, org, run, fd):
     """Replay the store's log through fb_ref (a fresh model after each low-latency period);
     every read against the SDRAM content. Returns the frames with what they read."""
     mem, morg = {}, {}
-    st, frames, pending, reads = None, [], [], []
+    st, frames, pending, reads, prev_st = None, [], [], [], None
     stored = {}
     cur_org = -1
     for ev in logs['sd']:
         e = ev[0]
         if e == 'L':
             if ev[2] == '1':
+                prev_st = st if st is not None else prev_st
                 st, pending, reads = None, [], []
             continue
         if e in ('G', 'E', 'T', 'Q', 'end'):
@@ -372,7 +381,12 @@ def check_store(logs, words, org, run, fd):
             mem[addr], morg[addr] = val, cur_org
             continue
         if st is None:
+            old_ok = prev_st.ok if prev_st is not None else None
             st = fb.FieldStore(**{k.lower(): v for k, v in RT.items()})
+            if old_ok is not None:
+                # fb_sdram.v keeps its stored-line bits in block RAM, which the reset during LOW does
+                # not clear; a buffer's bits are cleared when the writer takes it for a field
+                st.ok = [set(o) for o in old_ok]
             frames.append(None)                         # requests before the first frame start
         v = [num(x) for x in ev[1:]] if e not in ('R', 'S') else ev[1:]
         try:
@@ -430,7 +444,7 @@ def check_store(logs, words, org, run, fd):
                     content = [mem.get(base + i) for i in range(360)]
                     o = morg.get(base + 52)
                     if src[1] not in stored.get(src[0], ()):
-                        fd.add('store', 'unstored', 0, f'line {src} read, not stored since the buffer was taken')
+                        o = 'unstored'                  # invariant 3, checked where the line is shown
                 reads.append((frames[-1], src, content, o))
             elif e == 'R':
                 if not reads:
@@ -549,6 +563,10 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('display', 'word', t_frame, f"output line {y}: shows {pf['shown'][y]}, line read had {want}")
                 break
             k = fr.org[j]
+            if k == 'unstored':
+                fd.add('store', 'unstored', t_frame, f'output line {y} shows source line {s}, read from a line '
+                       'not stored since its buffer was taken')
+                break
             if k is not None and k >= 0 and k < fr.k_new - 2:
                 fd.add('age', 'buf', t_frame, f'output line {y} (source line {s}): camera field {k}, '
                        f'newest passed on {fr.k_new}')
@@ -575,14 +593,26 @@ def check_invariants(sc, logs, fd):
     pix = logs['pix']
     starts = frame_starts(pix)
     sws = switch_windows(pix, starts)
-    # 1. X/Z
-    first_ok = starts[1] if len(starts) > 1 else 1 << 60
+    # 1. X/Z, from the end of the first whole frame on (as test_fb.py)
+    first_ok = starts[2] if len(starts) > 2 else 1 << 60
     for ev in pix:
         if ev[0] == 'Z':
             pc = int(ev[1])
             if pc >= first_ok and not any(a + V_TOTAL * H_TOTAL <= pc < b for a, b in sws):
                 fd.add('output', 'xz', pc * T_P, f'X/Z on an output in the line ending at pixel clock {pc}')
                 break
+    # README (Bildvägen efter mixern): BUF -> LOW, the first frame after the switch has no video
+    vids = {}
+    for ev in pix:
+        if ev[0] == 'V':
+            vids[int(ev[1])] = num(ev[3])
+    for ev in pix:
+        if ev[0] == 'M' and ev[2] == '1':
+            sw = int(ev[1])
+            after = [s0 for s0 in starts if s0 > sw]
+            if after and vids.get(after[0]):
+                fd.add('display', 'switch_video', after[0] * T_P,
+                       f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
     cuts = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):

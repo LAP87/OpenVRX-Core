@@ -51,6 +51,29 @@ USE_A, USE_B, USE_BLEND, USE_NONE = 0b01, 0b10, 0b11, 0b00
 T_PAIR_CYCLES = 1024
 
 
+def arrival_cycle(t_run, t_byte, k, active_count, t_sys):
+    """System clock edge at which mix_chan takes the marker of a line, for a bench that drives
+    byte 0 of the stream at the first falling edge of the byte clock at or after t_run (ns),
+    byte clocks starting low, the system clock starting low with period t_sys. k: index of the
+    EAV's XY byte that ends the line. Edges counted from 0 at t_sys / 2.
+
+    The path: bt656_rx takes byte k at the rising edge E(k) and pulses rec_valid; chan_capture
+    puts the marker into the FIFO one byte clock later, or two when the line's last word leaves
+    word_packer in the same clock (a line of 4..1440 active bytes, a multiple of 4); the FIFO
+    write is one more byte clock. The read side sees the Gray pointer after two system clock
+    edges (the first edge strictly after the write), and mix_chan takes the marker at the next.
+    A line arrives in the model at this edge (its time t, in system clock edges)."""
+    n0 = -(-t_run // t_byte)                       # first falling edge at or after t_run
+    collide = active_count % 4 == 0 and 4 <= active_count <= 4 * N_WORDS
+    t_write = (n0 + 0.5 + k + 1 + 1 + (1 if collide else 0) + 1) * t_byte
+    j = int((t_write + 1e-6) / t_sys - 0.5) + 1    # first edge (j + 0.5) t_sys after t_write
+    while (j + 0.5) * t_sys <= t_write + 1e-6:
+        j += 1
+    while j > 0 and (j - 0.5) * t_sys > t_write + 1e-6:
+        j -= 1
+    return j + 2
+
+
 def is_bad(rec, len_ntsc=1716, len_pal=1728, tol=2):
     length = min(rec.length, 4095)
     return rec.xy_bad != 0 or not (abs(length - len_ntsc) <= tol or abs(length - len_pal) <= tol)
@@ -136,6 +159,8 @@ class Mixer:
         self.overflow = False
         self.bad_last = False         # the last line shown (or left out) in this output field was bad on both
         self.adm_new = False          # the last admitted line started an output field
+        self.pushed = [None, None]    # time of each channel's last line, and its `sick` before that line
+        self.sick_before = [False, False]
 
     # ---- per-channel bookkeeping at arrival
     def _ext(self, ch, t):
@@ -149,12 +174,16 @@ class Mixer:
         return len(self.hist[ch]) == 8 and not any(self.hist[ch])
 
     def push(self, ch, rec, t):
+        """Two lines at the same time (the same clock edge in the RTL): each sees the other's
+        health as it was before that edge (mix_chan registers `sick`)."""
         self._advance(t)
         # a line with fewer than 360 whole words (late SAV, short active part) is incomplete: it
         # counts as bad for health, is not stored and is not a delivered line for the other
         # channel's gap fill
         complete = rec.active_count >= 4 * N_WORDS
         bad = is_bad(rec, **self.kw) or self._ext(ch, t) or not complete
+        peer_sick = self.sick_before[1 - ch] if self.pushed[1 - ch] == t else self._sick(1 - ch)
+        self.sick_before[ch], self.pushed[ch] = self._sick(ch), t
         h = self.hist[ch]
         h.append(bad)
         del h[:-8]
@@ -169,7 +198,7 @@ class Mixer:
             return
         if not complete:
             return
-        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], self._sick(1 - ch), self._well(ch)))
+        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], peer_sick, self._well(ch)))
         self._pairs()
 
     def finish(self, t=float('inf')):
