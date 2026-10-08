@@ -26,9 +26,10 @@ and against six invariants that do not depend on the models:
   3. every line read for a frame is stored in the buffer it is read from, or black;
   4. no SDRAM protocol error (sdram_model.v STRICT);
   5. the mixer's overflow is never set;
-  6. every line shown with video comes from a camera field at most two fields older than
-     the newest field the mixer had passed on when the frame started; a camera field that
-     never reached the output and in which the receivers never paired is not counted. Frames that a mode
+  6. every line shown with video comes from a field of the store at most two fields older
+     than the one it writes when the frame starts (age/store); and no camera field that both
+     receivers delivered in step goes missing between a line shown and the newest field the
+     mixer had passed on, when the line is more than two camera fields older (age/lost_field). Frames that a mode
      switch runs through are not checked (README: the frame in progress at a switch shows
      what the line buffer holds).
 
@@ -90,7 +91,7 @@ SUITE_SEEDS = (3, 5, 8, 13, 21, 34, 55, 89, 144, 233)
 # Known faults with an issue: findings of these groups in LOW frames while the output locks after
 # a switch to LOW (or after reset in LOW) are counted against the issue, not as new findings.
 LOW_LOCK_ISSUE = 'LAP87/OpenVRX-Core#17'
-LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/ll', 'output/xz')
+LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/lost_field', 'output/xz')
 LOW_LOCK_FRAMES = 4             # frames after the switch
 # Output fields the word stream does not mark (same F bit, first line above the last one sent):
 # the store joins them to the field before. Age findings within three field periods after such a
@@ -376,18 +377,34 @@ def word_origins(sc, recs, marks, dec, words):
             run.append((w[5], newest))
     AGE_FIELDS.clear()
     AGE_FIELDS.update(set(org) | {k for k, n in pairs.items() if n})
+    LOST_PAIRED.clear()
+    LOST_PAIRED.update({k for k, n in pairs.items() if n} - set(org))
     return org, run
 
 
-# Camera fields that count for the age of a line (invariant 6): those the mixer passed words of,
-# and those in which the two receivers paired (both delivered them in step). A field that no
-# receiver delivered in step and that never reached the output (one silent, the other out of step
-# until N_DEAD of its lines have come: in the scaled geometry that is longer than a field) does not.
-AGE_FIELDS = set()
+# Camera fields that count for the age of a line: those the mixer passed words of, and those in
+# which the two receivers paired. LOST_PAIRED: fields both receivers delivered in step that never
+# reached the output (finding 6). Invariant 6 is checked strictly on the field store's own fields
+# (age/store); a line more than two camera fields old is a finding only when a field in
+# LOST_PAIRED lies between (age/lost_field), and a note otherwise: a receiver that missed a
+# blanking interval numbers on, and the store keeps the two camera fields as one.
+AGE_FIELDS, LOST_PAIRED = set(), set()
 
 
 def age(k, k_new):
     return sum(1 for f in range(k + 1, k_new + 1) if f in AGE_FIELDS)
+
+
+def camera_age(fd, k, k_new, t, what):
+    if k is None or k < 0 or age(k, k_new) <= 2:
+        return False
+    lost = [f for f in range(k + 1, k_new + 1) if f in LOST_PAIRED]
+    if lost:
+        fd.add('age', 'lost_field', t, f'{what}: camera field {k}, newest passed on {k_new}; '
+               f'camera field(s) {lost} paired but never shown')
+        return True
+    fd.notes.append(f'{what}: camera field {k}, newest passed on {k_new} (fields merged or lost upstream)')
+    return True                         # one note per frame
 
 
 def newest_at(run, cyc):
@@ -407,7 +424,8 @@ def checksum(ws):
 class Frame:
     def __init__(self, show, prev, low, rt, cyc, lines, k_new):
         self.show, self.prev, self.low, self.rt, self.cyc, self.lines, self.k_new = show, prev, low, rt, cyc, lines, k_new
-        self.want, self.got, self.org, self.bad = [], [], [], []
+        self.want, self.got, self.org, self.bad, self.sorg = [], [], [], [], []
+        self.sfield_new = 0             # the store's field being written at the frame start
 
 
 def check_store(logs, words, org, run, fd):
@@ -415,6 +433,7 @@ def check_store(logs, words, org, run, fd):
     every read against the SDRAM content. Returns the frames with what they read."""
     mem, morg = {}, {}
     st, frames, pending, reads, prev_st = None, [], [], [], None
+    sfield, buf_field = 0, {}             # the store's fields in order; buffer -> its field
     stored = {}
     cur_org = -1
     for ev in logs['sd']:
@@ -444,18 +463,24 @@ def check_store(logs, words, org, run, fd):
                 if st.first_word(v[0], v[1]) != v[2]:
                     fd.add('store', 'decision', 0, f'first word: buffer {v[2]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'N':
                 if not st.is_new_field(v[0], v[1]) or (st.cur, (st.max_line + 1) & 1023) != (v[2], v[3]):
                     fd.add('store', 'decision', 0, f'publish {v}, model {(st.cur, st.max_line + 1)}')
                 if st.first_word(v[0], v[1]) != v[4]:
                     fd.add('store', 'decision', 0, f'next buffer {v[4]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'J':
                 if not st.joined or not st.is_new_field(v[0], v[1]):
                     fd.add('store', 'decision', 0, f'joined field dropped {v}, model not')
                 elif st.end_joined(v[0], v[1]) != v[2]:
                     fd.add('store', 'decision', 0, f'joined field dropped, next buffer {v[2]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'P':
                 if st.lines != v[0]:
                     fd.add('store', 'decision', 0, f'line count {v[0]}, model {st.lines}')
@@ -478,6 +503,7 @@ def check_store(logs, words, org, run, fd):
                     fd.add('store', 'decision', cyc_ns(cyc),
                            f'frame start: rtl {v[:5]}, model {(show, st.prev, st.prev_ok, low, rt)}')
                 frames.append(Frame(show, prev, low, rt, cyc, st.lines, newest_at(run, cyc)))
+                frames[-1].sfield_new = sfield
             elif e == 'F':
                 if frames[-1] is not None:
                     frames[-1].want.append(v[0])
@@ -495,12 +521,12 @@ def check_store(logs, words, org, run, fd):
                     o = morg.get(base + 52)
                     if src[1] not in stored.get(src[0], ()):
                         o = 'unstored'                  # invariant 3, checked where the line is shown
-                reads.append((frames[-1], src, content, o))
+                reads.append((frames[-1], src, content, o, sfield if src[0] == fb.BLANK else buf_field.get(src[0], -99)))
             elif e == 'R':
                 if not reads:
                     fd.add('store', 'log', 0, 'line buffer written without a read')
                     continue
-                fr, src, content, o = reads.pop(0)
+                fr, src, content, o, sf = reads.pop(0)
                 if (v[0] == '1') != (src[0] == fb.BLANK):
                     fd.add('store', 'read', 0, f'black line where {src} was due, or the reverse')
                 want = 'x' if None in content else f'{checksum(content):08x}'
@@ -511,6 +537,7 @@ def check_store(logs, words, org, run, fd):
                     fr.got.append(content)
                     fr.org.append(o)
                     fr.bad.append(bad)
+                    fr.sorg.append(sf)
                 elif bad:
                     fd.notes.append('read outside a frame: ' + bad)
         except AssertionError as err:                   # the model refuses the event
@@ -594,8 +621,7 @@ def check_display(sc, logs, frames, words, org, run, fd):
                     fd.add('display', 'll_word', t_frame, f"output line {y}: shows {pf['shown'][y]}, slot {slot} held {word}")
                     break
                 k = org[npop] if npop < len(org) else -1
-                if k >= 0 and age(k, k_new) > 2:
-                    fd.add('age', 'll', t_frame, f'output line {y}: camera field {k}, newest passed on {k_new}')
+                if camera_age(fd, k, k_new, t_frame, f'LOW output line {y}'):
                     break
                 checked += 1
             continue
@@ -624,9 +650,11 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('store', 'unstored', t_frame, f'output line {y} shows source line {s}, read from a line '
                        'not stored since its buffer was taken')
                 break
-            if k is not None and k >= 0 and age(k, fr.k_new) > 2:
-                fd.add('age', 'buf', t_frame, f'output line {y} (source line {s}): camera field {k}, '
-                       f'newest passed on {fr.k_new}')
+            if fr.sfield_new - fr.sorg[j] > 2:
+                fd.add('age', 'store', t_frame, f'output line {y} (source line {s}): store field {fr.sorg[j]}, '
+                       f'the store writes field {fr.sfield_new}')
+                break
+            if camera_age(fd, k, fr.k_new, t_frame, f'output line {y} (source line {s})'):
                 break
             checked += 1
     return checked
