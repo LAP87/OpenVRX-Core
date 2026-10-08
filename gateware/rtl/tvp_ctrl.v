@@ -15,10 +15,12 @@
 //   28h = 00h  video standard: autoswitch (VIDEO_STD; SLES209E 3.21.32). Written although it is
 //              the default, so that both decoders are set alike after any reset. Not forced to
 //              NTSC or PAL: the puck takes cameras of either standard.
-//   02h = 20h  TV/VCR mode fixed to VCR (OP_MODE bits 5:4 = 10; SLES209E 3.21.3). In automatic
-//              mode a decoder switches to VCR on unstable or nonstandard sync (comb filter off,
-//              chroma trap on), and two decoders could then filter differently. All other bits
-//              of 02h at their defaults (0). Which fixed mode holds lock better is not measured.
+//   02h = 30h  TV/VCR mode fixed to TV (OP_MODE bits 5:4 = 11; SLES209E 3.21.3; 10 = VCR, 01 is
+//              reserved). In automatic mode a decoder switches to VCR on unstable or nonstandard
+//              sync (comb filter off, chroma trap on), and two decoders could then filter
+//              differently. TV keeps the comb filter on for both. All other bits of 02h at their
+//              defaults (0). Which fixed mode gives the better picture on a weak signal is not
+//              measured; the owner wants to see both on the bench before fixing it for good.
 //   03h = 0Dh  YCbCr, sync and SCLK outputs enabled (default 01h keeps the bus off)
 // 03h goes last, and the list stops at the first write that is not
 // acknowledged. So 03h = 0Dh means the whole list arrived.
@@ -54,7 +56,7 @@ module tvp_ctrl #(
     parameter POWER_MS = 20, RESET_MS = 2, BOOT_MS = 1, POLL_MS = 20,
     parameter SPLIT_SDA = 0,
     parameter [7:0] VIDEO_STD = 8'h00,    // register 28h, see above
-    parameter [7:0] OP_MODE = 8'h20       // register 02h, see above
+    parameter [7:0] OP_MODE = 8'h30       // register 02h, see above (20h = VCR mode)
 ) (
     input  wire        clk,
     input  wire        rst,

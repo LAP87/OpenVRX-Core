@@ -25,8 +25,8 @@ sys.path.insert(0, str(HERE))
 import tvp_status  # noqa: E402
 
 INIT = ('0d', 'fc', '47')           # 03h, 04h, 0Dh after the init list (00h = 00h is the default anyway)
-SET = ('20', '00')                  # 02h (TV/VCR mode: VCR), 28h (video standard: autoswitch, also the default)
-INIT_LIST = [('00', '00'), ('04', 'fc'), ('0d', '47'), ('28', '00'), ('02', '20'), ('03', '0d')]
+SET = ('30', '00')                  # 02h (TV/VCR mode: TV), 28h (video standard: autoswitch, also the default)
+INIT_LIST = [('00', '00'), ('04', 'fc'), ('0d', '47'), ('28', '00'), ('02', '30'), ('03', '0d')]
 N = len(INIT_LIST)
 ST_NTSC, ST_PAL = '000e', '306e'    # {89h, 88h} of the two decoder models: healthy NTSC and healthy PAL
 
@@ -173,7 +173,7 @@ def test_late_decoder_and_error_flag():
     assert r['reinit0'] == '0' and r['s0_writes'] == str(N)
 
 
-WRONG_OP_MODE = ("parameter [7:0] OP_MODE = 8'h20", "parameter [7:0] OP_MODE = 8'h30")
+WRONG_OP_MODE = ("parameter [7:0] OP_MODE = 8'h30", "parameter [7:0] OP_MODE = 8'h20")
 WRONG_ORDER = ("3'd3: init_rom = {8'h28, VIDEO_STD};\n            3'd4: init_rom = {8'h02, OP_MODE};",
                "3'd3: init_rom = {8'h02, OP_MODE};\n            3'd4: init_rom = {8'h28, VIDEO_STD};")
 
@@ -183,16 +183,16 @@ def init_list_ok(r):
 
 
 def test_init_list_in_order():
-    """Decoder 0 gets exactly the init list, in order, once: 28h (autoswitch) and 02h (VCR mode)
+    """Decoder 0 gets exactly the init list, in order, once: 28h (autoswitch) and 02h (TV mode)
     are written explicitly, 03h last (SLES209E 3.21.3, 3.21.32; README under M4)."""
     r, _ = run(1)
     assert r['log'] == INIT_LIST, r['log']
     assert init_list_ok(r)
 
 
-@pytest.mark.parametrize('alter', [WRONG_OP_MODE, WRONG_ORDER], ids=['op_mode_tv', 'order'])
+@pytest.mark.parametrize('alter', [WRONG_OP_MODE, WRONG_ORDER], ids=['op_mode_vcr', 'order'])
 def test_init_list_check_is_tested(alter):
-    """Negative controls: 02h = 30h (TV mode instead of VCR), or 02h written before 28h."""
+    """Negative controls: 02h = 20h (VCR mode instead of TV), or 02h written before 28h."""
     r, _ = run(1, alter=alter)
     assert not init_list_ok(r), r['log']
 
