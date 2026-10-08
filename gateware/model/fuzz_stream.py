@@ -160,6 +160,9 @@ class Scenario:
     camera: list                   # [(vbi, active lines)] per camera field
     silences: dict                 # channel -> [(first byte, bytes, fill)]
     end_ns: float = 0.0            # last byte of the longer stream, ns after reset
+    ahead: bool = False            # a channel's stream lost a field's bytes (field_drop removed, field_cut
+                                   # early): from there on it delivers camera fields before the camera has
+                                   # them, which no decoder can; field ages mean little then
 
     def classes_used(self):
         return sorted(self.used)
@@ -359,6 +362,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', den
                 ln.notes.append('line_drop removed')
                 used['line_drop'].append(f'{name(ch)}: field {ln.k} line {ln.i} removed')
     silences = {0: [], 1: []}             # (line index, offset in line, bytes, fill), resolved after layout
+    ahead = False
     if 'field_drop' in on:
         r = rngs['field_drop']
         ch = r.randrange(2)
@@ -372,6 +376,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', den
             j = lines[ch].index(fl[0])
             silences[ch].append((j, 0, sum(lb for _ in fl), 'blank'))
         used['field_drop'].append(f'{name(ch)}: field {k} {"removed" if removed else "silent"}')
+        ahead = ahead or removed
     if 'field_cut' in on:
         r = rngs['field_cut']
         k = r.randrange(1, n_fields - 1)
@@ -388,6 +393,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', den
                 j = lines[ch].index(fl[m])
                 silences[ch].append((j, 0, (len(fl) - m) * lb, 'blank'))
             used['field_cut'].append(f'{name(ch)}: field {k} after {m} lines, {"next field at once" if early else "rest silent"}')
+            ahead = ahead or early
 
     # content
     if 'bit_error' in on:
@@ -582,7 +588,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', den
     return Scenario(seed=seed, enabled=enabled, used=used, std=std, interlaced=interlaced,
                     a=bytes(data[0]), b=bytes(data[1]), t_a=T_A, t_b=t_b, start_a=start_a, start_b=start_b,
                     ll0=ll0, ctl=ctl, lines=sent, geometry=geometry, camera=list(zip(vbi, act)), silences=silences,
-                    end_ns=end_ns)
+                    end_ns=end_ns, ahead=ahead)
 
 
 def _silence(buf, p0, nb, fill):

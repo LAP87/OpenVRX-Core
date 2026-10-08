@@ -562,6 +562,19 @@ def test_returning_channel_check_is_tested(returning):
               ext=ext, alter={'line_mixer.v': (JUDGE, "wire       c_alt   = 1'b0;")})
 
 
+def hidden_field_starts(m):
+    """Decisions at which the mixer starts an output field that the word stream does not show:
+    the field store sees a new field only when the F bit changes or the line number goes down."""
+    out, prev = [], None
+    for i, ((use, _, f, line), new) in enumerate(zip(m.trace, m.newfield)):
+        if not use:
+            continue
+        if new and prev is not None and f == prev[0] and line > prev[1]:
+            out.append(i)
+        prev = (f, line)
+    return out
+
+
 class UnmarkedOutputField(AssertionError):
     """Only the observed #18 boundary defect is an expected failure."""
 

@@ -179,7 +179,7 @@ module tb_chain;
     end
 
     // ---- pixel domain log: frame geometry, source line and word per output line, the mode
-    integer pc = 0, nl = 0;               // line starts since the last frame start
+    integer pc = 0, nl = 0;               // nl: line starts since the last frame start (line lengths may differ)
     always @(posedge pix_clk) begin
         pc <= pc + 1;
         if (!rst) begin
