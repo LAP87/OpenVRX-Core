@@ -160,6 +160,9 @@ class Scenario:
     camera: list                   # [(vbi, active lines)] per camera field
     silences: dict                 # channel -> [(first byte, bytes, fill)]
     end_ns: float = 0.0            # last byte of the longer stream, ns after reset
+    ahead: bool = False            # a channel's stream lost a field's bytes (field_drop removed, field_cut
+                                   # early): from there on it delivers camera fields before the camera has
+                                   # them, which no decoder can; field ages mean little then
 
     def classes_used(self):
         return sorted(self.used)
@@ -178,16 +181,17 @@ def _xy_bits(rng, code):
     return code, nb
 
 
-def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
+def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled', density=1.0):
     """Scenario for one seed. classes: the classes allowed (None: all); each allowed class is
-    used with its probability in CLASSES. force: classes used whatever their probability."""
+    used with its probability in CLASSES, times density (capped at 1). force: classes used
+    whatever their probability."""
     if n_fields is None:
         n_fields = N_FIELDS if geometry == 'scaled' else N_FIELDS_FULL
     enabled = tuple(sorted(set(CLASSES if classes is None else classes) | set(force)))
     unknown = set(enabled) - set(CLASSES)
     assert not unknown, f'unknown classes {unknown}'
     rngs = {c: _rng(seed, c) for c in CLASSES}
-    on = {c for c in enabled if rngs[c].random() < CLASSES[c] or c in force}
+    on = {c for c in enabled if rngs[c].random() < min(1.0, CLASSES[c] * density) or c in force}
     if 'mode_switch' in on and 'pal' in on and geometry == 'scaled':
         on.discard('mode_switch')                        # see the docstring
     used = {c: [] for c in sorted(on)}
@@ -358,6 +362,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
                 ln.notes.append('line_drop removed')
                 used['line_drop'].append(f'{name(ch)}: field {ln.k} line {ln.i} removed')
     silences = {0: [], 1: []}             # (line index, offset in line, bytes, fill), resolved after layout
+    ahead = False
     if 'field_drop' in on:
         r = rngs['field_drop']
         ch = r.randrange(2)
@@ -371,6 +376,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
             j = lines[ch].index(fl[0])
             silences[ch].append((j, 0, sum(lb for _ in fl), 'blank'))
         used['field_drop'].append(f'{name(ch)}: field {k} {"removed" if removed else "silent"}')
+        ahead = ahead or removed
     if 'field_cut' in on:
         r = rngs['field_cut']
         k = r.randrange(1, n_fields - 1)
@@ -387,6 +393,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
                 j = lines[ch].index(fl[m])
                 silences[ch].append((j, 0, (len(fl) - m) * lb, 'blank'))
             used['field_cut'].append(f'{name(ch)}: field {k} after {m} lines, {"next field at once" if early else "rest silent"}')
+            ahead = ahead or early
 
     # content
     if 'bit_error' in on:
@@ -581,7 +588,7 @@ def generate(seed, classes=None, n_fields=None, force=(), geometry='scaled'):
     return Scenario(seed=seed, enabled=enabled, used=used, std=std, interlaced=interlaced,
                     a=bytes(data[0]), b=bytes(data[1]), t_a=T_A, t_b=t_b, start_a=start_a, start_b=start_b,
                     ll0=ll0, ctl=ctl, lines=sent, geometry=geometry, camera=list(zip(vbi, act)), silences=silences,
-                    end_ns=end_ns)
+                    end_ns=end_ns, ahead=ahead)
 
 
 def _silence(buf, p0, nb, fill):

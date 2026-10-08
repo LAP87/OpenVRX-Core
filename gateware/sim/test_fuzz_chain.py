@@ -26,8 +26,10 @@ and against six invariants that do not depend on the models:
   3. every line read for a frame is stored in the buffer it is read from, or black;
   4. no SDRAM protocol error (sdram_model.v STRICT);
   5. the mixer's overflow is never set;
-  6. every line shown with video comes from a camera field at most two fields older than
-     the newest field the mixer had passed on when the frame started. Frames that a mode
+  6. every line shown with video comes from a field of the store at most two fields older
+     than the one it writes when the frame starts (age/store); and no camera field that both
+     receivers delivered in step goes missing between a line shown and the newest field the
+     mixer had passed on, when the line is more than two camera fields older (age/lost_field). Frames that a mode
      switch runs through are not checked (README: the frame in progress at a switch shows
      what the line buffer holds).
 
@@ -67,7 +69,6 @@ import fuzz_stream as fz  # noqa: E402
 import line_mixer_ref as lm  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
-H_ALT = 330                     # 720p50 lines are this much longer (fb_backend.v H_FP_ALT 440 against 110)
 MAX_WAIT, HOLD = 8, 32
 GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
     'scaled': dict(V_TOTAL=87, V_ACTIVE=72, V_FP=1, V_SYNC=1, RT=dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)),
@@ -90,8 +91,12 @@ SUITE_SEEDS = (3, 5, 8, 13, 21, 34, 55, 89, 144, 233)
 # Known faults with an issue: findings of these groups in LOW frames while the output locks after
 # a switch to LOW (or after reset in LOW) are counted against the issue, not as new findings.
 LOW_LOCK_ISSUE = 'LAP87/OpenVRX-Core#17'
-LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/ll', 'output/xz')
+LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/lost_field', 'output/xz')
 LOW_LOCK_FRAMES = 4             # frames after the switch
+# Output fields the word stream does not mark (same F bit, first line above the last one sent):
+# the store joins them to the field before. Age findings within three field periods after such a
+# start are counted against the issue.
+HIDDEN_ISSUE = 'LAP87/OpenVRX-Core#18'
 BLACK = fb.BLACK_WORD
 
 RTL = ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v', 'chan_capture.v', 'mix_chan.v',
@@ -165,6 +170,7 @@ class Findings:
 
     def __init__(self):
         self.items, self.edges, self.notes, self.known = [], [], [], []
+        self.hidden = []                # ns: output fields the stream does not mark (#18)
 
     def add(self, block, kind, t_ns, detail):
         self.items.append(dict(block=block, kind=kind, t=round(t_ns or 0.0), detail=str(detail)[:500]))
@@ -326,6 +332,14 @@ def check_mixer(sc, logs, recs, marks, fd):
             t2 = cyc_ns(dec[min(j, len(dec) - 1)][5]) if dec else 0
             fd.add('mixer', 'decision' if diff2[0] is not None else 'words', t2,
                    f'cycle-exact: {diff2[1]}; from the streams: {diff[1]}')
+    if not any(d['block'] == 'mixer' for d in fd.items):
+        prev = None
+        for (use, _, f, line), new, d in zip(m.trace, m.newfield, dec):
+            if not use:
+                continue
+            if new and prev is not None and f == prev[0] and line > prev[1]:
+                fd.hidden.append(cyc_ns(d[5]))
+            prev = (f, line)
     if ov is not None:
         fd.add('mixer', 'overflow', cyc_ns(ov), 'overflow set')
     elif m.overflow:
@@ -343,8 +357,11 @@ def word_origins(sc, recs, marks, dec, words):
                 ln = fz.camera_line(sc, ch, k - 4)       # the line's last byte before its EAV
                 queue[ch].append(ln.k if ln is not None else -1)
     heads, line_org = {0: 0, 1: 0}, []
+    pairs = {}                                           # camera field -> pairs decided in it
     for d in dec:
         use, pop = d[0], d[1]
+        if pop == 3 and heads[0] < len(queue[0]):
+            pairs[queue[0][heads[0]]] = pairs.get(queue[0][heads[0]], 0) + 1
         if use:
             src = 1 if use == lm.USE_B else 0
             line_org.append(queue[src][heads[src]] if heads[src] < len(queue[src]) else -1)
@@ -358,7 +375,36 @@ def word_origins(sc, recs, marks, dec, words):
         if k > newest:
             newest = k
             run.append((w[5], newest))
+    AGE_FIELDS.clear()
+    AGE_FIELDS.update(set(org) | {k for k, n in pairs.items() if n})
+    LOST_PAIRED.clear()
+    LOST_PAIRED.update({k for k, n in pairs.items() if n} - set(org))
     return org, run
+
+
+# Camera fields that count for the age of a line: those the mixer passed words of, and those in
+# which the two receivers paired. LOST_PAIRED: fields both receivers delivered in step that never
+# reached the output (finding 6). Invariant 6 is checked strictly on the field store's own fields
+# (age/store); a line more than two camera fields old is a finding only when a field in
+# LOST_PAIRED lies between (age/lost_field), and a note otherwise: a receiver that missed a
+# blanking interval numbers on, and the store keeps the two camera fields as one.
+AGE_FIELDS, LOST_PAIRED = set(), set()
+
+
+def age(k, k_new):
+    return sum(1 for f in range(k + 1, k_new + 1) if f in AGE_FIELDS)
+
+
+def camera_age(fd, k, k_new, t, what):
+    if k is None or k < 0 or age(k, k_new) <= 2:
+        return False
+    lost = [f for f in range(k + 1, k_new + 1) if f in LOST_PAIRED]
+    if lost:
+        fd.add('age', 'lost_field', t, f'{what}: camera field {k}, newest passed on {k_new}; '
+               f'camera field(s) {lost} paired but never shown')
+        return True
+    fd.notes.append(f'{what}: camera field {k}, newest passed on {k_new} (fields merged or lost upstream)')
+    return True                         # one note per frame
 
 
 def newest_at(run, cyc):
@@ -378,7 +424,8 @@ def checksum(ws):
 class Frame:
     def __init__(self, show, prev, low, rt, cyc, lines, k_new):
         self.show, self.prev, self.low, self.rt, self.cyc, self.lines, self.k_new = show, prev, low, rt, cyc, lines, k_new
-        self.want, self.got, self.org = [], [], []
+        self.want, self.got, self.org, self.bad, self.sorg = [], [], [], [], []
+        self.sfield_new = 0             # the store's field being written at the frame start
 
 
 def check_store(logs, words, org, run, fd):
@@ -386,6 +433,7 @@ def check_store(logs, words, org, run, fd):
     every read against the SDRAM content. Returns the frames with what they read."""
     mem, morg = {}, {}
     st, frames, pending, reads, prev_st = None, [], [], [], None
+    sfield, buf_field = 0, {}             # the store's fields in order; buffer -> its field
     stored = {}
     cur_org = -1
     for ev in logs['sd']:
@@ -415,18 +463,24 @@ def check_store(logs, words, org, run, fd):
                 if st.first_word(v[0], v[1]) != v[2]:
                     fd.add('store', 'decision', 0, f'first word: buffer {v[2]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'N':
                 if not st.is_new_field(v[0], v[1]) or (st.cur, (st.max_line + 1) & 1023) != (v[2], v[3]):
                     fd.add('store', 'decision', 0, f'publish {v}, model {(st.cur, st.max_line + 1)}')
                 if st.first_word(v[0], v[1]) != v[4]:
                     fd.add('store', 'decision', 0, f'next buffer {v[4]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'J':
                 if not st.joined or not st.is_new_field(v[0], v[1]):
                     fd.add('store', 'decision', 0, f'joined field dropped {v}, model not')
                 elif st.end_joined(v[0], v[1]) != v[2]:
                     fd.add('store', 'decision', 0, f'joined field dropped, next buffer {v[2]}, model {st.cur}')
                 stored[st.cur] = set()
+                sfield += 1
+                buf_field[st.cur] = sfield
             elif e == 'P':
                 if st.lines != v[0]:
                     fd.add('store', 'decision', 0, f'line count {v[0]}, model {st.lines}')
@@ -449,6 +503,7 @@ def check_store(logs, words, org, run, fd):
                     fd.add('store', 'decision', cyc_ns(cyc),
                            f'frame start: rtl {v[:5]}, model {(show, st.prev, st.prev_ok, low, rt)}')
                 frames.append(Frame(show, prev, low, rt, cyc, st.lines, newest_at(run, cyc)))
+                frames[-1].sfield_new = sfield
             elif e == 'F':
                 if frames[-1] is not None:
                     frames[-1].want.append(v[0])
@@ -466,20 +521,25 @@ def check_store(logs, words, org, run, fd):
                     o = morg.get(base + 52)
                     if src[1] not in stored.get(src[0], ()):
                         o = 'unstored'                  # invariant 3, checked where the line is shown
-                reads.append((frames[-1], src, content, o))
+                reads.append((frames[-1], src, content, o, sfield if src[0] == fb.BLANK else buf_field.get(src[0], -99)))
             elif e == 'R':
                 if not reads:
                     fd.add('store', 'log', 0, 'line buffer written without a read')
                     continue
-                fr, src, content, o = reads.pop(0)
+                fr, src, content, o, sf = reads.pop(0)
                 if (v[0] == '1') != (src[0] == fb.BLANK):
                     fd.add('store', 'read', 0, f'black line where {src} was due, or the reverse')
                 want = 'x' if None in content else f'{checksum(content):08x}'
-                if v[2] != want:
-                    fd.add('store', 'read', 0, f'line {src}: checksum {v[2]}, the SDRAM held {want}')
+                # a read that does not match what the SDRAM held when it started (a line being written):
+                # checked where the line is shown (frames without video show nothing)
+                bad = None if v[2] == want else f'line {src}: checksum {v[2]}, the SDRAM held {want} when the read began'
                 if fr is not None:
                     fr.got.append(content)
                     fr.org.append(o)
+                    fr.bad.append(bad)
+                    fr.sorg.append(sf)
+                elif bad:
+                    fd.notes.append('read outside a frame: ' + bad)
         except AssertionError as err:                   # the model refuses the event
             fd.add('store', 'model', 0, f'{ev}: {err}')
     return [f for f in frames if f is not None]
@@ -561,8 +621,7 @@ def check_display(sc, logs, frames, words, org, run, fd):
                     fd.add('display', 'll_word', t_frame, f"output line {y}: shows {pf['shown'][y]}, slot {slot} held {word}")
                     break
                 k = org[npop] if npop < len(org) else -1
-                if k >= 0 and k < k_new - 2:
-                    fd.add('age', 'll', t_frame, f'output line {y}: camera field {k}, newest passed on {k_new}')
+                if camera_age(fd, k, k_new, t_frame, f'LOW output line {y}'):
                     break
                 checked += 1
             continue
@@ -579,6 +638,9 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('display', 'not_read', t_frame, f'output line {y}: source line {s} was not read')
                 break
             j = fr.want.index(s)
+            if fr.bad[j]:
+                fd.add('store', 'read', t_frame, f'output line {y}: {fr.bad[j]}')
+                break
             want = fr.got[j][52]
             if pf['shown'][y] != want:
                 fd.add('display', 'word', t_frame, f"output line {y}: shows {pf['shown'][y]}, line read had {want}")
@@ -588,9 +650,11 @@ def check_display(sc, logs, frames, words, org, run, fd):
                 fd.add('store', 'unstored', t_frame, f'output line {y} shows source line {s}, read from a line '
                        'not stored since its buffer was taken')
                 break
-            if k is not None and k >= 0 and k < fr.k_new - 2:
-                fd.add('age', 'buf', t_frame, f'output line {y} (source line {s}): camera field {k}, '
-                       f'newest passed on {fr.k_new}')
+            if fr.sfield_new - fr.sorg[j] > 2:
+                fd.add('age', 'store', t_frame, f'output line {y} (source line {s}): store field {fr.sorg[j]}, '
+                       f'the store writes field {fr.sfield_new}')
+                break
+            if camera_age(fd, k, fr.k_new, t_frame, f'output line {y} (source line {s})'):
                 break
             checked += 1
     return checked
@@ -635,10 +699,12 @@ def check_invariants(sc, logs, fd):
                 fd.add('display', 'switch_video', after[0] * T_P,
                        f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
-    alt = {int(ev[1]): num(ev[5]) for ev in pix if ev[0] == 'V' and len(ev) > 5}
+    # lines of the frame that ends at each frame start, counted by the bench (720p50 lines are
+    # longer, and genlock_timing.v changes the length on a frame's last, waiting lines)
+    nlines = {int(ev[1]): num(ev[6]) for ev in pix if ev[0] == 'V' and len(ev) > 6}
     cuts = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
-        n = round((b - a) / (H_TOTAL + H_ALT * (alt.get(a) or 0)))
+        n = nlines[b] if nlines.get(b) is not None else round((b - a) / H_TOTAL)
         if n < V_TOTAL - 1:
             cuts.append(i)
         elif n > V_TOTAL + MAX_WAIT:
@@ -671,21 +737,28 @@ def sort_known(sc, logs, fd):
     for sw in sws:
         later = [s0 for s0 in starts if s0 > sw]
         wins.append((sw, later[LOW_LOCK_FRAMES] if len(later) > LOW_LOCK_FRAMES else 1 << 60))
+    g = fz.GEOM[sc.geometry][sc.std]
+    span = 3 * (g['vbi'] + g['var'][1] + 1) * g['line'] * fz.T_A
     keep = []
     for d in fd.items:
         pc = d['t'] / T_P
         if f"{d['block']}/{d['kind']}" in LOW_LOCK_GROUPS and any(a <= pc < b for a, b in wins):
             fd.known.append(dict(d, issue=LOW_LOCK_ISSUE))
+        elif d['block'] == 'age' and any(h <= d['t'] < h + span for h in fd.hidden):
+            fd.known.append(dict(d, issue=HIDDEN_ISSUE))
+        elif d['block'] == 'age' and sc.ahead:
+            fd.notes.append(f"age, a channel a field ahead of the camera (no decoder can): {d['detail']}")
         else:
             keep.append(d)
     fd.items = keep
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled'):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled',
+             density=1.0):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry)
+    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry, density=density)
     use_geometry(geometry)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
@@ -705,11 +778,14 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
         check_invariants(sc, logs, fd)
         sort_known(sc, logs, fd)
         if checked < (2 if geometry == 'scaled' else 1) * V_ACTIVE:
-            fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
+            if any(k == fz.LL for _, k, _ in sc.ctl):     # switch windows leave few frames: noted
+                fd.notes.append(f'only {checked} output lines checked (mode switches)')
+            else:
+                fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
     if not keep and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
-               std=sc.std, ll0=sc.ll0, geometry=geometry,
+               std=sc.std, ll0=sc.ll0, geometry=geometry, density=density, n_fields=n_fields,
                result='fail' if fd.items else ('known' if fd.known else ('edge' if fd.edges else 'pass')),
                known=fd.known[:4],
                groups=fd.groups(), first=fd.first(), findings=fd.items[:12], edges=fd.edges[:4],

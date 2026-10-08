@@ -551,6 +551,39 @@ def test_returning_channel_check_is_tested():
               ext=lambda ev: (False, window(ev, on, off)), alter={'line_mixer.v': (JUDGE, "wire       c_alt   = 1'b0;")})
 
 
+MARK_ISSUE = 'LAP87/OpenVRX-Core#18: an output field that starts above the last line with the same F bit is not seen'
+
+
+def hidden_field_starts(m):
+    """Decisions at which the mixer starts an output field that the word stream does not show:
+    the field store sees a new field only when the F bit changes or the line number goes down."""
+    out, prev = [], None
+    for i, ((use, _, f, line), new) in enumerate(zip(m.trace, m.newfield)):
+        if not use:
+            continue
+        if new and prev is not None and f == prev[0] and line > prev[1]:
+            out.append(i)
+        prev = (f, line)
+    return out
+
+
+@pytest.mark.xfail(strict=True, reason=MARK_ISSUE)
+def test_new_output_field_is_seen_downstream():
+    """A non-interlaced source (F = 1 on both). A stops after line 3 of field 1; B, five and a
+    third lines late, takes over after N_DEAD of its lone lines, in field 2 at a line above 3,
+    and the mixer starts an output field there. RTL and model agree. Expected: the word stream
+    shows the new field (the F bit changes or the line number goes down), so that the field
+    store does not join it to A's lines 0..3. What happens: neither changes, and the store
+    takes both for one field (found by sim/test_fuzz_chain.py, round d3, seed 150: camera
+    fields 4 and 6 stored as one, the lines between from field 3)."""
+    a = bytes(Stream(1).field(0, f=1).field(1, f=1).data[:FIELD + (VBI + 4) * LINE + 4])
+    b = Stream(2).field(0, f=1).field(1, f=1).field(2, f=1).field(3, f=1).done()
+    kw = {'START_B': START_A + 5 * LINE_NS + LINE_NS / 3}
+    m = check('tb_mixer_hidden_field', a, b, kw, ev_kw={k.lower(): v for k, v in kw.items()})
+    assert any(m.newfield[1:]), 'the scenario has no second output field'
+    assert not hidden_field_starts(m), [m.trace[i] for i in hidden_field_starts(m)]
+
+
 def test_unlocked_decoder_in_step_loses():
     """Decoder B reports no lock the whole time (I2C status): every line comes from A."""
     a = Stream(1).field(0).field(1).done()

@@ -162,6 +162,7 @@ class Mixer:
         self.trace = []               # (use, pop, field, line)
         self.curs = []                # current channel after each decision
         self.omitted = []             # per decision: left out because it was bad on both receivers
+        self.newfield = []            # per decision: the line started an output field
         self.out = []                 # (field, line, idx, data)
         self.overflow = False
         self.bad_last = False         # the last line shown (or left out) in this output field was bad on both
@@ -266,10 +267,11 @@ class Mixer:
         self.bad_last = both_bad
         return self.omit_bad and both_bad and not prev
 
-    def _emit(self, use, pop, field, line, omitted=False):
+    def _emit(self, use, pop, field, line, omitted=False, new=False):
         if omitted:
             use = USE_NONE
         self.trace.append((use, pop, field, line))
+        self.newfield.append(new)
         self.curs.append(self.cur)
         self.omitted.append(omitted)
         qa, qb = self.q
@@ -302,7 +304,7 @@ class Mixer:
         omitted = self._omit(show, a.bad and b.bad)
         self.step_valid, self.since_pair = True, 0
         self.quiet = [0, 0]
-        self._emit(use, 0b11, field, own.rec.line_in_field, omitted)
+        self._emit(use, 0b11, field, own.rec.line_in_field, omitted, show and self.adm_new)
 
     def _solo(self, x):
         e, other = self.q[x][0], 1 - x
@@ -328,4 +330,4 @@ class Mixer:
         self.quiet[x] = 0
         self.since_pair = min(self.since_pair + 1, self.n_step)
         self._emit((USE_B if x else USE_A) if show else USE_NONE, 0b10 if x else 0b01,
-                   self.o_fbit if show else e.rec.field, e.rec.line_in_field, omitted)
+                   self.o_fbit if show else e.rec.field, e.rec.line_in_field, omitted, show and self.adm_new)
