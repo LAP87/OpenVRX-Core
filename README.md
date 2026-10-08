@@ -10,8 +10,9 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status:** the regression suite collects 434 tests (final overnight run pending), including simulations against
-Python models and build failure controls. Milestone tops build with timing met. **Nothing has run on
+**Status:** the full regression on `aece6eb` passed: 432 passed, 2 expected failures
+(open Core #17/#18), in 1:26:02. It includes simulations against Python models
+and build failure controls. Milestone tops build with timing met. **Nothing has run on
 hardware yet.** Most of this code was written with heavy AI assistance
 (Claude) and reviewed by the project owner; see the hub's
 [REVIEW.md](https://github.com/LAP87/OpenVRX/blob/main/REVIEW.md) for what to

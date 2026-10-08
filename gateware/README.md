@@ -21,7 +21,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 **Inget är provat på riktig hårdvara.** Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M2, M2s och M3 är ombyggda 2026-10-07 ur commit f13581c med `build.sh` (frysta indata, manifest i `build/<top>.build.json`); M4 och M6 är ombyggda 2026-10-08 ur byggindata som hash för hash matchar `7cc4eda`, inklusive senaste pair-join-fixen (teständringar gjorde arbetsträdet smutsigt; inga byggindata ändrades; seedtabellen under "Bygget av M6" gäller fortfarande a5b934f); M1, M1s och M2a 2026-10-06 ur 62a69be, och deras RTL är oförändrad sedan dess. Kravet är 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (434 test insamlade efter nattens testtillägg; ny slutkörning återstår). Fryst baslinje på `7cc4eda`: 395 passed, 1 xfailed på 1:25:56. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (**432 passed, 2 xfailed** för öppna #17/#18 på 1:26:02, fryst `aece6eb`, returstatus 0; samtliga 171 källhashar oförändrade). Fryst baslinje på `7cc4eda`: 395 passed, 1 xfailed på 1:25:56. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
