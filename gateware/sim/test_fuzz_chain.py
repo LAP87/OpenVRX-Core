@@ -718,6 +718,8 @@ def sort_known(sc, logs, fd):
             fd.known.append(dict(d, issue=LOW_LOCK_ISSUE))
         elif d['block'] == 'age' and any(h <= d['t'] < h + span for h in fd.hidden):
             fd.known.append(dict(d, issue=HIDDEN_ISSUE))
+        elif d['block'] == 'age' and sc.ahead:
+            fd.notes.append(f"age, a channel a field ahead of the camera (no decoder can): {d['detail']}")
         else:
             keep.append(d)
     fd.items = keep
