@@ -88,10 +88,11 @@ T_PAIR = lm.T_PAIR_CYCLES
 EXT_DELAY = 3                   # a control change at cycle C reaches mix_chan's bad flag at C + 3
 EDGE_NS = 1000.0                # arrival differences this close to 0 or T_PAIR are reported as the edge
 SUITE_SEEDS = (3, 5, 8, 13, 21, 34, 55, 89, 144, 233)
-# Known faults with an issue: findings of these groups in LOW frames while the output locks after
-# a switch to LOW (or after reset in LOW) are counted against the issue, not as new findings.
+# Known faults with an issue. Core #17 (video in LOW before the output had locked) is fixed: a LOW
+# frame has video only when a trigger of this LOW period started it, so no group is counted
+# against it any more (LOW_LOCK_GROUPS is empty; the machinery stays for the next such issue).
 LOW_LOCK_ISSUE = 'LAP87/OpenVRX-Core#17'
-LOW_LOCK_GROUPS = ('display/switch_video', 'display/ll_empty', 'display/ll_word', 'age/lost_field', 'output/xz')
+LOW_LOCK_GROUPS = ()
 LOW_LOCK_FRAMES = 4             # frames after the switch
 # Output fields the word stream does not mark (same F bit, first line above the last one sent):
 # the store joins them to the field before. Age findings within three field periods after such a

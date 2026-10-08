@@ -140,7 +140,7 @@ module tb_fb;
         pc <= pc + 1;
         if (!rst) begin
             if (dut.x == 0 && dut.y == V_TOTAL - 1) $fwrite(fp, "L %0d\n", pc);            // a line of the frame-start row begins
-            if (dut.x == 0 && dut.y == 0) $fwrite(fp, "V %0d %0d %0d\n", pc, dut.disp.lines, dut.disp.have_video);
+            if (dut.x == 1 && dut.y == 0) $fwrite(fp, "V %0d %0d %0d\n", pc, dut.disp.lines, dut.disp.have_video);   // x = 1: have_video is decided at x = 0
             if (dut.x == 4 && dut.y == 0) $fwrite(fp, "B %0d\n", dut.disp.low_r);
             if (dut.x == 300 && dut.y < V_ACTIVE) $fwrite(fp, "Y %0d %0d\n", dut.y, dut.disp.src_cur);
             // the word read for source pixel 104/105 (x = 300 is window pixel 140, source pixel 105)

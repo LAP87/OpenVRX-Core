@@ -14,9 +14,16 @@
 //   (for DVI) and the same pixels as YCbCr (for a BT.1120 transmitter).
 //
 // Low-latency mode (ll = 1, see fb_backend.v): the field's line count comes
-// from the ring writer (ll_lines), video is shown while fields keep coming
-// (ll_alive), and the line buffer is read as a 16-line ring (slot = source
-// line mod 16) instead of the 4 prefetch slots.
+// from the ring writer (ll_lines), and the line buffer is read as a 16-line
+// ring (slot = source line mod 16) instead of the 4 prefetch slots.
+//
+// A frame has video (have_video, decided at its first line) when: in buffer
+// mode, a field has been published since the last switch to low latency and
+// within the last 0.2 s; in low-latency mode, a trigger has come in this
+// low-latency period within the last 0.1 s (ll_alive), and the first such
+// frame was started by a trigger (ll_triggered, from genlock_timing.v): a
+// frame on the free-running timing would read ring slots the writer has not
+// reached. A mode switch blanks the rest of the running frame.
 //
 // CDC: publications arrive as a toggle + stable data, fetch requests leave
 // the same way (data is held stable for far longer than the synchronisers
@@ -46,6 +53,7 @@ module fb_display #(
     input  wire        ll,
     input  wire [9:0]  ll_lines,
     input  wire        ll_alive,
+    input  wire        ll_triggered,    // the running frame was started by a trigger (genlock_timing.v)
     input  wire        ll_low,
     // line buffer read port
     output reg  [12:0] lb_raddr,
@@ -84,15 +92,22 @@ module fb_display #(
     wire line_start = (x == 0);
     wire frame_start = line_start && (y == V_TOTAL - 1);   // during the last blanking line
     always @(posedge clk) if (rst) begin
-        lines <= 10'd240; have_video <= 1'b0;
+        lines <= 10'd240;
     end else if (frame_start) begin
-        if (ll) begin
-            lines      <= (ll_lines == 0) ? 10'd240 : ll_lines;
-            have_video <= ll_alive;
-        end else begin
-            lines      <= (latest_lines == 0) ? 10'd240 : latest_lines;
-            have_video <= have_pub;
-        end
+        lines <= ll ? ((ll_lines == 0) ? 10'd240 : ll_lines) : ((latest_lines == 0) ? 10'd240 : latest_lines);
+    end
+
+    // ---- video or blank: decided at the frame's first line, when the timing generator has
+    // settled whether the frame was started by a trigger (the pixels are 5 clocks behind x/y)
+    reg ll_d;
+    always @(posedge clk) begin
+        ll_d <= ll;
+        // low latency: the first frame with video must be one a trigger started (the ring then holds
+        // the field from its line 0); after that video stays while triggers keep coming, also
+        // through frames that waited a trigger out (early triggers the genlock ignores)
+        if (line_start && y == 0) have_video <= ll ? (ll_alive && (ll_triggered || have_video)) : have_pub;
+        if (ll != ll_d) have_video <= 1'b0;             // a mode switch: the rest of this frame is blank
+        if (rst) begin have_video <= 1'b0; ll_d <= 1'b0; end
     end
 
     // ---- output line -> source line, one line ahead ----

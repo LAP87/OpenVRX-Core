@@ -504,7 +504,8 @@ def test_low_latency_frames_are_equally_long():
     most one line. Negative control (LL_EQ = 0): they alternate between 47 and 50 lines."""
     src = source(14, period=P_LL, lines=9, vbi=4, interlaced=True)
     trig, frames, _ = ll_run('tb_fb_ll', src, **LL_V)
-    assert [low for _, low in trig[3:]] == [k % 2 == 1 for k in range(3, len(trig))], 'every other field is the lower one'
+    # trigger k is field k + 1: field 0, which the ring writer joined, fires none; the odd fields are the late, lower ones
+    assert [low for _, low in trig[3:]] == [(k + 1) % 2 == 1 for k in range(3, len(trig))], 'every other field is the lower one'
     locked = ll_picture(frames, 4, 13)
     assert [f['low'] for f in locked[:4]] == [1, 0, 1, 0]
     # after the start the output is a few lines behind and catches up with frames of 47 lines
@@ -521,7 +522,7 @@ def test_low_latency_field_without_its_reference_line():
     before and after it are shown intact."""
     src = source(14, period=P_LL, lines=9, vbi=4, interlaced=True, drop={(7, 1)})
     trig, frames, _ = ll_run('tb_fb_ll_noref', src, **LL_V)
-    assert [low for _, low in trig[3:]] == [k % 2 == 1 for k in range(3, len(trig))]
+    assert [low for _, low in trig[3:]] == [(k + 1) % 2 == 1 for k in range(3, len(trig))]   # trigger k is field k + 1
     before = ll_picture(frames, 5, 7)
     ll_picture(frames, 9, 13)
     k = frames.index(before[-1])
@@ -533,14 +534,17 @@ def test_low_latency_false_field_start_does_not_cut_the_frame():
     """The line numbers restart in the middle of field 7 (as when the mixer changes to a
     receiver that is out of step): a frame trigger in the middle of the output frame. It is
     ignored; no frame is shorter than 47 lines and the fields after it are shown intact.
-    Negative control (JUMP_AFTER = 1, as it used to be): the frame is cut short."""
+    Negative control (JUMP_AFTER = 1 and HOLD = 0, as it used to be): the frame is cut short.
+    HOLD = 0 because the first trigger of the run, from field 1 (the joined field 0 fires none),
+    lands early in a free-running frame and would with JUMP_AFTER = 1 cut it and hold the next
+    32 frames; that cut frame has no video and is not in the lengths."""
     src = [(t, f, n if (tag != 8 or n < 5) else n - 5, tag)
            for t, f, n, tag in source(14, period=P_LL, lines=9, vbi=4, interlaced=True)]
     trig, frames, lens = ll_run('tb_fb_ll_false', src, **LL_V)
     ll_picture(frames, 5, 7)
     ll_picture(frames, 9, 13)
     assert min(lens) >= 47, lens
-    trig1, frames1, lens1 = ll_run('tb_fb_ll_false1', src, JUMP_AFTER=1, **LL_V)
+    trig1, frames1, lens1 = ll_run('tb_fb_ll_false1', src, JUMP_AFTER=1, HOLD=0, **LL_V)
     assert min(lens1) < 40, lens1
 
 
@@ -660,16 +664,19 @@ def test_mode_switch_buf_low_buf():
     assert not old, 'stale frame after LOW -> BUF: ' + str([f['pc'] for f in old])
 
 
-LOW_ISSUE = 'LAP87/OpenVRX-Core#17: frames with video before the output has locked after BUF -> LOW'
-
-
-@pytest.mark.xfail(strict=True, reason=LOW_ISSUE)
 def test_low_after_switch_shows_whole_fields():
     """BUF -> LOW 0.1 field periods into field 5 (in its blanking interval). README: the first
-    frame after the switch has no video, and every later frame shows one whole field. Found by
-    sim/test_fuzz_chain.py (14 of 18 seeds with a switch to LOW): the display shows video once
-    any trigger has come, before the genlock has locked, and a frame on the free-running timing
-    reads ring slots never written in this LOW period (X here) next to lines of the new field."""
+    frame after the switch has no video, and every later frame with video shows one whole field.
+    Was Core #17, found by sim/test_fuzz_chain.py (14 of 18 seeds with a switch to LOW): the
+    display showed video once any trigger had come, before the genlock had locked, and a frame
+    on the free-running timing read ring slots never written in this LOW period (X here) next
+    to lines of the new field. Now a LOW frame has video only when it was started by a trigger
+    of this LOW period, the joined field fires no trigger, and a mode switch blanks the rest of
+    the running frame. Negative control: the RTL before the change (Core 82c4134) fails this
+    test (it was marked xfail), and so does each of the three parts taken out alone, run by
+    hand: without `triggered` the first frame has video; without the joined-field rule a frame
+    shows two fields; without the ll_since reset the first frame has video within 0.1 s of an
+    earlier LOW period."""
     sw = round(T0 + 5.1 * FIELD_CYC)
     sd, pix = run_sim('tb_fb_low_switch', MS_SRC, SW1=sw, **LL_V)
     sw_pc = next(v[0] for ev, *v in pix if ev == 'M')

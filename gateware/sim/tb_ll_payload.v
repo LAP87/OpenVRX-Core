@@ -1,5 +1,6 @@
 // fb_backend in low-latency mode, fed tagged words directly (no SDRAM traffic):
-// a field of lines 0-2, a field of lines 0-1, then the first word of a third
+// a field of lines 0-2 that the writer joins (no trigger, its count is not
+// kept), a field of lines 0-2, a field of lines 0-1, then the first word of a third
 // field, which starts the instant the second field's trigger has been sent
 // (GUARD = 0) or 20 SDRAM clocks later (GUARD = 1). Prints every trigger as it
 // leaves the SDRAM domain (SEND, with the line count it carries) and as the
@@ -41,6 +42,7 @@ module tb_ll_payload;
     initial begin
         #100 rst = 0;
         repeat (10) @(posedge sd_clk);
+        line(1, 0); line(1, 1); line(1, 2);      // the field the writer joins: it fires no trigger
         line(0, 0); line(0, 1); line(0, 2);
         line(1, 0); line(1, 1);
         if (GUARD != 0) begin

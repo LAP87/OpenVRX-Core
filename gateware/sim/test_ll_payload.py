@@ -2,7 +2,8 @@
 reach the pixel domain with the line count of the field before the one that triggered, also
 when the next field starts right after the trigger.
 
-Scenario (sim/tb_ll_payload.v): a field of 3 lines, a field of 2 lines, then a third field
+Scenario (sim/tb_ll_payload.v): a field of 3 lines the ring writer joins (it fires no trigger
+and its count is not kept), a field of 3 lines, a field of 2 lines, then a further field
 starting at once (or 20 SDRAM clocks later). The second trigger carries 3. The review on
 2026-10-06 (hub docs/reviews/2026-10-06, "LOW-payload över klockdomäner") found 2 arriving
 in the first case.

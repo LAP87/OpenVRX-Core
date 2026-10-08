@@ -37,7 +37,9 @@ module genlock_timing #(
     output reg         de,
     output reg         hsync,
     output reg         vsync,
-    output reg         frame_start // one pulse at the first active pixel
+    output reg         frame_start,// one pulse at the first active pixel
+    output reg         triggered   // the running frame was started by a trigger (0: free-running, or
+                                   // the wait for a trigger ran out)
 );
     localparam V_TOTAL = V_ACTIVE + V_FP + V_SYNC + V_BP;
     localparam V_SYNC_END = V_ACTIVE + V_FP + V_SYNC;          // first back-porch line
@@ -63,18 +65,20 @@ module genlock_timing #(
         end
         if (rst) begin
             hc <= 0; vc <= 0; alt <= 1'b0; pend <= 1'b0; jump <= 1'b0; wait_n <= 0; early_n <= 0; hold <= 0;
+            triggered <= 1'b0;
         end else if (line_end) begin
             hc <= 0;
             if (!lock) begin
                 vc <= (vc == V_TOTAL - 1) ? 12'd0 : vc + 12'd1;
                 pend <= 1'b0; jump <= 1'b0; wait_n <= 0; early_n <= 0;
+                if (vc == V_TOTAL - 1) triggered <= 1'b0;
             end else if (jump) begin
                 vc <= V_TOTAL - 1; jump <= 1'b0; wait_n <= 0;
             end else if (vc == V_SYNC_END - 1) begin
                 vc <= vc + 12'd2;                                // skip one back-porch line
             end else if (vc == V_TOTAL - 1) begin
                 if (frame_end) begin
-                    vc <= 0; pend <= 1'b0; wait_n <= 0;
+                    vc <= 0; pend <= 1'b0; wait_n <= 0; triggered <= pend || trig;
                     if (hold != 0) hold <= hold - 1'b1;
                 end else
                     wait_n <= wait_n + 1'b1;                     // repeat the last line

@@ -123,12 +123,17 @@ module fb_backend #(
     wire [9:0] e_line  = f_data[50:41];
     wire [8:0] e_idx   = f_data[40:32];
     reg        ll_have, ll_field, ll_trig_done, s_ll_low, ll_wait, ll_n1_v;
+    reg        ll_joined;                 // the ring holds the field the writer joined after the switch
     reg  [9:0] ll_last, ll_max, s_ll_lines, ll_n1;
     reg [11:0] ll_dly;
     wire       ll_new_field = ll_have && (e_field != ll_field || e_line < ll_last);
     wire       ll_done = ll_new_field ? 1'b0 : ll_trig_done;
     wire       ll_end  = ll_take && e_idx == 9'd359;                  // a line is complete
-    wire       ll_fire = ll_end && e_line != 0 && !ll_done;           // ... and it starts the output frame
+    // The field the writer joined (its first word was not the field's first line) starts no frame:
+    // the ring holds only part of it, and its line count is not a field's. The first frame comes
+    // from the next field, as in fb_sdram.v.
+    wire       ll_joined_w = !ll_have || (ll_joined && !ll_new_field);
+    wire       ll_fire = ll_end && e_line != 0 && !ll_done && !ll_joined_w;   // ... and it starts the output frame
     wire       ll_ref  = ll_end && e_line == 10'd1;
     wire [9:0] ll_n    = ll_max + 10'd1;                              // lines of the field just finished
     wire [9:0] ll_gap  = (ll_n > ll_n1) ? ll_n - ll_n1 : ll_n1 - ll_n;
@@ -144,8 +149,8 @@ module fb_backend #(
         if (ll_take) begin
             ll_last <= e_line;
             if (!ll_have || ll_new_field) begin
-                ll_have <= 1'b1; ll_field <= e_field; ll_max <= e_line;
-                if (ll_new_field) begin                               // line count as in fb_sdram.v
+                ll_have <= 1'b1; ll_field <= e_field; ll_max <= e_line; ll_joined <= !ll_have;
+                if (ll_new_field && !ll_joined) begin                 // line count as in fb_sdram.v
                     if (!ll_n1_v) s_ll_lines <= ll_n;
                     else if (ll_gap <= 10'd2) s_ll_lines <= (ll_n < ll_n1) ? ll_n : ll_n1;
                     ll_n1 <= ll_n; ll_n1_v <= 1'b1;
@@ -165,7 +170,7 @@ module fb_backend #(
             if (ll_delay) begin ll_wait <= 1'b1; ll_dly <= ph_dly; end
             else ll_wait <= 1'b0;
         end
-        if (srst || !ll_s) begin ll_have <= 1'b0; ll_trig_done <= 1'b0; ll_wait <= 1'b0; ll_n1_v <= 1'b0; end
+        if (srst || !ll_s) begin ll_have <= 1'b0; ll_joined <= 1'b0; ll_trig_done <= 1'b0; ll_wait <= 1'b0; ll_n1_v <= 1'b0; end
         if (srst) begin s_ll_lines <= 10'd0; s_ll_low <= 1'b0; end
     end
     // The trigger carries the previous field's line count. That count changes when the next field
@@ -195,26 +200,26 @@ module fb_backend #(
         ll_trig <= ll_p && ll_ev;
         if (ll_ev) ll_since <= 0;
         else if (!ll_since[22]) ll_since <= ll_since + 1'b1;
-        if (prst) begin ll_trig <= 1'b0; ll_since <= 23'h400000; end
+        if (prst || !ll_p) begin ll_trig <= 1'b0; ll_since <= 23'h400000; end   // only this LOW period's triggers count
     end
     wire ll_alive = !ll_since[22];
     wire ll_pal   = ll_lines > 10'd270;
 
     // ---- pixel domain ----
     wire [11:0] x, y;
-    wire t_de, t_hs, t_vs, t_fs;
+    wire t_de, t_hs, t_vs, t_fs, t_tr;
     genlock_timing #(.H_ACTIVE(H_ACTIVE), .H_FP(H_FP), .H_SYNC(H_SYNC), .H_BP(H_BP), .H_FP_ALT(H_FP_ALT),
                      .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .V_BP(V_TOTAL - V_ACTIVE - V_FP - V_SYNC),
                      .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD))
         timing (.clk(pix_clk), .rst(prst), .lock(ll_p), .trig(ll_trig), .h_alt(ll_p && ll_pal),
-                .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs), .frame_start(t_fs));
+                .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs), .frame_start(t_fs), .triggered(t_tr));
     assign tx = x;
     assign ty = y;
     fb_display #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .H_WIN0(H_WIN0), .H_WIN(H_WIN), .H_HALF(H_HALF), .BOB(BOB)) disp (
         .clk(pix_clk), .rst(prst), .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs),
         .pub_toggle(s_pub_toggle), .pub_lines(pub_lines), .frame_low(frame_low),
         .fetch_toggle(p_fetch_toggle), .fetch_line(p_fetch_line), .fetch_slot(p_fetch_slot), .fetch_first(p_fetch_first),
-        .ll(ll_p), .ll_lines(ll_lines), .ll_alive(ll_alive), .ll_low(s_ll_low),
+        .ll(ll_p), .ll_lines(ll_lines), .ll_alive(ll_alive), .ll_triggered(t_tr), .ll_low(s_ll_low),
         .lb_raddr(lb_raddr), .lb_rdata(lb_rdata),
         .r(r), .g(g), .b(b), .yo(yo), .cbo(cbo), .cro(cro), .de_o(de), .hs_o(hsync), .vs_o(vsync), .have_video(have_video));
 endmodule
