@@ -32,6 +32,7 @@ import fb_ref as fb  # noqa: E402
 
 T_S, T_P, H_TOTAL = 15.4, 13.4, 1650
 V_TOTAL, V_ACTIVE = 40, 36
+V_FP, V_SYNC = 1, 1
 OUT_LINE = H_TOTAL * T_P / T_S              # SDRAM clock cycles per output line (1436)
 FRAME = V_TOTAL * OUT_LINE                  # 57 429 cycles
 LINES, VBI = 12, 2
@@ -65,7 +66,7 @@ def run_sim(name, src, alter=None, **params):
         shutil.rmtree(work)
     work.mkdir(parents=True)
     (work / 'lines.hex').write_text(''.join(f'{t << 23 | f << 22 | line << 12 | tag:014x}\n' for t, f, line, tag in src))
-    p = dict(N_LINES=len(src), V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, **RT)
+    p = dict(N_LINES=len(src), V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC, **RT)
     p.update(params)
     rtl = [GW / 'rtl' / n for n in ('async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
                                     'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')]
@@ -470,6 +471,7 @@ def ll_run(name, src, **params):
         elif ev == 'T':
             trig.append((v[0], bool(v[1])))
     assert trig == exp[:len(trig)] and len(trig) >= 10, f'triggers {trig[:6]}, model {exp[:6]}'
+    check_frame_vsync(pix, name)
     starts = [v[0] for ev, *v in pix if ev == 'V' and v[2]]
     return trig, pix_frames(pix), [round((b - a) / H_TOTAL) for a, b in zip(starts, starts[1:])][:-2]
 
@@ -489,6 +491,16 @@ def ll_picture(frames, first_tag, last_tag):
 
 def lengths(frames):
     return [round((b['pc'] - a['pc']) / H_TOTAL) for a, b in zip(frames, frames[1:])]
+
+
+def check_frame_vsync(pix, label):
+    """Each complete output frame has exactly one vsync pulse, including clipped frames."""
+    starts = [int(v[0]) for ev, *v in pix if ev == 'V']
+    vs = [int(v[0]) for ev, *v in pix if ev == 'S']
+    counts = [sum(a <= s < b for s in vs) for a, b in zip(starts, starts[1:])]
+    bad = [(i, n) for i, n in enumerate(counts) if n != 1]
+    assert starts and len(counts) >= 3, f'{label}: too few complete frames for vsync check'
+    assert not bad, f'{label}: every complete frame needs one vsync pulse: {bad[:8]}'
 
 
 # Low-latency runs use a frame of 48 lines with 10 lines of back porch: the timing generator
@@ -551,7 +563,9 @@ def test_low_latency_false_field_start_does_not_cut_the_frame():
 def test_low_latency_source_moves():
     """From field 7 on every field comes 0.4 field periods later (another camera, a receiver
     that locked elsewhere). The first early triggers are ignored; after the third the output
-    realigns with one short frame, and the fields after that are shown intact. The frames that
+    realigns with a clipped frame and its directly following short recovery frame. The recovery
+    includes all active and sync rows plus the first back-porch row (at least 39 lines), and the fields
+    after that are shown intact. The frames that
     waited the ignored triggers out have no video (fb_display.v: only a trigger-started frame has
     video), so the lengths between frames with video show one gap of at most four frames."""
     field = 13.5 * P_LL
@@ -561,12 +575,50 @@ def test_low_latency_source_moves():
     ll_picture(frames, 5, 7)
     ll_picture(frames, 12, 15)
     gaps = [n for n in lens if n > 47 + 8]
-    assert sum(1 for n in lens if n < 47) <= 1 and len(gaps) <= 1 and all(n <= 4 * (47 + 8) for n in gaps), lens
+    short = [i for i, n in enumerate(lens) if n < 47]
+    assert len(short) <= 2 and (len(short) < 2 or short[1] == short[0] + 1), lens
+    if len(short) == 2:
+        assert lens[short[1]] >= V_ACTIVE + V_FP + V_SYNC + 1, lens
+    assert len(gaps) <= 1 and all(n <= 4 * (47 + 8) for n in gaps), lens
 
 
 # ---- switching between the modes while video runs
-MAX_WAIT = 8                                # genlock_timing.v default: a frame waits at most this many extra lines
+MAX_WAIT, HOLD = 8, 32                       # genlock_timing.v defaults: wait and cut hold limits
 VT = LL_V['V_TOTAL']                        # the switching runs use the low-latency frame of 48 lines
+RECOVERY_MIN_LINES = V_ACTIVE + V_FP + V_SYNC + 1
+
+
+def short_frame_issues(measures):
+    """Check cut/recovery groups in (frame index, line count, settling) measures."""
+    short = [i for i, n, _ in measures if n < VT - 1]
+    groups = []
+    for i in short:
+        if not groups or i != groups[-1][-1] + 1:
+            groups.append([i])
+        else:
+            groups[-1].append(i)
+
+    issues = []
+    for group in groups:
+        if len(group) > 2 or any(not measures[i][2] for i in group):
+            issues.append(('short-frame group', group))
+        if len(group) == 2 and measures[group[1]][1] < RECOVERY_MIN_LINES:
+            issues.append(('recovery frame too short', group, measures[group[1]][1], RECOVERY_MIN_LINES))
+    for left, right in zip(groups, groups[1:]):
+        if right[0] - left[0] < HOLD:
+            issues.append(('HOLD between cut groups', left[0], right[0]))
+    return issues
+
+
+def test_switch_recovery_minimum_preserves_active_sync_and_one_porch_line():
+    """The direct recovery frame must finish active video, sync and one porch line."""
+    valid = [(0, VT, True), (1, 10, True), (2, RECOVERY_MIN_LINES, True), (3, VT, True)]
+    assert not short_frame_issues(valid)
+    short_recovery = [(0, VT, True), (1, 10, True), (2, RECOVERY_MIN_LINES - 1, True), (3, VT, True)]
+    issues = short_frame_issues(short_recovery)
+    assert issues and issues[0][0] == 'recovery frame too short', issues
+
+
 MS_FIELDS = 19
 FIELD_CYC = 13.5 * P_LL
 MS_SW1 = round(T0 + 5.55 * FIELD_CYC)       # BUF -> LOW in field 5 (tag 6): the writer joins it after its line 2
@@ -596,28 +648,24 @@ def check_switch(run):
     """The checks of the mode switch. Returns {check: [what is wrong]}, all empty if the switch is clean."""
     sw1, sw2 = run['sw']
     frames, starts, vs = run['frames'], run['starts'], run['vs']
-    bad = dict(xz=[], length=[], picture=[], settle=[])
+    bad = dict(xz=[], length=[], vsync=[], picture=[], settle=[])
     # 1. No X/Z on r, g, b, de, hsync, vsync, except at the very start and from a switch to
     #    the end of the first output frame after it (the line ring holds nothing yet).
     allowed = [(0, starts[2])] + [(sw, [s for s in starts if s > sw][1]) for sw in (sw1, sw2)]
     bad['xz'] = [round(pc / H_TOTAL, 1) for pc in run['bad'] if not any(a <= pc < b for a, b in allowed)]
-    # 2. Frame length from vsync to vsync: VT - 1 .. VT + MAX_WAIT (genlock_timing.v, formal/genlock_props.v);
-    #    VT - 1 .. VT + 1 (750/751-line frames) from the third frame after a switch on.
-    # measured from frame starts: a cut frame (JUMP_AFTER early triggers) jumps to its last line and
-    # has no vsync pulse of its own, so vsync to vsync would show one long frame there
-    cuts = 0
-    for a, b in zip(starts, starts[1:]):
+    # 2. Every complete frame has one full vsync pulse. Frame lengths are VT - 1 .. VT + MAX_WAIT
+    # while settling, then VT - 1 .. VT + 1. A cut and its immediately following recovery frame
+    # are the only short exceptions; both retain their own complete sync pulse.
+    nv = [sum(a <= v < b for v in vs) for a, b in zip(starts, starts[1:])]
+    bad['vsync'] = [(round(starts[i] / H_TOTAL), n) for i, n in enumerate(nv) if n != 1]
+    measures = []
+    for i, (a, b) in enumerate(zip(starts, starts[1:])):
         n = round((b - a) / H_TOTAL)
         settling = any(sw < b <= sw + 3 * (VT + MAX_WAIT) * H_TOTAL for sw in (sw1, sw2))
-        if settling and n < VT - 1 and cuts == 0:                # one cut while the genlock locks after a switch
-            cuts += 1
-            continue
-        if not (VT - 1 <= n <= (VT + MAX_WAIT if settling else VT + 1)):
-            bad['length'].append((round(b / H_TOTAL), n))
-    # one vsync pulse per frame, except the cut frame (it jumps to its last line and has none)
-    nv = [sum(1 for v in vs if a <= v < b) for a, b in zip(starts, starts[1:])]
-    if nv.count(0) > 1 or any(n > 1 for n in nv):
-        bad['length'].append(('vsync pulses per frame', [(round(starts[i] / H_TOTAL), n) for i, n in enumerate(nv) if n != 1]))
+        measures.append((i, n, settling))
+        if n > (VT + MAX_WAIT if settling else VT + 1):
+            bad['length'].append((round(b / H_TOTAL), n, 'long'))
+    bad['length'].extend(short_frame_issues(measures))
     # 3. The picture. Every output line is the source line the model gives, a whole line (word 52).
     lines_ok = lambda f: all(f['shown'][y][1:] == (fb.src_line(y, f['lines'], V_ACTIVE, f['low']), 52) for y in range(V_ACTIVE))
     tags = lambda f: sorted({f['shown'][y][0] for y in range(V_ACTIVE)})
@@ -659,8 +707,10 @@ def test_mode_switch_buf_low_buf():
     """ll_mode goes to 1 in the middle of a field and back to 0 late in a field while the source
     runs (interlaced, 59.94 Hz-like; 5 fields BUF, 6 LOW, 7 BUF). Checked at the output:
       * no X/Z on r, g, b, de, hsync, vsync after the first frame following each switch;
-      * every frame, vsync to vsync, has VT - 1 .. VT + 8 lines (genlock_timing.v), and
-        VT - 1 .. VT + 1 from the third frame after a switch; no SDRAM protocol error (run_sim);
+      * every frame has exactly one vsync pulse. Frame-start intervals are VT - 1 .. VT + 8
+        while settling, then VT - 1 .. VT + 1; only the cut and its immediate recovery may
+        be shorter, with the recovery retaining active video, sync and one porch line;
+        no SDRAM protocol error (run_sim);
       * BUF -> LOW: the first frame after the switch has no video (have_video = 0: the writer
         joined the field in the middle, so the frame trigger has not come yet); every later
         frame is one whole field, one field after the other, the newest;
@@ -699,6 +749,7 @@ def test_low_after_switch_shows_whole_fields():
     earlier LOW period."""
     sw = round(T0 + 5.1 * FIELD_CYC)
     sd, pix = run_sim('tb_fb_low_switch', MS_SRC, SW1=sw, **LL_V)
+    check_frame_vsync(pix, 'BUF-to-LOW switch')
     sw_pc = next(v[0] for ev, *v in pix if ev == 'M')
     starts = [v[0] for ev, *v in pix if ev == 'V']
     first = next(s for s in starts if s > sw_pc)
@@ -751,5 +802,5 @@ def test_mode_switch_checks_catch_faults():
     run = switch_run('tb_fb_ms_fault', FAULT=7, FAULT_TAG=9, FAULT_PC=pc_low, FAULT_PC2=pc_buf)
     bad = check_switch(run)
     assert bad['xz'], 'an X on r was not seen'
-    assert bad['length'], 'an extra vsync pulse was not seen'
+    assert bad['vsync'], 'an extra vsync pulse was not seen'
     assert [b for b in bad['picture'] if b[0] == 'LOW'], f"a wrong tag was not seen: {bad['picture']}"

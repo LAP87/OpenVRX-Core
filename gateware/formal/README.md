@@ -1,8 +1,12 @@
 # Formella bevis
 
-`run.sh` bevisar med k-induktion i yosys, utan extern lösare, och körs av `tools/test_formal.py` (cirka en minut). Varje bevis har negativa kontroller: en avsiktligt felaktig variant som måste ge ett motexempel från reset. `PROVEN` och `CONTROL OK` räknas i testet.
+`run.sh` bevisar med k-induktion i yosys, utan extern lösare, och körs av `tools/test_formal.py`. Varje bevis har negativa kontroller: en avsiktligt felaktig variant som måste ge ett motexempel från reset. Testet kräver sju `PROVEN` och fjorton `CONTROL OK`; genlockdelen tar flera minuter.
 
 Här beskrivs klockdomänsövergångarna i `rtl/fb_backend.v`. FIFO:n och genlocken står i `gateware/README.md`.
+
+Genlockens bänk `genlock_props.v` räknar också vsync-flanker på den registrerade utgången mellan bildstarter: varje färdig bild har exakt en puls. Egenskaperna i RTL räknar synkrader oberoende av klippflaggan och kräver exakt `V_SYNC` stycken, även för ett klipp. Fria `lock`, `trig`, `h_alt` och `rst` provas på en liten geometri med två synkrader. En normal bild har minst `V_TOTAL−1` rader; bara klippet och dess direkt följande upphämtningsbild får vara kortare. Upphämtningsbilden måste hinna med hela det aktiva området, synken och en släckrad. Spärren `HOLD` räknas mellan klippen. Att hoppa direkt till sista raden, eller behålla upphämtningsflaggan en bild för länge, måste ge motexempel.
+
+Fasgränsen efter en flyttad periodisk källa prövas i `sim/test_genlock.py` på liten och 750-raders geometri: senast andra triggern efter tre tidiga ligger bildstarten högst en utrad efter triggern. Kontrollen utan upphämtning måste bryta samma gräns. Detta tidskrav gäller en periodisk källa med nominell bildperiod; det är inte ett formellt påstående om godtyckliga brusimpulser. Upphämtningsbilden behåller hela sista släckraden, där `fb_display.v` återställer skalning och radindex inför nästa bild.
 
 ## Modellen
 
