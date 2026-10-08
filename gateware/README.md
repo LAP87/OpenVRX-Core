@@ -4,7 +4,7 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-05
+## Status 2026-10-08
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
@@ -15,13 +15,13 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 876 LUT 18 %, 17 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
 | **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 396 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 83 MHz mot 64,8) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 542 LUT 12 %, 0 BSRAM; 27 MHz-domän 177 MHz, dekoderklockorna 122 och 142 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 455 LUT 40 %, 25 BSRAM; SDRAM 102 MHz, pixel 109 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (26 test, `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 236 LUT 39 %, 25 BSRAM; SDRAM 101,15 MHz, pixel 123,69 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (29 insamlade test, inklusive känt #18; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
-| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 655 LUT 61 %, 25 BSRAM; SDRAM 96 MHz, pixel 122 MHz, 27 MHz-domän 123 MHz mot 54; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
+| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 542 LUT 60 %, 25 BSRAM; SDRAM 100,17 MHz, pixel 120,61 MHz, 27 MHz-domän 117,86 MHz mot 54,05; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara** — kortet är inte köpt ännu. Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M2, M2s och M3 är ombyggda 2026-10-07 ur commit f13581c med `build.sh` (frysta indata, manifest i `build/<top>.build.json`); M6 2026-10-07 ur 330cc9a (låsflaggan i loggen; seedtabellen under "Bygget av M6" gäller a5b934f), M4 ur 2a23e05 (mixern lämnar ute rader som är dåliga i båda kanalerna); M1, M1s och M2a 2026-10-06 ur 62a69be, och deras RTL är oförändrad sedan dess. Kravet är 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
+**Inget är provat på riktig hårdvara.** Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M2, M2s och M3 är ombyggda 2026-10-07 ur commit f13581c med `build.sh` (frysta indata, manifest i `build/<top>.build.json`); M4 och M6 är ombyggda 2026-10-08 ur byggindata som hash för hash matchar `7cc4eda`, inklusive senaste pair-join-fixen (teständringar gjorde arbetsträdet smutsigt; inga byggindata ändrades; seedtabellen under "Bygget av M6" gäller fortfarande a5b934f); M1, M1s och M2a 2026-10-06 ur 62a69be, och deras RTL är oförändrad sedan dess. Kravet är 75 MHz på alla klockor utom M6:s 27 MHz-domän (54 MHz, `boards/m6_puck_proto.sdc`); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (396 test). Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (431 test insamlade efter nattens testtillägg; ny slutkörning återstår). Fryst baslinje på `7cc4eda`: 395 passed, 1 xfailed på 1:25:56. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -385,3 +385,19 @@ Alla fyra routar, utan `ERROR` i loggen, med 12 600 LUT och 25 BSRAM. Kravet är
 
 - **Seed.** Före ändringen kunde nextpnr inte lägga kortets klocka på det globala klocknätet med seed 0 och 1 ("Can't route the clocks.clk_27 net"). Med det här nätet routar alla fyra. Varför de två misslyckades förut är inte utrett; att det försvann med en mindre kombinatorisk väg i samma domän är en iakttagelse, inte en förklaring. `boards/m6_puck_proto.seed` håller fortfarande seed 2, och `build.sh` tar `SEED=<n>` och säger till när klockroutningen misslyckas.
 - **Kravet på 54 MHz** i `boards/m6_puck_proto.sdc` (dubbla klockans frekvens) står kvar. Domänen klarar nu 75 MHz med alla fyra seeds, så den särskilda raden kan tas bort; det är inte gjort i det här passet.
+
+## Verifiering 2026-10-08
+
+Nattens körjournal, byggmanifest och baslinje finns i navets
+`docs/overnight/2026-10-07/`. R02 ändrar fuzzkampanjens återupptagning:
+varje runda sparar inställningar och käll-/simulatorhashar. Ändrade indata
+kräver nytt rundnamn; äldre JSONL får sammanfattas men inte återupptas.
+`narrow` använder samma geometri/densitet/fältantal som körningen och
+kan få nytt namn med `--round`. Håll gemensamt flock även vid användning
+av kampanjens eget rundlås.
+
+Mixerns återkomsttest täcker nu både A och B, med den gamla domarregeln
+som negativ kontroll. En separat diagnostik för Core #18 kontrollerar
+modellens fältstarter mot F/radnummer i den utström som matchat RTL.
+Bara `UnmarkedOutputField` får xfail; modell- och bänkfel är oväntade.
+Regeln för mixerns F-bit är oförändrad, och #17/#18 kräver ägarbeslut.

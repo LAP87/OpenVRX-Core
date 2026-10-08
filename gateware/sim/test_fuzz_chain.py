@@ -67,7 +67,6 @@ import fuzz_stream as fz  # noqa: E402
 import line_mixer_ref as lm  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
-H_ALT = 330                     # 720p50 lines are this much longer (fb_backend.v H_FP_ALT 440 against 110)
 MAX_WAIT, HOLD = 8, 32
 GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
     'scaled': dict(V_TOTAL=87, V_ACTIVE=72, V_FP=1, V_SYNC=1, RT=dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)),
@@ -635,10 +634,13 @@ def check_invariants(sc, logs, fd):
                 fd.add('display', 'switch_video', after[0] * T_P,
                        f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
     # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
-    alt = {int(ev[1]): num(ev[5]) for ev in pix if ev[0] == 'V' and len(ev) > 5}
+    # A PAL trigger can change the line length during the last waiting lines.
+    # Count actual line starts (ported from 154f41b), rather than dividing
+    # the whole frame's clocks by the length sampled at its start.
+    nlines = {int(ev[1]): num(ev[6]) for ev in pix if ev[0] == 'V' and len(ev) > 6}
     cuts = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
-        n = round((b - a) / (H_TOTAL + H_ALT * (alt.get(a) or 0)))
+        n = nlines[b] if nlines.get(b) is not None else round((b - a) / H_TOTAL)
         if n < V_TOTAL - 1:
             cuts.append(i)
         elif n > V_TOTAL + MAX_WAIT:
@@ -682,10 +684,11 @@ def sort_known(sc, logs, fd):
 
 
 # ---------------------------------------------------------------- one seed
-def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled'):
+def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled',
+             density=1.0):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
-    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry)
+    sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry, density=density)
     use_geometry(geometry)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
@@ -709,7 +712,7 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
     if not keep and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
-               std=sc.std, ll0=sc.ll0, geometry=geometry,
+               std=sc.std, ll0=sc.ll0, geometry=geometry, density=density, n_fields=n_fields,
                result='fail' if fd.items else ('known' if fd.known else ('edge' if fd.edges else 'pass')),
                known=fd.known[:4],
                groups=fd.groups(), first=fd.first(), findings=fd.items[:12], edges=fd.edges[:4],
@@ -777,3 +780,32 @@ def test_chain_checks_catch_faults(block):
     res = run_seed(seed, classes, work=HERE / 'build' / 'fuzz' / f'neg_{block}', alter=alter, n_fields=6)
     seen = res['groups'] + [f"{k['block']}/{k['kind']}" for k in res['known']]     # also what #17 explains
     assert any(g.startswith(group) for g in seen), (block, seen, res['first'])
+
+
+def test_read_without_frame_decision_keeps_checksum_control():
+    """A corrupt read before a frame decision must remain a finding.
+    Seed 126 showed that lack of a store decision does not imply blank RGB."""
+    bad = checksum([BLACK] * 360) ^ 1
+    logs = dict(sd=[['F', '0'], ['S', 'blank', '0'], ['R', '1', '0', f'{bad:08x}']])
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert fd.groups() == ['store/read'], fd.items
+
+
+@pytest.mark.parametrize('line_count, expected', [
+    (758, []), (759, ['output/long_frame']), (748, ['output/short_frames']),
+])
+def test_frame_length_uses_counted_lines_when_width_changes(line_count, expected):
+    """A mixed-width frame at the wait limit is valid; long/close short frames still fail."""
+    use_geometry('full')
+    # 750 ordinary lines and eight PAL-width waiting lines: division by
+    # 1650 yields 760, while the bench counts 758 real lines.
+    span = 750 * H_TOTAL + 8 * 1980
+    pix = [['V', str(k * span), '288', '1', '1', '0', str(line_count)] for k in range(4)]
+    sc = type('Scenario', (), {'end_ns': 4 * span * T_P})()
+    fd = Findings()
+    try:
+        check_invariants(sc, dict(pix=pix, sd=[['end', '0']], mix=[['end']], stdout=''), fd)
+        assert fd.groups() == expected, fd.items
+    finally:
+        use_geometry('scaled')

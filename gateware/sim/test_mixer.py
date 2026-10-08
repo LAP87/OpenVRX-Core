@@ -516,7 +516,7 @@ def test_channel_returns_with_wrong_line_numbers():
 JUDGE = "wire       c_alt   = pair && !(c ? join_b : join_a) && (c ? join_a : join_b);"
 
 
-def return_streams():
+def return_streams(returning='a'):
     """A is silent for the whole of field 1 after two blanking lines; B carries field 1 and
     reports no lock from field 2's blanking to field 3's. A is the cleaner receiver."""
     s = Stream(1).field(0, amp=0)
@@ -525,30 +525,69 @@ def return_streams():
     s.gap(VBI - 2 + LINES)
     a = s.field(2, amp=0).field(3, amp=0).done()
     b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).field(3, amp=25).done()
-    on = RST_NS + START_B + (2 * (VBI + LINES) + VBI // 2) * LINE * T_B
-    return a, b, on, on + (VBI + LINES) * LINE * T_B
+    start, period = START_B, T_B
+    if returning == 'b':
+        a, b = b, a
+        start, period = START_A, T_A
+    on = RST_NS + start + (2 * (VBI + LINES) + VBI // 2) * LINE * period
+    return a, b, on, on + (VBI + LINES) * LINE * period
 
 
-def test_returning_channel_starts_the_next_field():
+@pytest.mark.parametrize('returning', ['a', 'b'])
+def test_returning_channel_starts_the_next_field(returning):
     """A is silent for field 1 and B carries it; in field 2 A is back in step and B reports no
     lock, so every pair goes to A. A had no line in output field 1, and a pair was judged only on
     the current channel's field counter: A's lines all lay below line 23, the last one sent, and
     no field was shown again for as long as A stayed the cleaner receiver (found by
     sim/test_fuzz_chain.py, round d1, seed 48). Such a pair is now judged on the partner, which
-    has moved on to its next field: fields 2 and 3 are shown whole, and the F bit is A's."""
-    a, b, on, off = return_streams()
-    m = check('tb_mixer_return_field', a, b, {'EXTB_ON': on, 'EXTB_OFF': off}, ext=lambda ev: (False, window(ev, on, off)))
+    has moved on to its next field: fields 2 and 3 are shown whole, and the F bit is A's.
+    The B variant swaps the receivers and computes the lock window on A's byte clock."""
+    a, b, on, off = return_streams(returning)
+    other = 'EXTA' if returning == 'b' else 'EXTB'
+    ext = lambda ev: (window(ev, on, off), False) if returning == 'b' else (False, window(ev, on, off))
+    m = check(f'tb_mixer_return_field_{returning}', a, b, {f'{other}_ON': on, f'{other}_OFF': off}, ext=ext)
     got = out_fields(m.trace)
     assert got == [(0, list(range(LINES))), (1, list(range(LINES))), (0, list(range(LINES))), (1, list(range(LINES)))],         [(f, len(ls)) for f, ls in got]
 
 
-def test_returning_channel_check_is_tested():
+@pytest.mark.parametrize('returning', ['a', 'b'])
+def test_returning_channel_check_is_tested(returning):
     """Negative control: line_mixer.v judging the pair on the current channel only disagrees
     with the model."""
-    a, b, on, off = return_streams()
+    a, b, on, off = return_streams(returning)
+    other = 'EXTA' if returning == 'b' else 'EXTB'
+    ext = lambda ev: (window(ev, on, off), False) if returning == 'b' else (False, window(ev, on, off))
     with pytest.raises(AssertionError, match='decision|word'):
-        check('tb_mixer_return_field_old', a, b, {'EXTB_ON': on, 'EXTB_OFF': off},
-              ext=lambda ev: (False, window(ev, on, off)), alter={'line_mixer.v': (JUDGE, "wire       c_alt   = 1'b0;")})
+        check(f'tb_mixer_return_field_old_{returning}', a, b, {f'{other}_ON': on, f'{other}_OFF': off},
+              ext=ext, alter={'line_mixer.v': (JUDGE, "wire       c_alt   = 1'b0;")})
+
+
+class UnmarkedOutputField(AssertionError):
+    """Only the observed #18 boundary defect is an expected failure."""
+
+
+@pytest.mark.xfail(strict=True, raises=UnmarkedOutputField,
+                   reason='LAP87/OpenVRX-Core#18: output field start absent from the word stream')
+def test_new_output_field_is_seen_downstream():
+    """Adapted from ec06c56: RTL/model agreement must pass before checking #18.
+    F is constant at 1; A stops after line 3 and B takes over above that line.
+    Only an unmarked output-field start may xfail, not a model or bench error."""
+    a = bytes(Stream(1).field(0, f=1).field(1, f=1).data[:FIELD + (VBI + 4) * LINE + 4])
+    b = Stream(2).field(0, f=1).field(1, f=1).field(2, f=1).field(3, f=1).done()
+    kw = {'START_B': START_A + 5 * LINE_NS + LINE_NS / 3}
+    m = check('tb_mixer_hidden_field', a, b, kw, ev_kw={k.lower(): v for k, v in kw.items()})
+    assert any(m.newfield[1:]), 'the scenario has no second output field'
+    prev = None
+    hidden = []
+    for (use, _, field, line), new in zip(m.trace, m.newfield):
+        if not use:
+            continue
+        if new and prev is not None and field == prev[0] and line > prev[1]:
+            hidden.append((prev, (field, line)))
+        prev = field, line
+    if hidden:
+        assert hidden == [((1, 3), (1, 15))], f'unexpected unmarked field starts: {hidden}'
+        raise UnmarkedOutputField(f'F/line before and after field start: {hidden}')
 
 
 def test_unlocked_decoder_in_step_loses():
