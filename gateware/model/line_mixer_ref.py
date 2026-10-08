@@ -156,7 +156,7 @@ class Mixer:
         self.qfast = [False, False]   # the channels were in step when this one went quiet
         self.o_valid = False          # output field state
         self.o_line = 0
-        self.o_fbit = 0
+        self.o_fbit = 1               # the first output field gets F = 0 (flips per field)
         self.o_fc = [0, 0]
         self.join = [False, False]
         self.trace = []               # (use, pop, field, line)
@@ -252,7 +252,7 @@ class Mixer:
         if ok:
             self.adm_new = new
             if new:
-                self.o_fbit = f
+                self.o_fbit ^= 1              # flips per output field, see line_mixer.v (#18)
                 self.join = [False, False]
             self.o_valid, self.o_line = True, l
             self.join[ch] = True

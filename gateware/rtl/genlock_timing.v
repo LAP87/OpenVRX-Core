@@ -73,6 +73,9 @@ module genlock_timing #(
                 pend <= 1'b0; jump <= 1'b0; wait_n <= 0; early_n <= 0;
                 if (vc == V_TOTAL - 1) triggered <= 1'b0;
             end else if (jump) begin
+                // cut: straight to the last line. The cut frame then has no vsync pulse of its own (the
+                // sink sees one long frame); jumping to the sync lines instead was tried 2026-10-08
+                // and left the output catching up one line per frame for tens of frames.
                 vc <= V_TOTAL - 1; jump <= 1'b0; wait_n <= 0;
             end else if (vc == V_SYNC_END - 1) begin
                 vc <= vc + 12'd2;                                // skip one back-porch line

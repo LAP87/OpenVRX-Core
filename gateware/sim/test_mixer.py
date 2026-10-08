@@ -579,12 +579,12 @@ class UnmarkedOutputField(AssertionError):
     """Only the observed #18 boundary defect is an expected failure."""
 
 
-@pytest.mark.xfail(strict=True, raises=UnmarkedOutputField,
-                   reason='LAP87/OpenVRX-Core#18: output field start absent from the word stream')
 def test_new_output_field_is_seen_downstream():
     """Adapted from ec06c56: RTL/model agreement must pass before checking #18.
-    F is constant at 1; A stops after line 3 and B takes over above that line.
-    Only an unmarked output-field start may xfail, not a model or bench error."""
+    F is constant at 1; A stops after line 3 and B takes over above that line. The output F
+    bit now flips at every output field start, so the store sees the takeover as a new field.
+    Was xfail (Core #18) while F was the decoder's: the RTL before 2026-10-08 raises
+    UnmarkedOutputField here (negative control, run by hand with o_fbit <= c_f restored)."""
     a = bytes(Stream(1).field(0, f=1).field(1, f=1).data[:FIELD + (VBI + 4) * LINE + 4])
     b = Stream(2).field(0, f=1).field(1, f=1).field(2, f=1).field(3, f=1).done()
     kw = {'START_B': START_A + 5 * LINE_NS + LINE_NS / 3}
@@ -660,7 +660,8 @@ def test_lagging_channel_is_not_shown_until_the_other_is_gone():
     assert cur_changes(m) == 1 and sum(1 for _, p, *_ in m.trace[last_a:k + 1] if p == 0b10) == 40
     assert all(u == (ref.USE_A if p == 0b01 else 0) for u, p, *_ in m.trace[:k]), 'only A while A delivers'
     assert all(u == ref.USE_B for u, *_ in m.trace[k:])
-    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (1, list(range(9, LINES)))]
+    # the output F flips per output field (#18): B's field of its own is the third one, F = 0
+    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (0, list(range(9, LINES)))]
 
 
 def test_blanking_must_not_look_like_silence():
@@ -689,7 +690,7 @@ def test_f_bits_disagree():
     m = check('tb_mixer_fbits', a, b)
     assert all(p == 0b11 for _, p, *_ in m.trace)
     assert {u for u, *_ in m.trace[:2 * LINES]} == {ref.USE_A} and {u for u, *_ in m.trace[2 * LINES:]} == {ref.USE_B}
-    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (1, list(range(LINES)))]
+    assert out_fields(m.trace) == [(0, list(range(LINES))), (1, list(range(LINES))), (0, list(range(LINES)))]   # output F flips per field
 
 
 def test_f_stuck_on_both():
@@ -697,7 +698,8 @@ def test_f_stuck_on_both():
     a = Stream(1).field(0, f=1).field(1, f=1).done()
     b = Stream(2).field(0, f=1).field(1, f=1).done()
     m = check('tb_mixer_fstuck', a, b)
-    assert all(p == 0b11 and f == 1 for _, p, f, _ in m.trace)
+    assert all(p == 0b11 for _, p, *_ in m.trace)
+    assert [f for f, _ in out_fields(m.trace)] == [0, 1], 'the output F flips per output field, whatever the decoders say'
     complete(m.trace, 2)
 
 

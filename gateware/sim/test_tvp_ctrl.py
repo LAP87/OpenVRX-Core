@@ -10,6 +10,7 @@ instead of wrapping; a decoder that joins late is brought up, and the error
 flag follows it on and off the bus.
 
 Run: .venv/bin/python -m pytest -q gateware/sim/test_tvp_ctrl.py"""
+import hashlib
 import os
 import re
 import subprocess
@@ -59,7 +60,8 @@ def run(present1, split=0, scenario=0, alter=None):
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}{"_alt" if alter else ""}'
+    # one build directory per alteration: the negative controls may run in separate processes at once
+    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}{"_alt" + hashlib.md5(alter[1].encode()).hexdigest()[:6] if alter else ""}'
     work.mkdir(parents=True, exist_ok=True)
     ctrl = GW / 'rtl' / 'tvp_ctrl.v'
     if alter:

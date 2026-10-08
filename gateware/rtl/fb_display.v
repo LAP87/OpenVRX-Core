@@ -20,10 +20,10 @@
 // A frame has video (have_video, decided at its first line) when: in buffer
 // mode, a field has been published since the last switch to low latency and
 // within the last 0.2 s; in low-latency mode, a trigger has come in this
-// low-latency period within the last 0.1 s (ll_alive), and the first such
-// frame was started by a trigger (ll_triggered, from genlock_timing.v): a
-// frame on the free-running timing would read ring slots the writer has not
-// reached. A mode switch blanks the rest of the running frame.
+// low-latency period within the last 0.1 s (ll_alive) and this frame was
+// started by a trigger (ll_triggered, from genlock_timing.v): a frame on the
+// free-running timing would read ring slots the writer has not reached. A
+// mode switch blanks the rest of the running frame.
 //
 // CDC: publications arrive as a toggle + stable data, fetch requests leave
 // the same way (data is held stable for far longer than the synchronisers
@@ -102,10 +102,10 @@ module fb_display #(
     reg ll_d;
     always @(posedge clk) begin
         ll_d <= ll;
-        // low latency: the first frame with video must be one a trigger started (the ring then holds
-        // the field from its line 0); after that video stays while triggers keep coming, also
-        // through frames that waited a trigger out (early triggers the genlock ignores)
-        if (line_start && y == 0) have_video <= ll ? (ll_alive && (ll_triggered || have_video)) : have_pub;
+        // low latency: only a frame a trigger started has video (the ring then holds the field from
+        // its line 0). A frame that waited a trigger out is blank: while the genlock ignores early
+        // triggers after a source moved, that is up to three blank frames rather than torn ones.
+        if (line_start && y == 0) have_video <= ll ? (ll_alive && ll_triggered) : have_pub;
         if (ll != ll_d) have_video <= 1'b0;             // a mode switch: the rest of this frame is blank
         if (rst) begin have_video <= 1'b0; ll_d <= 1'b0; end
     end

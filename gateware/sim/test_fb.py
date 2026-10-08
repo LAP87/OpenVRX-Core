@@ -551,14 +551,17 @@ def test_low_latency_false_field_start_does_not_cut_the_frame():
 def test_low_latency_source_moves():
     """From field 7 on every field comes 0.4 field periods later (another camera, a receiver
     that locked elsewhere). The first early triggers are ignored; after the third the output
-    realigns with one short frame, and the fields after that are shown intact."""
+    realigns with one short frame, and the fields after that are shown intact. The frames that
+    waited the ignored triggers out have no video (fb_display.v: only a trigger-started frame has
+    video), so the lengths between frames with video show one gap of at most four frames."""
     field = 13.5 * P_LL
     src = [(t + (round(0.4 * field) if tag >= 8 else 0), f, n, tag)
            for t, f, n, tag in source(16, period=P_LL, lines=9, vbi=4, interlaced=True)]
     trig, frames, lens = ll_run('tb_fb_ll_move', src, **LL_V)
     ll_picture(frames, 5, 7)
     ll_picture(frames, 12, 15)
-    assert sum(1 for n in lens if n < 47) <= 1 and max(lens) <= 47 + 8, lens
+    gaps = [n for n in lens if n > 47 + 8]
+    assert sum(1 for n in lens if n < 47) <= 1 and len(gaps) <= 1 and all(n <= 4 * (47 + 8) for n in gaps), lens
 
 
 # ---- switching between the modes while video runs
@@ -600,23 +603,40 @@ def check_switch(run):
     bad['xz'] = [round(pc / H_TOTAL, 1) for pc in run['bad'] if not any(a <= pc < b for a, b in allowed)]
     # 2. Frame length from vsync to vsync: VT - 1 .. VT + MAX_WAIT (genlock_timing.v, formal/genlock_props.v);
     #    VT - 1 .. VT + 1 (750/751-line frames) from the third frame after a switch on.
-    for a, b in zip(vs, vs[1:]):
+    # measured from frame starts: a cut frame (JUMP_AFTER early triggers) jumps to its last line and
+    # has no vsync pulse of its own, so vsync to vsync would show one long frame there
+    cuts = 0
+    for a, b in zip(starts, starts[1:]):
         n = round((b - a) / H_TOTAL)
         settling = any(sw < b <= sw + 3 * (VT + MAX_WAIT) * H_TOTAL for sw in (sw1, sw2))
+        if settling and n < VT - 1 and cuts == 0:                # one cut while the genlock locks after a switch
+            cuts += 1
+            continue
         if not (VT - 1 <= n <= (VT + MAX_WAIT if settling else VT + 1)):
             bad['length'].append((round(b / H_TOTAL), n))
+    # one vsync pulse per frame, except the cut frame (it jumps to its last line and has none)
+    nv = [sum(1 for v in vs if a <= v < b) for a, b in zip(starts, starts[1:])]
+    if nv.count(0) > 1 or any(n > 1 for n in nv):
+        bad['length'].append(('vsync pulses per frame', [(round(starts[i] / H_TOTAL), n) for i, n in enumerate(nv) if n != 1]))
     # 3. The picture. Every output line is the source line the model gives, a whole line (word 52).
     lines_ok = lambda f: all(f['shown'][y][1:] == (fb.src_line(y, f['lines'], V_ACTIVE, f['low']), 52) for y in range(V_ACTIVE))
     tags = lambda f: sorted({f['shown'][y][0] for y in range(V_ACTIVE)})
     pre = [f for f in frames if f['pc'] + VT * H_TOTAL <= sw1 and f['video']][1:]
-    low = [f for f in frames if f['pc'] > sw1 and f['pc'] + VT * H_TOTAL <= sw2][1:]    # not the first frame after the switch
+    low = [f for f in frames if f['pc'] > sw1 and f['pc'] + VT * H_TOTAL <= sw2]
+    # the frames while the genlock locks have no video (fb_display.v: only a trigger-started frame of
+    # this LOW period has video; the joined field fires no trigger, and up to JUMP_AFTER early
+    # triggers are ignored before the frame is cut): at most 4 of them, then every frame has video
+    n_blank = next((i for i, f in enumerate(low) if f['video']), len(low))
+    if n_blank > 4:
+        bad['picture'].append(('LOW: blank frames after the switch', n_blank))
+    low = low[n_blank:]
     buf = [f for f in frames if f['pc'] > sw2]
     for name, group in (('BUF before', pre), ('LOW', low)):
         for f in group:                                         # one field per frame
             if not (f['video'] and lines_ok(f) and len(tags(f)) == 1):
                 bad['picture'].append((name, round(f['pc'] / H_TOTAL), tags(f)))
     lt = [tags(f)[0] for f in low]
-    if len(lt) < 4 or lt != list(range(lt[0], lt[0] + len(lt))):
+    if len(lt) < 3 or lt != list(range(lt[0], lt[0] + len(lt))):          # 3: the locking frames have no video
         bad['picture'].append(('LOW fields are not consecutive', lt))
     for f in low:                                               # and the newest one
         if not 0 <= cur_field(f['pc']) - tags(f)[0] <= 1:

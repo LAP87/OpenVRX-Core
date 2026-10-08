@@ -24,7 +24,14 @@
 //
 // Output order: line numbers leave strictly increasing within a field; a line
 // is admitted when it starts a new field of its channel or lies above the last
-// line sent. The output F bit is latched from the first line of each field.
+// line sent. The output F bit flips at every output field start (it is not the
+// decoder's F): the field store and the ring writer see a new field only when F
+// changes or the line number goes down, and an output field that starts above
+// the last line sent with the decoder's F unchanged (a receiver taking over out
+// of step, common with F held at 1) would otherwise merge into the field before
+// (Core #18). Which field is the lower one comes from arrival times downstream
+// (field_phase.v), so nothing reads the F value itself. Owner's choice 2026-10-08;
+// to go back, latch c_f instead of ~o_fbit here and in line_mixer_ref.py.
 //
 // Output: tagged words {field, line, idx, data} in the M2 frame buffer format,
 // written into a FIFO whenever o_room says there is space for 4 more.
@@ -171,7 +178,7 @@ module line_mixer #(
         else                         begin adm_ok = (c_l > o_line);    adm_new = 1'b0; end
     end
     wire       show  = pair ? adm_ok : (adm_ok && (s_owner || gap_ok));
-    wire       tag_f = adm_new ? c_f : o_fbit;
+    wire       tag_f = adm_new ? ~o_fbit : o_fbit;
     // no good copy: both lines of a pair are bad, or a lone line is bad (the other receiver has none)
     wire       both_bad = pair ? (bada && badb) : x_bad;
     wire       omit  = show && both_bad && (adm_new || !bad_last);
@@ -215,7 +222,7 @@ module line_mixer #(
             if (show) begin
                 bad_last <= both_bad;
                 o_valid <= 1'b1; o_line <= c_l;
-                if (adm_new) begin o_fbit <= c_f; join_a <= 1'b0; join_b <= 1'b0; end
+                if (adm_new) begin o_fbit <= ~o_fbit; join_a <= 1'b0; join_b <= 1'b0; end
                 if (pair || !x) begin join_a <= 1'b1; o_fc_a <= fca; end
                 if (pair || x)  begin join_b <= 1'b1; o_fc_b <= fcb; end
             end
@@ -241,7 +248,7 @@ module line_mixer #(
         if (rst) begin
             st <= S_IDLE; cur <= 1'b0; dec_valid <= 1'b0; o_we <= 1'b0; v1 <= 1'b0;
             step_valid <= 1'b0; since_pair <= 0; quiet_a <= 0; quiet_b <= 0; qfast_a <= 1'b0; qfast_b <= 1'b0;
-            o_valid <= 1'b0; join_a <= 1'b0; join_b <= 1'b0; bad_last <= 1'b0;
+            o_valid <= 1'b0; join_a <= 1'b0; join_b <= 1'b0; bad_last <= 1'b0; o_fbit <= 1'b1;   // the first output field gets F = 0
         end
     end
 endmodule
