@@ -44,9 +44,10 @@ sed 's/^    assign empty = .*/    assign empty = 1'"'"'b0;/' "$fifo" > never_emp
 must_fail async_fifo_never_empty fifo_props 20 "" "$work/never_empty.v" "$here/fifo_props.v" || status=1
 FLOW="chformal -lower;" prove genlock_timing genlock_props 130 "" "$here/../rtl/genlock_timing.v" "$here/genlock_props.v" || status=1
 # negative controls: without the wait limit a frame can stall forever while locked; with two back-porch
-# lines skipped a frame is shorter than V_TOTAL - 1; without the hold-off two cut frames can follow each other
-sed 's/wait_n == MAX_WAIT);/1'"'"'b0);/' "$here/../rtl/genlock_timing.v" > genlock_nolimit.v
-grep -q "1'b0);" genlock_nolimit.v
+# lines skipped a normal frame is shorter than V_TOTAL - 1; without the hold-off two cuts can follow each
+# other; jumping straight to the last line loses sync; a sticky recovery flag allows later short frames
+sed 's/wait_n == MAX_WAIT/1'"'"'b0/' "$here/../rtl/genlock_timing.v" > genlock_nolimit.v
+! grep -q 'wait_n == MAX_WAIT' genlock_nolimit.v
 FLOW="chformal -lower;" must_fail genlock_no_wait_limit genlock_props 130 "" "$work/genlock_nolimit.v" "$here/genlock_props.v" || status=1
 sed "s/vc <= vc + 12'd2; /vc <= vc + 12'd3; /" "$here/../rtl/genlock_timing.v" > genlock_short.v
 grep -q "vc + 12'd3" genlock_short.v
@@ -54,6 +55,12 @@ FLOW="chformal -lower;" must_fail genlock_short_frame genlock_props 130 "" "$wor
 sed 's/early_n == JUMP_AFTER - 1 \&\& hold == 0/early_n == JUMP_AFTER - 1/' "$here/../rtl/genlock_timing.v" > genlock_nohold.v
 ! grep -q "hold == 0" genlock_nohold.v
 FLOW="chformal -lower;" must_fail genlock_no_holdoff genlock_props 130 "" "$work/genlock_nohold.v" "$here/genlock_props.v" || status=1
+sed 's/? V_SYNC_START :/? V_TOTAL - 1 :/' "$here/../rtl/genlock_timing.v" > genlock_nosync.v
+grep -Fq '? V_TOTAL - 1 :' genlock_nosync.v
+FLOW="chformal -lower;" must_fail genlock_cut_no_sync genlock_props 130 "" "$work/genlock_nosync.v" "$here/genlock_props.v" || status=1
+sed 's/recover <= cut; cut <=/recover <= recover || cut; cut <=/' "$here/../rtl/genlock_timing.v" > genlock_sticky.v
+grep -Fq 'recover <= recover || cut;' genlock_sticky.v
+FLOW="chformal -lower;" must_fail genlock_sticky_recovery genlock_props 130 "" "$work/genlock_sticky.v" "$here/genlock_props.v" || status=1
 
 # ---- clock domain crossings of fb_backend.v (rtl/cdc_sync.v, formal/README.md)
 cdc="$here/../rtl/cdc_sync.v"

@@ -21,8 +21,9 @@ ring) -> fb_display. Each block is checked against its model on the input it rea
 and against six invariants that do not depend on the models:
   1. no X/Z on r, g, b, de, hsync, vsync after the first frame, and after the first frame
      following a mode switch;
-  2. every frame, frame start to frame start, has V_TOTAL - 1 .. V_TOTAL + MAX_WAIT lines;
-     shorter frames (genlock cuts) at least HOLD frames apart;
+  2. every frame has exactly one vsync pulse and V_TOTAL - 1 .. V_TOTAL + MAX_WAIT lines,
+     except a cut and its immediately following recovery frame; cut groups are at least HOLD
+     frame starts apart and may contain no third short frame;
   3. every line read for a frame is stored in the buffer it is read from, or black;
   4. no SDRAM protocol error (sdram_model.v STRICT);
   5. the mixer's overflow is never set;
@@ -702,26 +703,41 @@ def check_invariants(sc, logs, fd):
             if after and vids.get(after[0]):
                 fd.add('display', 'switch_video', after[0] * T_P,
                        f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
-    # 2. frame lengths, frame start to frame start (genlock_timing.v and its proof count them so)
-    # lines of the frame that ends at each frame start, counted by the bench (720p50 lines are
-    # longer, and genlock_timing.v changes the length on a frame's last, waiting lines)
+    # 2. Frame length and sync pulse count, frame start to frame start. The bench counts output
+    # lines directly because 720p50 lines are longer and the wait limit can add full lines.
     nlines = {int(ev[1]): num(ev[6]) for ev in pix if ev[0] == 'V' and len(ev) > 6}
-    cuts = []
+    vs = [int(ev[1]) for ev in pix if ev[0] == 'S']
+    intervals = []
     for i, (a, b) in enumerate(zip(starts[1:], starts[2:])):
         n = nlines[b] if nlines.get(b) is not None else round((b - a) / H_TOTAL)
-        if n < V_TOTAL - 1:
-            cuts.append(i)
-        elif n > V_TOTAL + MAX_WAIT:
-            fd.add('output', 'long_frame', b * T_P, f'frame of {n} lines')
-    for a, b in zip(cuts, cuts[1:]):
-        if b - a < HOLD:
-            fd.add('output', 'short_frames', starts[b + 1] * T_P, f'short frames {b - a} frames apart')
-    # a cut that skips the vsync lines: the sink sees one long frame (noted, not a fault)
-    vs = [int(ev[1]) for ev in pix if ev[0] == 'S']
-    for a, b in zip(vs, vs[1:]):
-        n = round((b - a) / H_TOTAL)
+        sync_count = sum(a <= s < b for s in vs)
+        if sync_count != 1:
+            fd.add('output', 'vsync_count', b * T_P,
+                   f'frame at pixel clock {a}: {sync_count} vsync pulses (expected 1)')
+        intervals.append((i, a, b, n))
         if n > V_TOTAL + MAX_WAIT:
-            fd.notes.append(f'vsync to vsync {n} lines at {b * T_P / 1e6:.2f} ms ({len(cuts)} cut frame(s))')
+            fd.add('output', 'long_frame', b * T_P, f'frame of {n} lines')
+    short = [i for i, _, _, n in intervals if n < V_TOTAL - 1]
+    groups = []
+    for i in short:
+        if not groups or i != groups[-1][-1] + 1:
+            groups.append([i])
+        else:
+            groups[-1].append(i)
+    for group in groups:
+        if len(group) > 2:
+            fd.add('output', 'short_frames', starts[group[0] + 1] * T_P,
+                   f'{len(group)} adjacent short frames; only a cut and its recovery may be short')
+        elif len(group) == 2:
+            recovery_lines = intervals[group[1]][3]
+            min_recovery_lines = V_ACTIVE + V_FP + V_SYNC + 1
+            if recovery_lines < min_recovery_lines:
+                fd.add('output', 'short_frames', starts[group[1] + 1] * T_P,
+                       f'recovery frame has {recovery_lines} lines; needs at least {min_recovery_lines}')
+    for left, right in zip(groups, groups[1:]):
+        if right[0] - left[0] < HOLD:
+            fd.add('output', 'short_frames', starts[right[0] + 1] * T_P,
+                   f'cut groups start {right[0] - left[0]} frame starts apart, HOLD is {HOLD}')
     # 4. SDRAM protocol
     sd = logs['sd']
     if not sd or sd[-1][0] != 'end':
@@ -874,14 +890,74 @@ def test_frame_length_uses_counted_lines_when_width_changes(line_count, expected
     # 750 ordinary lines and eight PAL-width waiting lines: division by
     # 1650 yields 760, while the bench counts 758 real lines.
     span = 750 * H_TOTAL + 8 * 1980
-    pix = [['V', str(k * span), '288', '1', '1', '0', str(line_count)] for k in range(4)]
-    sc = type('Scenario', (), {'end_ns': 4 * span * T_P})()
+    pix = []
+    for k in range(5):
+        pix.extend((['V', str(k * span), '288', '1', '1', '0', str(line_count)],
+                    ['S', str(k * span + 5 * H_TOTAL)]))
+    sc = type('Scenario', (), {'end_ns': 5 * span * T_P})()
     fd = Findings()
     try:
         check_invariants(sc, dict(pix=pix, sd=[['end', '0']], mix=[['end']], stdout=''), fd)
         assert fd.groups() == expected, fd.items
     finally:
         use_geometry('scaled')
+
+
+def timing_fixture(frame_lines, sync_counts=None):
+    """Minimal pixel log for exercising invariant 2 without a gateware simulation."""
+    sync_counts = sync_counts or [1] * len(frame_lines)
+    starts, pc = [], 0
+    for n in frame_lines:
+        starts.append(pc)
+        pc += n * H_TOTAL
+    starts.append(pc)
+    pix = []
+    for k, start in enumerate(starts):
+        n = frame_lines[k - 1] if k else V_TOTAL
+        pix.append(['V', str(start), str(V_ACTIVE), '0', '0', '0', str(n)])
+    for i, (a, n) in enumerate(zip(starts, frame_lines)):
+        for pulse in range(sync_counts[i]):
+            pix.append(['S', str(a + min(n - 1, 1 + pulse) * H_TOTAL)])
+    return pix
+
+
+def invariant_findings(pix):
+    fd = Findings()
+    check_invariants(type('Scenario', (), {'end_ns': 1e12})(),
+                     dict(pix=pix, sd=[['end', '0']], mix=[['end']], stdout=''), fd)
+    return fd.groups(), fd.items
+
+
+def test_vsync_count_is_a_finding():
+    """A complete frame without a sync pulse is a failure, not a length note."""
+    use_geometry('scaled')
+    pix = timing_fixture([V_TOTAL] * 5, sync_counts=[1, 1, 0, 1, 1])
+    groups, items = invariant_findings(pix)
+    assert groups == ['output/vsync_count'], items
+
+
+def test_cut_and_recovery_are_the_only_short_frame_group():
+    """Two adjacent short frames pass as cut plus recovery; a third is a finding."""
+    use_geometry('scaled')
+    min_recovery_lines = V_ACTIVE + V_FP + V_SYNC + 1
+    groups, items = invariant_findings(timing_fixture([V_TOTAL, 10, min_recovery_lines, V_TOTAL]))
+    assert not groups, items
+    groups, items = invariant_findings(timing_fixture([V_TOTAL, 10, min_recovery_lines - 1, V_TOTAL]))
+    assert groups == ['output/short_frames'], items
+    groups, items = invariant_findings(timing_fixture([V_TOTAL, 10, min_recovery_lines, 20, V_TOTAL]))
+    assert groups == ['output/short_frames'], items
+
+
+def test_hold_is_counted_between_cut_groups():
+    """HOLD separates groups by the starts of their first short frames."""
+    use_geometry('scaled')
+    recovery = V_ACTIVE + V_FP + V_SYNC + 1
+    enough = [V_TOTAL, 10, recovery] + [V_TOTAL] * (HOLD - 2) + [10, recovery, V_TOTAL]
+    close = [V_TOTAL, 10, recovery] + [V_TOTAL] * (HOLD - 3) + [10, recovery, V_TOTAL]
+    groups, items = invariant_findings(timing_fixture(enough))
+    assert not groups, items
+    groups, items = invariant_findings(timing_fixture(close))
+    assert groups == ['output/short_frames'], items
 
 
 def test_camera_ahead_does_not_hide_store_age():
