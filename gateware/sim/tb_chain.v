@@ -7,8 +7,8 @@
 //   mix.txt  mixer clock domain: line markers leaving the capture FIFOs, the
 //            noise meter's line counts, mixer decisions, words the back end takes
 //   sd.txt   SDRAM clock domain (the same clock): the field store's decisions as
-//            in tb_fb.v, every word written to the SDRAM, a checksum of every line
-//            read into the line buffer, the low-latency writer
+//            in tb_fb.v, every word written to the SDRAM, an accepted-read marker and checksum
+//            for every line loaded into the line buffer, the low-latency writer
 //   pix.txt  pixel clock domain: frame geometry, the source line and word shown on
 //            every output line, vsync, X/Z on the outputs
 `timescale 1ns/1ps
@@ -145,6 +145,11 @@ module tb_chain;
             look3_d <= be.fb.look == 2'd3;
             if (look3_d && be.fb.f_blank) $fwrite(fs, "S blank %0d\n", be.fb.f_src);
             else if (look3_d) $fwrite(fs, "S %0d %0d\n", be.fb.f_buf, be.fb.f_src);
+            // The source decision above can precede the end of an active writer burst. Record the
+            // accepted first read burst, when the arbiter has actually started fetching the line.
+            if (be.fb.req_valid && be.fb.req_ready && !be.fb.req_write && be.fb.req_addr[8:0] == 0)
+                $fwrite(fs, "I %0d %0d %0d %0d %0d\n", be.fb.f_buf, be.fb.f_src,
+                        be.fb.f_slot, be.fb.req_addr, cyc);
             if (be.fb.first_word) $fwrite(fs, "A %0d %0d %0d\n", be.fb.e_field, be.fb.e_line, be.fb.cur_buf);
             if (be.fb.discard) $fwrite(fs, "J %0d %0d %0d\n", be.fb.e_field, be.fb.e_line, be.fb.nxt);
             if (be.fb.publish)

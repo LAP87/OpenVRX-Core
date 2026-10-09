@@ -14,7 +14,7 @@ ring) -> fb_display. Each block is checked against its model on the input it rea
            agrees, the arrival model is what differs, and the run counts as an edge case
            (logged, not a fault).
   store    every decision of the field store against fb_ref.FieldStore (as test_fb.py);
-           every line read into the line buffer has the checksum of what the SDRAM held
+           every read has a checksum of the SDRAM snapshot at its accepted first burst
   display  every output line shows the source line fb_ref.src_line gives and word 52 of
            the line read for it; in LOW, the word its ring slot held
 
@@ -434,7 +434,8 @@ def check_store(logs, words, org, run, fd):
     """Replay the store's log through fb_ref (a fresh model after each low-latency period);
     every read against the SDRAM content. Returns the frames with what they read."""
     mem, morg = {}, {}
-    st, frames, pending, reads, prev_st = None, [], [], [], None
+    st, frames, pending, selected, prev_st = None, [], [], [], None
+    active_read = None
     sfield, buf_field = 0, {}             # the store's fields in order; buffer -> its field
     stored = {}
     cur_org = -1
@@ -443,12 +444,16 @@ def check_store(logs, words, org, run, fd):
         if e == 'L':
             if ev[2] == '1':
                 prev_st = st if st is not None else prev_st
-                st, pending, reads = None, [], []
+                st, pending, selected, active_read = None, [], [], None
             continue
         if e in ('G', 'E', 'T', 'Q', 'end'):
             continue
         if e == 'w':
             addr, val = int(ev[1]), hexnum(ev[2])
+            if active_read is not None:
+                fd.add('store', 'log', 0,
+                       f'SDRAM write at {addr} interleaved with read {active_read["src"]} '
+                       f'started at cycle {active_read["cycle"]}')
             mem[addr], morg[addr] = val, cur_org
             continue
         if st is None:
@@ -516,26 +521,91 @@ def check_store(logs, words, org, run, fd):
                 if want != src:
                     fd.add('store', 'decision', 0, f'line read from {src}, model {want}')
                 if src[0] == fb.BLANK:
-                    content, o = [BLACK] * 360, None
+                    content = [BLACK] * 360
+                    o = None
+                    sf = sfield
                 else:
-                    base = src[0] << 19 | src[1] << 9
-                    content = [mem.get(base + i) for i in range(360)]
-                    o = morg.get(base + 52)
+                    # S records the selected source, before the arbiter can accept a read. The
+                    # current eight-word writer burst may still update this line, so defer the
+                    # independent SDRAM snapshot until the accepted-start marker (I).
+                    content = None
+                    o = None
+                    sf = None
                     if src[1] not in stored.get(src[0], ()):
                         o = 'unstored'                  # invariant 3, checked where the line is shown
-                reads.append((frames[-1], src, content, o, sfield if src[0] == fb.BLANK else buf_field.get(src[0], -99)))
-            elif e == 'R':
-                if not reads:
-                    fd.add('store', 'log', 0, 'line buffer written without a read')
+                    sf = buf_field.get(src[0], -99)
+                selected.append(dict(frame=frames[-1], src=src, content=content, origin=o, sfield=sf,
+                                     started=False, slot=None, cycle=None))
+            elif e == 'I':
+                buf, line, slot, addr, cyc = v
+                if any(value is None for value in v):
+                    fd.add('store', 'log', 0, f'malformed accepted read-start marker {ev}')
                     continue
-                fr, src, content, o, sf = reads.pop(0)
+                if active_read is not None:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read start at cycle {cyc} before read {active_read["src"]} '
+                           f'from cycle {active_read["cycle"]} completed')
+                    continue
+                if not selected:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read start for buffer {buf} line {line} without a source selection')
+                    continue
+                read = selected[0]
+                src = read['src']
+                if src[0] == fb.BLANK:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read start for buffer {buf} line {line} while blank line {src[1]} was selected')
+                    continue
+                if (buf, line) != src:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read start {(buf, line)} does not match selected source {src}')
+                expected_addr = (buf << 19) | (line << 9)
+                if addr != expected_addr:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read address {addr} is not line base {expected_addr} for {(buf, line)}')
+                if addr & 0x1FF:
+                    fd.add('store', 'log', cyc_ns(cyc),
+                           f'accepted read address {addr} is not the first burst of a line')
+                if slot not in range(4):
+                    fd.add('store', 'log', cyc_ns(cyc), f'accepted read selected invalid line-buffer slot {slot}')
+                # Snapshot the independent full-word memory model at the accepted request. R is
+                # checked against this snapshot, including for reads outside a decided frame.
+                read['content'] = [mem.get(addr + i) for i in range(360)]
+                read['origin'] = morg.get(addr + 52)
+                if src[1] not in stored.get(src[0], ()):
+                    read['origin'] = 'unstored'        # invariant 3, checked where the line is shown
+                read['sfield'] = buf_field.get(src[0], -99)
+                read.update(started=True, slot=slot, cycle=cyc, address=addr)
+                active_read = read
+            elif e == 'R':
+                if not selected:
+                    fd.add('store', 'log', 0, 'line buffer write completed without a source selection')
+                    continue
+                read = selected.pop(0)
+                fr, src = read['frame'], read['src']
+                content, o, sf = read['content'], read['origin'], read['sfield']
                 if (v[0] == '1') != (src[0] == fb.BLANK):
                     fd.add('store', 'read', 0, f'black line where {src} was due, or the reverse')
-                want = 'x' if None in content else f'{checksum(content):08x}'
-                # a read that does not match what the SDRAM held when it started (a line being written):
-                # preserve the strict read check, including reads before a frame decision
-                bad = None if v[2] == want else f'line {src}: checksum {v[2]}, the SDRAM held {want} when the read began'
-                # A missing frame decision does not imply blank RGB (seed 126).
+                if src[0] == fb.BLANK:
+                    if active_read is not None:
+                        fd.add('store', 'log', 0,
+                               f'blank line {src[1]} completed while read {active_read["src"]} was active')
+                else:
+                    if not read['started'] or active_read is not read:
+                        fd.add('store', 'log', 0,
+                               f'nonblank read {src} completed without its accepted-start snapshot')
+                    elif num(v[1]) != read['slot']:
+                        fd.add('store', 'log', 0,
+                               f'read {src} completed in slot {v[1]}, accepted start selected slot {read["slot"]}')
+                    if active_read is read:
+                        active_read = None
+                if content is None:
+                    content = [None] * 360
+                    bad = f'line {src}: no accepted read-start memory snapshot'
+                else:
+                    want = 'x' if None in content else f'{checksum(content):08x}'
+                    # Every R checksum remains strict, including reads before a frame decision.
+                    bad = None if v[2] == want else f'line {src}: checksum {v[2]}, the SDRAM held {want} when the read began'
                 if bad:
                     fd.add('store', 'read', 0, bad)
                 if fr is not None:
@@ -547,6 +617,12 @@ def check_store(logs, words, org, run, fd):
                     fd.notes.append('read outside a frame: ' + bad)
         except AssertionError as err:                   # the model refuses the event
             fd.add('store', 'model', 0, f'{ev}: {err}')
+    if selected:
+        fd.add('store', 'log', 0,
+               f'{len(selected)} selected source line(s) ended without a completed read')
+    if active_read is not None:
+        fd.add('store', 'log', 0,
+               f'accepted read {active_read["src"]} from cycle {active_read["cycle"]} never completed')
     return [f for f in frames if f is not None]
 
 
@@ -879,6 +955,88 @@ def test_read_without_frame_decision_keeps_checksum_control():
     fd = Findings()
     check_store(logs, [], [], [], fd)
     assert fd.groups() == ['store/read'], fd.items
+
+
+def accepted_read_fixture(*, outside_frame=False, marker=True, start=(0, 5), slot=2,
+                          r_slot=None, wrong_checksum=False, duplicate=False,
+                          interleave=False, second_source=False):
+    """Pure SDRAM-log fixture with the last half of an active writer burst after S."""
+    base = (0 << 19) | (5 << 9)
+    line_words = [((i + 1) * 0x01020305) & 0xFFFFFFFF for i in range(360)]
+    old_words = list(line_words)
+    for i in range(148, 152):
+        old_words[i] ^= 0x80000001
+
+    sd = [['A', '0', '0', '0'], ['W', '0', '5', '0', '1', '0'], ['M', '5']]
+    if second_source:
+        sd.extend([['W', '0', '6', '0', '2', '1'], ['M', '6']])
+    if not outside_frame:
+        sd.append(['D', '0', '0', '0', '0', '1', '2'])
+
+    sd.append(['F', '5'])
+    if second_source:
+        sd.append(['F', '6'])
+    for i, word in enumerate(old_words):
+        sd.append(['w', str(base + i), f'{word:08x}'])
+    sd.append(['S', '0', '5'])
+    if second_source:
+        sd.append(['S', '0', '6'])
+    for i in range(148, 152):
+        sd.append(['w', str(base + i), f'{line_words[i]:08x}'])
+    if marker:
+        start_buf, start_line = start
+        start_addr = (start_buf << 19) | (start_line << 9)
+        sd.append(['I', str(start_buf), str(start_line), str(slot), str(start_addr), '100'])
+        if duplicate:
+            sd.append(['I', str(start_buf), str(start_line), str(slot), str(start_addr), '101'])
+        if interleave:
+            sd.append(['w', str(base + 52), f'{(line_words[52] ^ 1):08x}'])
+    if not second_source:
+        read_slot = slot if r_slot is None else r_slot
+        read_sum = checksum(line_words) ^ (1 if wrong_checksum else 0)
+        sd.append(['R', '0', str(read_slot), f'{read_sum:08x}'])
+    sd.append(['end', '0'])
+    return dict(sd=sd), old_words, line_words
+
+
+def test_store_snapshots_at_accepted_read_after_active_write_finishes():
+    logs, old_words, line_words = accepted_read_fixture()
+    assert checksum(old_words) != checksum(line_words)
+    fd = Findings()
+    frames = check_store(logs, [], [], [], fd)
+    assert fd.groups() == [], fd.items
+    assert len(frames) == 1 and frames[0].bad == [None]
+
+
+@pytest.mark.parametrize('fixture, expected', [
+    ({'marker': False}, 'no accepted read-start memory snapshot'),
+    ({'start': (1, 5)}, 'does not match selected source'),
+    ({'duplicate': True}, 'before read'),
+    ({'interleave': True}, 'interleaved with read'),
+    ({'r_slot': 3}, 'completed in slot'),
+])
+def test_store_rejects_bad_read_start_binding(fixture, expected):
+    logs, _, _ = accepted_read_fixture(**fixture)
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert 'store/log' in fd.groups() or 'store/read' in fd.groups(), fd.items
+    assert any(expected in item['detail'] for item in fd.items), fd.items
+
+
+def test_store_read_checksum_remains_strict_outside_frame():
+    logs, _, _ = accepted_read_fixture(outside_frame=True, wrong_checksum=True)
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert 'store/read' in fd.groups(), fd.items
+    assert any('checksum' in item['detail'] for item in fd.items), fd.items
+
+
+def test_store_rejects_out_of_order_accepted_read_start():
+    logs, _, _ = accepted_read_fixture(second_source=True, start=(0, 6))
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert 'store/log' in fd.groups(), fd.items
+    assert any('does not match selected source' in item['detail'] for item in fd.items), fd.items
 
 
 @pytest.mark.parametrize('line_count, expected', [
