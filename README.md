@@ -10,11 +10,26 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status:** the full regression on `aece6eb` passed: 432 passed, 2 expected failures
-(open Core #17/#18), in 1:26:02. It includes simulations against Python models
-and build failure controls. Milestone tops build with timing met. **Nothing has run on
-hardware yet.** Most of this code was written with heavy AI assistance
-(Claude) and reviewed by the project owner; see the hub's
+**Status (2026-10-09, C1 source `3aed0b7`):** the frozen full regression
+has 447 passed outcomes, with zero failures, skips, or xfails, in 1:29:36.
+Formal checks produced 7 proofs and 14 expected negative-control counterexamples.
+
+The raw runner status remains `FAIL_SOURCE_CHANGED` because it added 19
+generated cocotb `.result.xml` files. A separate acceptance receipt verified
+all 172 archived source inputs and accepted the saved pytest outcomes.
+
+M4 seed 0 and M6 seed 3 routed with a 75 MHz requirement. The M0 reference
+manifest and all four HDMI IOB-fuse pairs passed verification. M6 seed 2
+failed routing for `clocks.clk_27`; seed 3 passed, while the board default
+remains seed 2. Nothing has run on hardware. See [gateware/README.md](gateware/README.md)
+for post-route figures and verification limits.
+
+Fable's `e113cf6` regression reported 433 passes and closed Core #17/#18.
+Earlier results remain historical: `aece6eb` had 432 passed and 2 xfailed
+in 1:26:02; `7cc4eda` had 395 passed and 1 xfailed in 1:25:56.
+
+Most of this code was written with heavy AI assistance (Claude) and reviewed
+by the project owner; see the hub's
 [REVIEW.md](https://github.com/LAP87/OpenVRX/blob/main/REVIEW.md) for what to
 attack first.
 
@@ -45,7 +60,7 @@ testbenches look there first).
 
 ```sh
 .venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools
-gateware/build.sh m6_puck_proto        # -> gateware/build/m6_puck_proto.fs
+SEED=3 FREQ_MHZ=75 gateware/build.sh m6_puck_proto  # current C1 build -> gateware/build/m6_puck_proto.fs
 .venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m6_puck_proto.build.json --root .
 openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 ```

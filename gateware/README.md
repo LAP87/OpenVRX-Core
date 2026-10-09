@@ -4,7 +4,9 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-05
+## Status 2026-10-09
+
+Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; C1-kandidatens nya siffror står separat efter tabellen.
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
@@ -15,13 +17,22 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 876 LUT 18 %, 17 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
 | **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 396 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 83 MHz mot 64,8) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 542 LUT 12 %, 0 BSRAM; 27 MHz-domän 177 MHz, dekoderklockorna 122 och 142 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 236 LUT 39 %, 25 BSRAM; SDRAM 101,15 MHz, pixel 123,69 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (29 insamlade test, inklusive känt #18; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 236 LUT 39 %, 25 BSRAM; SDRAM 101,15 MHz, pixel 123,69 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (29 gröna test i C1-sviten; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
 | **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 542 LUT 60 %, 25 BSRAM; SDRAM 100,17 MHz, pixel 120,61 MHz, 27 MHz-domän 117,86 MHz mot 54,05; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara.** Siffrorna (LUT, BSRAM och varje klockas Fmax) är nextpnrs resultat efter routning, det sista "Max frequency"-blocket i `build/<top>.pnr.log`, inte uppskattningen efter placering. M0, M2, M2s och M3 är ombyggda 2026-10-07 ur commit f13581c med `build.sh` (frysta indata, manifest i `build/<top>.build.json`); M4 och M6 är ombyggda 2026-10-08 ur byggindata som hash för hash matchar `7cc4eda`, inklusive senaste pair-join-fixen (teständringar gjorde arbetsträdet smutsigt; inga byggindata ändrades; seedtabellen under "Bygget av M6" gäller fortfarande a5b934f); M1, M1s och M2a 2026-10-06 ur 62a69be, och deras RTL är oförändrad sedan dess. Kravet är 75 MHz på alla klockor (M6:s 27 MHz-domän hade till 2026-10-08 ett eget krav på 54 MHz i `boards/m6_puck_proto.sdc`; borttaget när domänen klarade 75 MHz med alla fyra seeds); alla klockor klarade sitt krav. I byggena har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0 (`tools/tmds_fuses.py`).
+**Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax nedan kommer från nextpnrs slutrapport efter routning, inte uppskattningen efter placering. M0, M2, M2s och M3 byggdes om 2026-10-07 från `f13581c`; M1, M1s och M2a byggdes 2026-10-06 från `62a69be`. Milstolpetabellens M4/M6-värden ovan hör till 2026-10-08 och byggindata som matchade `7cc4eda`; de ska inte läsas som C1-resultat. Alla fyra HDMI-par verifierades mot M0:s IOB-fuses även i C1-byggena.
 
-Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools` (**432 passed, 2 xfailed** för öppna #17/#18 på 1:26:02, fryst `aece6eb`, returstatus 0; samtliga 171 källhashar oförändrade). Fryst baslinje på `7cc4eda`: 395 passed, 1 xfailed på 1:25:56. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+C1-kandidaten `3aed0b7` byggdes 2026-10-09. M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för alla fem klockor:
+
+| Topp | Seed | LUT4 | BSRAM | Maxfrekvens efter routning (MHz) | Manifest SHA-256 |
+|---|---:|---:|---:|---|---|
+| `m4_dual_mix` | 0 | 8 271 | 25 | `mix.b_clk` 133,51; `mix.a_clk` 129,53; `clocks.clk_27` 204,96; `sd_clk` 91,26; `clk_pixel` 111,88 | `08e83fd2ce31e185f3d4409208c7a9a87838baa6abde4f32a56390816857b525` |
+| `m6_puck_proto` | 3 | 12 575 | 25 | `mix.b_clk` 116,36; `mix.a_clk` 140,29; `clocks.clk_27` 118,47; `sd_clk` 99,54; `clk_pixel` 124,52 | `f33dc2a58c2e346cd4f9b80b56dcee4ae6c26e21e611bbe81cded1687eb68891` |
+
+På samma C1-källa misslyckades M6 seed 2 under global klockroutning med `Can't route the clocks.clk_27 net`; seed 3 routade. `boards/m6_puck_proto.seed` är fortfarande 2. Reproducera det godkända C1-bygget med `SEED=3 FREQ_MHZ=75 gateware/build.sh m6_puck_proto`. Ingen pin-, IOB-, SDC-, BUFG- eller BOM-ändring gjordes för seedbytet. M6 med seed 2 är ett separat senare krav i C2 och är inte styrkt av seed 3.
+
+C1:s frysta fullsvit gav 447 pass, noll fel, skips eller xfails på 5 376,375 s (1:29:36,375). Den råa körjournalens status är fortfarande `FAIL_SOURCE_CHANGED`: de enda tilläggen var 19 genererade cocotb `.result.xml`-filer. Den separata acceptanskontrollen verifierade hash för samtliga 172 frysta indatafiler och accepterade de 447 pytest-utfallen utan att ändra rå sammanfattning. Formell körning gav 7 `PROVEN`-bevis och 14 förväntade motexempel i negativa kontroller på 572,163 s. Fable rapporterade 433 pass på `e113cf6` och stängde Core #17/#18. Äldre `aece6eb`-utfall (432 pass, 2 xfail på 1:26:02) och `7cc4eda`-baslinjen (395 pass, 1 xfail på 1:25:56) är historiska. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
 
 ## Moduler (`rtl/`)
 
@@ -37,7 +48,7 @@ Hela testsviten: `.venv/bin/python -m pytest -q tests/latency mixer gateware/mod
 | `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | Ord om två pixlar, klockdomänsbyte, SDRAM-styrning (burstar om 8 ord), BT.601 till RGB utan signerad aritmetik | `sim/test_sdram.py`, `sim/test_m2.py` |
 | `fb_sdram.v`, `fb_display.v`, `field_phase.v` | Fältminne i SDRAM med fyra buffertar: väljer vid varje bildstart vilket fält som visas, håller reda på vilka rader som är lagrade och täcker de som saknas; radmappning med halv rads förskjutning mellan fälten; vilket fält som är det nedre avgörs på ankomsttid. Tiden från återställning till första referensraden räknas inte som ett intervall (till 2026-10-07 gjorde den det, och en progressiv källa vars första referensrad kom ungefär en radtid före ett fältintervall efter starten ritades ett fält en halv rad lägre; hittat med `sim/test_fuzz_chain.py`) | `sim/test_fb.py` mot `model/fb_ref.py` (varje beslut, varje läst rad), `model/test_fb_ref.py`; `sim/test_fb.py::test_first_interval_is_not_measured` |
 | `fb_backend.v`, `cdc_sync.v` | Fältminne + visning som en modul (ord in, RGB ut); delas av M2 och M4. **Låglatensläge** (`ll_mode`): förbi SDRAM, ringbuffert på 16 rader, utgången låst till ingångens fält. Klockdomänsövergångarna (toggle-handskakningar och synkade nivåer) ligger i `cdc_sync.v` | `sim/test_m2.py` (båda lägena); övergångarna formellt bevisade, se "Formella bevis" |
-| `genlock_timing.v` | Tidsbas som `video_timing.v`, men kan låsas till ingångens fält (låglatensläget); 720p50-rad för PAL. En enstaka tidig trigger kortar inte bilden | `sim/test_m2.py::m2_low_latency`, `sim/test_fb.py`, formellt bevis |
+| `genlock_timing.v` | Tidsbas som `video_timing.v`, låsbar till ingångens fält (låglatensläget) och 720p50 för PAL. Varje fullständig utgångsbild har en full vsync. `JUMP_AFTER` tidiga triggers klipper efter den fulla synken och hoppar till sista porchraden; den direkt följande återhämtningsbilden kan också korta sin back porch. Övriga bilder är minst `V_TOTAL−1` rader. Både klipp och återhämtningsbild kör hela sista porchraden för att återställa skalning och radindex i `fb_display`; `HOLD` gäller mellan klipp | `sim/test_m2.py::m2_low_latency`, `sim/test_fb.py`, `sim/test_genlock.py`, formellt bevis |
 | `m2_core.v` | M2: en TVP (BT.656 eller separata synkar) → `fb_backend` | `sim/test_m2.py` |
 | `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer → ordström. Reglerna står under M4 nedan | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln för parade rader mot Python-prototypen och fem egenskaper på slumpade radföljder i `model/test_line_mixer_ref.py` |
 | `bt1120_tx.v`, `clocks_1080p.v`, `lt8618_ctrl.v` (+ genererad `lt8618_rom.vh`) | M5: 16-bitars BT.1120 med inbäddad synk, 148,5 MHz-PLL, LT8618SX-uppstart via I2C | `sim/test_bt1120.py`, `sim/test_m5c.py` (hela 1080p-kedjan avkodad som en mottagare), `sim/test_lt8618.py` |
@@ -330,7 +341,7 @@ Två lägen, valbara i menyn medan det kör (`LOW_LATENCY=1` i M4 väljer `LOW`)
 | Utgång vid PAL | 720p60 (var 5:e fält upprepas, ryckigt) | 720p50 (CEA-861-radlängd 1980) |
 | Ingen signal | grå ruta | grå ruta, utgången frigår |
 | Rad som saknas | raden ovanför, därefter förra fältets rad | det som fanns i ringens plats 16 rader tidigare |
-| Falsk fältstart, brus på ingången | påverkar inte utgångens timing | en tidig trigger ignoreras; tre i följd ger en kort bild, sedan ingen fler på 32 bilder |
+| Falsk fältstart, brus på ingången | påverkar inte utgångens timing | en tidig trigger ignoreras; `JUMP_AFTER` tidiga i följd ger ett klipp med full vsync. `HOLD` spärrar nya klipp. Bara klippet och den direkt följande återhämtningsbilden får vara kortare än `V_TOTAL−1`; båda kör en full synkpuls |
 
 Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning (dess kamfilter arbetar över flera rader) och skärmens kommer till.
 
@@ -340,7 +351,7 @@ Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning 
 
 **Risk att prova på hårdvara:** en del skärmar gillar inte att antalet rader per bild växlar (750/751), och vad en skärm gör med den korta bilden vid omlåsning är inte känt. CVBS2HDMI kör samma knep (524/525 rader) utan problem på vanliga skärmar. XR-glasögon tar enligt navets anteckningar inte emot 720p alls; `LOW` är för skärmar och goggles som gör det. Testat i simulering: `sim/test_m2.py::m2_low_latency` (låsning, bildperiod = fältperiod, pixlar mot modell) och `sim/test_fb.py` (lika långa bilder, fält utan rad 1, falsk fältstart, källa som flyttar sig).
 
-**Lägesbyte under drift är simulerat** (`sim/test_fb.py::test_mode_switch_buf_low_buf`, `ll_mode` 1 mitt i ett fält och 0 igen sent i ett fält, fem fält `BUF`, sex `LOW`, sju `BUF`). Kontrollerat vid utgången: inget X/Z på r, g, b, de, hsync, vsync efter första bilden efter varje byte; varje bild är mellan V_TOTAL−1 och V_TOTAL+8 rader från vsync till vsync (47–49 från tredje bilden efter ett byte); inga SDRAM-protokollfel. `BUF` → `LOW`: resten av bilden vid bytet och bilderna fram till första triggern från ett helt fält har ingen video (fältet skrivaren gick med i triggar inte), sedan visar varje bild ett helt fält, i följd, det senaste. `LOW` → `BUF`: vid detta tests bytesfas har bilderna fram till första publicerade fältet efter bytet ingen video, sedan är varje rad rätt och varje bild ett fält. OVN-F1 nedan visar en annan bytesfas där detta inte gäller. Testet hittade ett fel som är rättat i två delar: `fb_display.v` behöll "har ett publicerat fält" från tiden före `LOW`, och `fb_sdram.v` publicerade det halva fält skrivaren gick med i (bara de sista raderna lagrade, ingen reserv att falla tillbaka på). Första bilden visade därför rad 0 ur bufferten som låg där före `LOW` (ett 7 fält gammalt fält) upprepad över de rader skrivaren inte hunnit till. Nu glöms publicerade fält medan `LOW` är aktivt, och fältet skrivaren gick med i släpps utan publicering (samma sak vid start: första hela fältet är det första som visas). Utan vardera delen faller testet (körd en gång för hand med var och en borttagen). Negativ kontroll: `test_mode_switch_checks_catch_faults` (fel som läggs in i testbänken, inte i RTL: fel tagg på ett ord, X på r, extra vsync-puls) måste fångas var och en av sin kontroll. Störningskampanjen 2026-10-07 visar att påståendet om första bilden efter `BUF` → `LOW` inte gäller i allmänhet: i 14 av 18 frön med byte till `LOW` har den bilden video, och bilder innan genlocken har låst kan blanda det nya fältet med ringplatser som inte skrivits sedan bytet (Core #17, `sim/test_fb.py::test_low_after_switch_shows_whole_fields`, xfail).
+**Lägesbyte under drift är simulerat** (`sim/test_fb.py::test_mode_switch_buf_low_buf`: fem fält `BUF`, sex `LOW`, sju `BUF`). Efter första bilden efter varje byte finns inga X/Z på RGB, DE, HSYNC eller VSYNC, och SDRAM-modellen rapporterar inga protokollfel. Varje komplett bild har exakt en full vsync-puls. Bildlängden är `V_TOTAL−1..V_TOTAL+8` rader under stabilisering och därefter `V_TOTAL−1..V_TOTAL+1`; enbart ett avsiktligt klipp och dess direkt följande återhämtningsbild får underskrida `V_TOTAL−1`. Återhämtningsbilden måste nå minst `V_ACTIVE+V_FP+V_SYNC+1` rader. Det finns inget generellt undantag vid lägesbyte för saknad eller extra synkpuls. `BUF` → `LOW`: fältet som skrivaren gick med i startar ingen bild; därefter visas hela fält när en trigger från `LOW` kommer. I detta tests bytesfas, `LOW` → `BUF`: publicerade fält glöms medan `LOW` är aktivt och fältet skrivaren gick med i släpps utan publicering, så första hela publicerade fältet visas. Testet rättade att `fb_display.v` behöll ett gammalt `have_pub` och att `fb_sdram.v` publicerade det halva fältet vid start/byte. `test_mode_switch_checks_catch_faults` behåller negativa kontroller för fel ordtagg, X på RGB och extra vsync. Den äldre 2026-10-07 kampanjen såg bildblandning efter `BUF` → `LOW` i 14 av 18 frön; detta är pre-fix-historik kring Core #17, inte en aktuell xfail. Fable rapporterade #17/#18 stängda på `e113cf6`; C1:s frysta svit har inga xfails.
 
 ## Apicula-fällor (från otanl/CVBS2HDMI, kontrollerade 2026-10-04)
 
@@ -355,16 +366,18 @@ Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning 
 
 ## Formella bevis
 
-`formal/run.sh` (cirka en minut, ingår i testsviten via `tools/test_formal.py`) bevisar med k-induktion i yosys, utan extern lösare:
+`formal/run.sh` tar flera minuter och ingår i testsviten via `tools/test_formal.py`; C1-kandidatens frysta körning tog 572,163 s och gav 7 `PROVEN`-bevis samt 14 `CONTROL OK` i negativa kontroller. Bevisen använder k-induktion i yosys utan extern lösare:
 
 | Modul | Bevisat | Negativ kontroll |
 |---|---|---|
 | `async_fifo.v` (djup 4 och 8) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under |
-| `genlock_timing.v` | med fria lock/trig/h_alt: räknarna håller sig inom gränserna, varje bild slutar inom V_TOTAL + MAX_WAIT rader, varje bild som inte är en avsiktlig omlåsning har minst V_TOTAL − 1 rader, och två omlåsningar ligger minst HOLD bildstarter isär | utan väntegränsen kan en bild stå still; med två överhoppade rader blir en bild för kort; utan spärrtiden kan två korta bilder följa på varandra |
+| `genlock_timing.v` | med fria `lock`, `trig`, `h_alt` och `rst` på liten geometri: räknarna håller sig inom gränserna, varje bild slutar inom `V_TOTAL+MAX_WAIT`, exakt en vsyncpuls registreras per bild med exakt `V_SYNC` synkrader. Normala bilder är minst `V_TOTAL−1`; bara avsiktligt klipp och direkt följande återhämtningsbild får vara kortare, och återhämtningen är minst `V_SYNC_END+1` rader. `HOLD` gäller mellan klipp | borttagen väntegräns, två överhoppade porch-rader i en normalbild, borttagen `HOLD`, tappad sync i klippet och återhämtningsflagga som fastnar |
 | `cdc_sync.v` `toggle_rx` (radbegäran, publicering, lågfördröjningstrigger i `fb_backend.v`) | två fria klockor, högst 3 flanker av den ena mellan två av den andra (27–108 MHz mot 74,25 MHz), ett sampel mitt i en ändring får bli vilket värde som helst: med vändning högst var 16:e sändarklocka och data som hålls 16 klockor tappas eller dubbleras ingen händelse, varje händelse tas emot inom 4 mottagarflanker, och mottagen data är den skickade | flanken tagen direkt från andra domänen ger fel data; vändning var 8:e klocka tappar en händelse; data som ändras efter 2 klockor kommer fram fel |
 | `cdc_sync.v` `toggle_tx` (lågfördröjningstriggerns sändarsida) | en klocka, fria begäranden: vändningar minst 16 klockor isär, data hålls från vändning till vändning, varje begäran skickas inom 16 klockor med den senaste datan; det är sändarvillkoren i raden ovan | en sändare som vänder direkt på varje begäran bryter avståndet |
 | `cdc_sync.v` `sync2` (`ll_mode`) | lägesbiten ändras bara på den egna klockans flank och är rätt från tredje flanken efter ett byte; domänerna är bara oense under de tre flankerna | utan `sync2` ändras biten mellan flankerna; efter två flanker är den inte säkert inställd |
 | `fb_display.v` (radbuffertens platser) | med den riktiga tidsbasen: en rad som begärs under en aktiv utrad hamnar på en plats som inte läses under resten av raden | begäran till platsen som läses faller |
+
+Periodisk källförflyttning och fasgränsen provas separat i `sim/test_genlock.py`, inte formellt: senast vid den andra följande nominella triggern ligger bildstart högst en H-linje efter.
 
 Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal/`. Vad som inte är bevisat om klockdomänsövergångarna, och varför, står i [formal/README.md](formal/README.md): bland annat att två synksteg räcker mot metastabilitet, att SDRAM-sidan hinner skriva en rad, lågfördröjningsringen. Radantalet som följer lågfördröjningstriggern kunde ändras på vägen till pixeldomänen när ett fält var mycket kort; det hålls nu av `toggle_tx` (`sim/test_ll_payload.py`).
 
@@ -372,7 +385,7 @@ Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal
 
 Till 2026-10-07 gick 27 MHz-domänens kritiska väg från menyns band och kanal genom kanaltabellen i `puck_ui.v` till RX5808:s skiftregister, och siffrorna för MHz räknades med division ur samma tabellutgång. Domänen nådde 98,5 MHz efter routning i bygget av 62a69be, 90 MHz i a6640b0 och 65 MHz i f13581c; skillnaden var placering. Nu är tabelluppslaget ett register (`chan`), och MHz-siffrorna ligger som en egen tabell per kanal (konstanta divisioner som försvinner i syntesen) i samma registersteg. SPI-skrivningen vid kanalbyte startar två klockor senare än förut.
 
-Byggt ur a5b934f med alla fyra seeds (`SEED=n gateware/build.sh m6_puck_proto`), efter routning:
+Historisk seedtabell från bygget ur `a5b934f` (`SEED=n gateware/build.sh m6_puck_proto`), efter routning:
 
 | Seed | 27 MHz-domän | SDRAM | Pixel | Dekoder A / B | Kritisk väg i 27 MHz-domänen |
 |---|---|---|---|---|---|
@@ -381,10 +394,10 @@ Byggt ur a5b934f med alla fyra seeds (`SEED=n gateware/build.sh m6_puck_proto`),
 | 2 | 127 MHz | 99 MHz | 123 MHz | 135 / 122 MHz | mätarsidans text till OSD-tecknet |
 | 3 | 115 MHz | 106 MHz | 128 MHz | 156 / 117 MHz | mätarsidans text till OSD-tecknet |
 
-Alla fyra routar, utan `ERROR` i loggen, med 12 600 LUT och 25 BSRAM. Kravet var då 54 MHz för 27 MHz-domänen och 75 MHz för övriga. Bygget ur 330cc9a (mixerns regel för dubbeldåliga rader och låsflaggan i loggen tillkommer) gav med seed 2 123 MHz i 27 MHz-domänen.
+Alla fyra seeds routade i den historiska körningen med 12 600 LUT och 25 BSRAM. Vid den körningen krävdes 54 MHz för 27 MHz-domänen och 75 MHz för övriga. Bygget ur `330cc9a` (med mixerns regel för dubbeldåliga rader och låsflaggan i loggen) gav seed 2 med 123 MHz i 27 MHz-domänen. Dessa värden är seedhistorik, inte C1-mätvärden.
 
-- **Seed.** Före ändringen kunde nextpnr inte lägga kortets klocka på det globala klocknätet med seed 0 och 1 ("Can't route the clocks.clk_27 net"). Med det här nätet routar alla fyra. Varför de två misslyckades förut är inte utrett; att det försvann med en mindre kombinatorisk väg i samma domän är en iakttagelse, inte en förklaring. `boards/m6_puck_proto.seed` håller fortfarande seed 2, och `build.sh` tar `SEED=<n>` och säger till när klockroutningen misslyckas.
-- **Kravet på 54 MHz** i `boards/m6_puck_proto.sdc` (dubbla klockans frekvens) är borttaget 2026-10-08: domänen klarar 75 MHz med alla fyra seeds, så M6 får samma krav som alla andra byggen. `build.sh` tar fortfarande en `boards/<top>.sdc` om den finns.
+- **Seed.** Den historiska tabellen ovan gäller `a5b934f`; den ska inte användas för att förutsäga varje seed på senare källor. På C1-källan `3aed0b7` misslyckades seed 2 under global routning med `Can't route the clocks.clk_27 net`, medan seed 3 routade vid 75 MHz. Orsaken till skillnaden är inte utredd. `boards/m6_puck_proto.seed` är fortfarande 2; för C1-bygget måste kommandot ange `SEED=3 FREQ_MHZ=75`. `build.sh` tar `SEED=<n>` och rapporterar klockroutningsfel.
+- **Klockkrav.** `boards/m6_puck_proto.sdc` saknas i C1, så `clocks.clk_27` har samma 75 MHz-krav som övriga klockor. C1 seed 3 klarar det efter routning; seed 2 saknar färdig routing och därmed saknas slutligt timingresultat. `build.sh` läser fortfarande en `boards/<top>.sdc` om en sådan finns. C2:s senare seed-2-krav återstår separat.
 
 ## Verifiering 2026-10-08
 
@@ -399,17 +412,11 @@ av kampanjens eget rundlås.
 Mixerns återkomsttest täcker nu både A och B, med den gamla domarregeln
 som negativ kontroll. En separat diagnostik för Core #18 kontrollerar
 modellens fältstarter mot F/radnummer i den utström som matchat RTL.
-Bara `UnmarkedOutputField` får xfail; modell- och bänkfel är oväntade.
+Fable rapporterade #17/#18 stängda på `e113cf6`; den frysta C1-sviten har
+447 pass och inga xfails. Modell- och bänkfel är oväntade.
 Regeln för mixerns F-bit ändrades 2026-10-08 (#18), och #17 rättades samma dag.
 
-En ny uppspelning av frö 126 motbevisar antagandet att alla bilder före
-första publicerade BUF-fältet saknar video efter LOW → BUF. Ett byte
-mellan sista släckradens grindprovtagning och första aktiva raden kan
-behålla LOW:s videoflagga i BUF. Alla 72 RGB-prov på den aktiva bilden
-avvek från blankbilden, även innan `have_pub` blev ett. Detta är ett
-öppet simuleringsfynd, OVN-F1; ingen RTL-rättning har gjorts. Fynd,
-källhashar och nästa rättningspaket finns i navets
-`docs/overnight/2026-10-07/LOW_BUF_FINDING.md`.
+OVN-F1 är historisk evidens från källan `7cc4eda`: 72 RGB-prov avvek från blankbilden i en bild efter `LOW` → `BUF`, före `have_pub`. Körningen gjordes 2026-10-08 och arkiverades under `docs/overnight/2026-10-07/LOW_BUF_FINDING.md`. En strikt checker/hybrid-replay med seed 126 mot `e113cf6` återstår; det finns därför ingen fastställd öppen/stängd status för OVN-F1 på `e113cf6` eller C1-källan `3aed0b7`. Blanda inte den äldre observationen med C1-resultatet.
 
 Checksumkontrollen gäller åter varje SDRAM-läsning, även utan efterföljande
 bildbeslut. För liten visningstäckning är ett benchfel även vid lägesbyte.
