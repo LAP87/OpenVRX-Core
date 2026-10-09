@@ -133,6 +133,11 @@ module tb_chain;
     reg [9:0]  w_line;
     reg [31:0] cs;
     reg        cs_x;
+    reg        lb_run_active = 0;
+    reg [12:0] lb_run_first, lb_run_last;
+    integer    lb_run_first_cyc, lb_run_last_cyc;
+    real       lb_run_first_ns, lb_run_last_ns;
+    integer    lb_write_count = 0, lb_run_count = 0;
     always @(posedge sd_clk) if (!rst) begin
         lls_d <= be.ll_s;
         if (lls_d != be.ll_s) $fwrite(fs, "L %0d %0d\n", cyc, be.ll_s);
@@ -181,6 +186,38 @@ module tb_chain;
         if (trig_d != be.s_ll_trig) $fwrite(fs, "T %0d %0d %0d\n", cyc, be.s_ll_low, be.s_ll_lines);
         if (be.ll_take && be.e_idx == 9'd52)
             $fwrite(fs, "Q %0d %0d %0d %08x %0d %.1f\n", be.e_line[3:0], be.e_field, be.e_line, be.f_data[31:0], npop, $realtime);
+        // Compact accepted line-buffer writes: each LW is a maximal run of
+        // physically consecutive addresses; L52 records the displayed sample
+        // word and its writer provenance. The Python model expands LW itself.
+        if (be.lbw_we) begin
+            lb_write_count = lb_write_count + 1;
+            if (be.lbw_addr[8:0] == 9'd52)
+                $fwrite(fs, "L52 %0d %08x %0d %0d %0d %0d %0d %.1f\n", be.lbw_addr,
+                        be.lbw_data, npop, be.ll_s, be.fb.f_buf, be.fb.f_src, be.fb.f_blank, $realtime);
+            if (lb_run_active && be.lbw_addr != lb_run_last + 13'd1) begin
+                $fwrite(fs, "LW %0d %0d %0d %0d %.1f %.1f\n", lb_run_first, lb_run_last,
+                        lb_run_first_cyc, lb_run_last_cyc, lb_run_first_ns, lb_run_last_ns);
+                lb_run_count = lb_run_count + 1;
+                lb_run_active = 1'b0;
+            end
+            if (!lb_run_active) begin
+                lb_run_active = 1'b1;
+                lb_run_first = be.lbw_addr;
+                lb_run_first_cyc = cyc;
+                lb_run_first_ns = $realtime;
+            end
+            lb_run_last = be.lbw_addr;
+            lb_run_last_cyc = cyc;
+            lb_run_last_ns = $realtime;
+            // The coverage oracle needs the exact completion edge. Do not let a
+            // physically consecutive run merge across the end of one 360-word line.
+            if (be.lbw_addr[8:0] == 9'd359) begin
+                $fwrite(fs, "LW %0d %0d %0d %0d %.1f %.1f\n", lb_run_first, be.lbw_addr,
+                        lb_run_first_cyc, cyc, lb_run_first_ns, $realtime);
+                lb_run_count = lb_run_count + 1;
+                lb_run_active = 1'b0;
+            end
+        end
     end
 
     // ---- pixel domain log: frame geometry, source line and word per output line, the mode
@@ -195,7 +232,10 @@ module tb_chain;
             if (be.x == 4 && be.y == 0) $fwrite(fp, "B %0d\n", be.disp.low_r);
             if (be.x == 300 && be.y < V_ACTIVE) $fwrite(fp, "Y %0d %0d\n", be.y, be.disp.src_cur);
             // the word read for source pixel 104/105 (x = 300 is window pixel 140, source pixel 105)
-            if (be.x == 302 && be.y < V_ACTIVE) $fwrite(fp, "X %0d %08x %.1f\n", be.y, be.lb_rdata, $realtime);
+            if (be.x == 302 && be.y < V_ACTIVE) begin
+                $fwrite(fp, "RAW %0d %08x %.1f\n", be.y, be.lb_rdata, $realtime);
+                $fwrite(fp, "X %0d %08x %.1f\n", be.y, be.disp.lb_rdata, $realtime);
+            end
         end
     end
 
@@ -221,6 +261,7 @@ module tb_chain;
         fm = $fopen("mix.txt", "w");
         fs = $fopen("sd.txt", "w");
         fp = $fopen("pix.txt", "w");
+        $fwrite(fs, "LBTRACE 1\n");
         #500 rst = 0;
         fork
             begin #(START_A); run_a = 1; end
@@ -228,6 +269,13 @@ module tb_chain;
         join
         wait (ia == N_A && ib == N_B);
         #(TAIL);
+        #1;
+        if (lb_run_active) begin
+            $fwrite(fs, "LW %0d %0d %0d %0d %.1f %.1f\n", lb_run_first, lb_run_last,
+                    lb_run_first_cyc, lb_run_last_cyc, lb_run_first_ns, lb_run_last_ns);
+            lb_run_count = lb_run_count + 1;
+        end
+        $fwrite(fs, "LBEND %0d %0d\n", lb_write_count, lb_run_count);
         $fwrite(fm, "end %0d %0d\n", overflow, cur);
         $fwrite(fs, "end %0d\n", mem.errors);
         $fclose(fm); $fclose(fs); $fclose(fp);

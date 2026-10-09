@@ -68,6 +68,7 @@ import bt656  # noqa: E402
 import fb_ref as fb  # noqa: E402
 import fuzz_stream as fz  # noqa: E402
 import line_mixer_ref as lm  # noqa: E402
+import ll_ring_ref as ring  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
 MAX_WAIT, HOLD = 8, 32
@@ -430,11 +431,19 @@ class Frame:
         self.sfield_new = 0             # the store's field being written at the frame start
 
 
+class StoreFrames(list):
+    """Store frame decisions plus independently derived provenance for BUF ring writes."""
+
+    def __init__(self):
+        super().__init__()
+        self.buffer_samples = {}         # (physical address, timestamp) -> source metadata
+
+
 def check_store(logs, words, org, run, fd):
     """Replay the store's log through fb_ref (a fresh model after each low-latency period);
     every read against the SDRAM content. Returns the frames with what they read."""
     mem, morg = {}, {}
-    st, frames, pending, selected, prev_st = None, [], [], [], None
+    st, frames, pending, selected, prev_st = None, StoreFrames(), [], [], None
     active_read = None
     sfield, buf_field = 0, {}             # the store's fields in order; buffer -> its field
     stored = {}
@@ -446,7 +455,7 @@ def check_store(logs, words, org, run, fd):
                 prev_st = st if st is not None else prev_st
                 st, pending, selected, active_read = None, [], [], None
             continue
-        if e in ('G', 'E', 'T', 'Q', 'end'):
+        if e in ('G', 'E', 'T', 'Q', 'LBTRACE', 'LBEND', 'LW', 'end'):
             continue
         if e == 'w':
             addr, val = int(ev[1]), hexnum(ev[2])
@@ -455,6 +464,46 @@ def check_store(logs, words, org, run, fd):
                        f'SDRAM write at {addr} interleaved with read {active_read["src"]} '
                        f'started at cycle {active_read["cycle"]}')
             mem[addr], morg[addr] = val, cur_org
+            continue
+        if e == 'L52':
+            try:
+                addr, data = int(ev[1]), hexnum(ev[2])
+                _npop, low, buf, line, blank = map(num, ev[3:8])
+                t_ns = float(ev[8])
+            except (IndexError, TypeError, ValueError):
+                fd.add('store', 'log', 0, f'malformed line-buffer word-52 marker {ev}')
+                continue
+            if data is None or low is None or addr % 512 != 52 or (
+                    not low and (line is None or blank is None or (not blank and buf is None))):
+                fd.add('store', 'log', t_ns, f'invalid line-buffer word-52 marker {ev}')
+                continue
+            if low:
+                continue
+            if blank:
+                if data != BLACK:
+                    fd.add('store', 'read', t_ns, f'blank BUF word-52 at address {addr} is {data:08x}, not BLACK')
+                frames.buffer_samples[(addr, t_ns)] = dict(origin=None, src=(fb.BLANK, line), blank=True)
+                continue
+            read = active_read
+            if read is None or not read['started']:
+                fd.add('store', 'log', t_ns,
+                       f'BUF word-52 write at address {addr} has no accepted SDRAM-read snapshot')
+                continue
+            slot = addr // 512
+            if read['slot'] != slot:
+                fd.add('store', 'log', t_ns,
+                       f'BUF word-52 address {addr} uses slot {slot}, accepted read selected slot {read["slot"]}')
+            if (buf, line) != read['src']:
+                fd.add('store', 'log', t_ns,
+                       f'BUF word-52 source {(buf, line)} does not match accepted read {read["src"]}')
+            if read['content'] is None or read['content'][52] is None:
+                fd.add('store', 'read', t_ns,
+                       f'BUF word-52 at address {addr} has no independent SDRAM value in the accepted-read snapshot')
+            elif data != read['content'][52]:
+                fd.add('store', 'read', t_ns,
+                       f'BUF word-52 at address {addr} is {data:08x}, accepted-read snapshot has {read["content"][52]:08x}')
+            frames.buffer_samples[(addr, t_ns)] = dict(origin=read['origin'], src=read['src'],
+                                                        sfield=read['sfield'], blank=False)
             continue
         if st is None:
             old_ok = prev_st.ok if prev_st is not None else None
@@ -623,7 +672,10 @@ def check_store(logs, words, org, run, fd):
     if active_read is not None:
         fd.add('store', 'log', 0,
                f'accepted read {active_read["src"]} from cycle {active_read["cycle"]} never completed')
-    return [f for f in frames if f is not None]
+    result = StoreFrames()
+    result.extend(f for f in frames if f is not None)
+    result.buffer_samples = frames.buffer_samples
+    return result
 
 
 # ---------------------------------------------------------------- pixel domain
@@ -666,12 +718,84 @@ def check_display(sc, logs, frames, words, org, run, fd):
 
     end_pc = (fz.RST_NS + sc.end_ns) / T_P
     by_pc = [(round(fr.cyc * T_S / T_P), fr) for fr in frames]
-    # low-latency ring: word 52 of each line as written, per slot
-    ring = {}
+    # Rebuild the shared ring from accepted physical-address runs and word-52
+    # writes. The expected source data and completion history never use a DUT
+    # validity bit or the displayed X value as an oracle.
+    ring_model = ring.LineBuffer()
+    markers = [ev for ev in logs['sd'] if ev[0] == 'LBTRACE']
+    trace_required = bool(pix)
+    if trace_required and markers != [['LBTRACE', '1']]:
+        fd.add('display', 'ring_trace', 0, f'expected one LBTRACE 1 marker, got {markers[:2]}')
+    endings = [ev for ev in logs['sd'] if ev[0] == 'LBEND']
+    ring_runs, ring_samples = [], []
     for ev in logs['sd']:
-        if ev[0] == 'Q':
-            ring.setdefault(int(ev[1]), []).append((float(ev[6]), hexnum(ev[4]), int(ev[5])))
-    ring_t = {s: [q[0] for q in qs] for s, qs in ring.items()}
+        if ev[0] == 'LW':
+            try:
+                first, last, first_cyc, last_cyc = map(int, ev[1:5])
+                first_ns, last_ns = map(float, ev[5:7])
+                if first > last or first_cyc > last_cyc or first_ns > last_ns:
+                    raise ValueError('range ends before it starts')
+                ring_runs.append((first_ns, last_ns, first, last))
+            except (IndexError, ValueError):
+                fd.add('display', 'ring_trace', 0, f'malformed accepted-write run {ev}')
+        elif ev[0] == 'L52':
+            try:
+                addr, data = int(ev[1]), hexnum(ev[2])
+                npop, low, buf, line, blank = (num(x) for x in ev[3:8])
+                t_ns = float(ev[8])
+                if data is None or any(v is None for v in (npop, low)) or addr % 512 != 52:
+                    raise ValueError('invalid address, data, or mode metadata')
+                ring_samples.append((t_ns, addr, data, npop, bool(low), buf, line, blank))
+            except (IndexError, TypeError, ValueError):
+                fd.add('display', 'ring_trace', 0, f'malformed word-52 accepted-write marker {ev}')
+    if trace_required and len(endings) != 1:
+        fd.add('display', 'ring_trace', 0, f'expected one LBEND summary, got {endings[:2]}')
+    elif endings:
+        try:
+            logged_writes, logged_runs = map(int, endings[0][1:3])
+            expanded_writes = sum(last - first + 1 for _, _, first, last in ring_runs)
+            if (logged_writes, logged_runs) != (expanded_writes, len(ring_runs)):
+                fd.add('display', 'ring_trace', 0,
+                       f'LBEND counts {(logged_writes, logged_runs)}, expanded accepted trace '
+                       f'has {(expanded_writes, len(ring_runs))}')
+        except (IndexError, ValueError):
+            fd.add('display', 'ring_trace', 0, f'malformed LBEND summary {endings[0]}')
+    for t_ns, addr, data, npop, low, buf, line, blank in ring_samples:
+        matches = [r for r in ring_runs if r[2] <= addr <= r[3] and r[0] <= t_ns <= r[1]]
+        if len(matches) != 1:
+            fd.add('display', 'ring_trace', t_ns,
+                   f'word-52 write at address {addr} belongs to {len(matches)} accepted-address runs')
+    for first_ns, last_ns, first, last in ring_runs:
+        for addr in range(first, last + 1):
+            if addr % 512 != 52:
+                continue
+            count = sum(1 for t_ns, sample_addr, *_ in ring_samples
+                        if sample_addr == addr and first_ns <= t_ns <= last_ns)
+            if count != 1:
+                fd.add('display', 'ring_trace', last_ns,
+                       f'accepted-address run {first}..{last} contains address {addr} with {count} word-52 markers')
+    ring_events = ([(last_ns, 0, first, last) for first_ns, last_ns, first, last in ring_runs] +
+                   [(t_ns, 1, addr, data, npop, low, buf, line, blank)
+                    for t_ns, addr, data, npop, low, buf, line, blank in ring_samples])
+    for event in sorted(ring_events, key=lambda e: (e[0], e[1])):
+        if event[1] == 0:
+            try:
+                ring_model.accept_range(event[2], event[3], event[0])
+            except ValueError as err:
+                fd.add('display', 'ring_trace', event[0], str(err))
+            continue
+        t_ns, _, addr, data, npop, low, buf, line, blank = event
+        provenance = dict(npop=npop, low=low, buf=buf, line=line, blank=bool(blank))
+        if not low:
+            source = getattr(frames, 'buffer_samples', {}).get((addr, t_ns))
+            if source is None:
+                provenance['origin_missing'] = True
+            else:
+                provenance.update(source)
+        try:
+            ring_model.record_sample(addr, data, t_ns, provenance)
+        except ValueError as err:
+            fd.add('display', 'ring_trace', t_ns, str(err))
     checked = 0
     for pf in pf_all:
         if not pf['video'] or in_switch(pf['pc']) or pf['pc'] > end_pc:
@@ -693,17 +817,48 @@ def check_display(sc, logs, frames, words, org, run, fd):
             for y in range(V_ACTIVE):
                 slot = pf['src'][y] & 15
                 t_rd = pf['t'][y] - T_P
-                i = bisect.bisect_left(ring_t.get(slot, []), t_rd)
-                if not i:
-                    fd.add('display', 'll_empty', t_frame, f'output line {y}: ring slot {slot} never written')
+                t_valid = pf['t'][y] - 2 * T_P
+                if not ring_model.valid_at(slot, t_valid):
+                    want = BLACK
+                    provenance = None
+                else:
+                    sample = ring_model.sample_event_at(slot, 52, t_rd)
+                    if sample is None:
+                        fd.add('display', 'll_empty', t_frame,
+                               f'output line {y}: initialized ring slot {slot} has no earlier word-52 write')
+                        break
+                    _, want, provenance = sample
+                if pf['shown'][y] != want:
+                    fd.add('display', 'll_word', t_frame,
+                           f'output line {y}: shows {pf["shown"][y]}, ring model expects {want:08x} '
+                           f'for slot {slot} (valid {ring_model.valid_at(slot, t_valid)})')
                     break
-                _, word, npop = ring[slot][i - 1]
-                if pf['shown'][y] != word:
-                    fd.add('display', 'll_word', t_frame, f"output line {y}: shows {pf['shown'][y]}, slot {slot} held {word}")
-                    break
-                k = org[npop] if npop < len(org) else -1
-                if camera_age(fd, k, k_new, t_frame, f'LOW output line {y}'):
-                    break
+                if provenance is not None:
+                    if provenance.get('low'):
+                        npop = provenance.get('npop')
+                        if npop is None or npop < 0 or npop >= len(org):
+                            fd.add('display', 'll_origin', t_frame,
+                                   f'output line {y}: LOW word-52 at slot {slot} has invalid mixer word index {npop}')
+                            break
+                        k = org[npop]
+                        if not isinstance(k, int) or k < 0:
+                            fd.add('display', 'll_origin', t_frame,
+                                   f'output line {y}: LOW mixer word {npop} has no independent camera-field origin')
+                            break
+                    elif provenance.get('blank'):
+                        k = None
+                    elif provenance.get('origin') == 'unstored':
+                        fd.add('store', 'unstored', t_frame,
+                               f'LOW output line {y}: BUF slot {slot} contains a line not stored since its buffer was taken')
+                        break
+                    elif provenance.get('origin_missing') or not isinstance(provenance.get('origin'), int) or provenance['origin'] < 0:
+                        fd.add('display', 'll_origin', t_frame,
+                               f'output line {y}: initialized BUF slot {slot} has no independent camera-field origin')
+                        break
+                    else:
+                        k = provenance['origin']
+                    if k is not None and camera_age(fd, k, k_new, t_frame, f'LOW output line {y}'):
+                        break
                 checked += 1
             continue
         near = [fr for pc, fr in by_pc if abs(pc - (pf['pc'] - H_TOTAL)) < 40]
@@ -1039,6 +1194,60 @@ def test_store_rejects_out_of_order_accepted_read_start():
     assert any('does not match selected source' in item['detail'] for item in fd.items), fd.items
 
 
+def l52_for_fixture(logs, data, *, low='0', buf='0', line='5', blank='0', slot=2):
+    marker = ['L52', str(slot * 512 + 52), f'{data:08x}', '0', low, buf, line, blank, '2000.0']
+    start = next((i for i, ev in enumerate(logs['sd']) if ev[0] == 'I'), None)
+    if start is None:
+        start = next((i for i, ev in enumerate(logs['sd']) if ev[0] == 'R'), len(logs['sd']))
+        logs['sd'].insert(start, marker)
+    else:
+        logs['sd'].insert(start + 1, marker)
+    return marker
+
+
+def test_store_checks_buf_word52_against_accepted_snapshot():
+    logs, old_words, _ = accepted_read_fixture()
+    l52_for_fixture(logs, old_words[52])
+    fd = Findings()
+    frames = check_store(logs, [], [], [], fd)
+    assert fd.groups() == [], fd.items
+    assert frames.buffer_samples[(2 * 512 + 52, 2000.0)]['src'] == (0, 5)
+
+
+@pytest.mark.parametrize('fault, expected', [
+    ('wrong_word', 'accepted-read snapshot'),
+    ('missing_start', 'no accepted SDRAM-read snapshot'),
+    ('missing_buf', 'invalid line-buffer word-52 marker'),
+    ('missing_line', 'invalid line-buffer word-52 marker'),
+])
+def test_store_rejects_bad_buf_word52_trace(fault, expected):
+    logs, old_words, _ = accepted_read_fixture(marker=(fault != 'missing_start'))
+    data = old_words[52] ^ (1 if fault == 'wrong_word' else 0)
+    l52_for_fixture(logs, data, buf='x' if fault == 'missing_buf' else '0',
+                    line='x' if fault == 'missing_line' else '5')
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert 'store/log' in fd.groups() or 'store/read' in fd.groups(), fd.items
+    assert any(expected in item['detail'] for item in fd.items), fd.items
+
+
+def test_store_ignores_unused_low_metadata_but_accepts_blank_buf_without_buffer_id():
+    low_only = {'sd': [['L52', str(9 * 512 + 52), 'a5000034', '10', '1', 'x', 'x', 'x', '100.0']]}
+    fd = Findings()
+    check_store(low_only, [], [], [], fd)
+    assert not fd.items, fd.items
+
+    blank_sum = checksum([BLACK] * 360)
+    blank = {'sd': [
+        ['F', '3'], ['S', 'blank', '3'],
+        ['L52', str(2 * 512 + 52), f'{BLACK:08x}', '0', '0', 'x', '3', '1', '100.0'],
+        ['R', '1', '2', f'{blank_sum:08x}'], ['end', '0'],
+    ]}
+    fd = Findings()
+    check_store(blank, [], [], [], fd)
+    assert not fd.items, fd.items
+
+
 @pytest.mark.parametrize('line_count, expected', [
     (758, []), (759, ['output/long_frame']), (748, ['output/short_frames']),
 ])
@@ -1145,3 +1354,46 @@ def test_no_display_coverage_is_a_failure_even_with_switches(tmp_path, monkeypat
     result = run_seed(49, classes, force=tuple(classes), work=tmp_path / 'empty', keep=True)
     assert result['checked'] == 0
     assert result['result'] == 'fail' and result['groups'] == ['bench/few_lines'], result
+
+
+def ring_display_fixture(*, complete=True, fault=None):
+    """One LOW frame with a known accepted write history, independent of DUT state."""
+    use_geometry('scaled')
+    start = 500000
+    word = 0x66778899
+    pix = [['V', str(start), '1', '1', '1', '0', str(V_TOTAL)], ['B', '0']]
+    for y in range(V_ACTIVE):
+        pix.extend((['Y', str(y), '0'],
+                    ['X', str(y), f'{word if complete else BLACK:08x}',
+                     str((start + y * H_TOTAL + 302) * T_P)]))
+    sd = [['LBTRACE', '1'], ['LW', '0' if complete else '52', '359', '1', '360', '100.0', '200.0'],
+          ['L52', '52', f'{word:08x}', '0', '1', 'x', 'x', 'x', '150.0'],
+          ['LBEND', '360' if complete else '308', '1']]
+    if fault in ('missing_header', 'missing_run', 'missing_sample'):
+        marker = dict(missing_header='LBTRACE', missing_run='LW', missing_sample='L52')[fault]
+        sd = [event for event in sd if event[0] != marker]
+    elif fault == 'all_black':
+        for event in pix:
+            if event[0] == 'X':
+                event[2] = f'{BLACK:08x}'
+    return dict(pix=pix, sd=sd)
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_low_display_checks_virgin_black_and_initialized_words(complete):
+    logs = ring_display_fixture(complete=complete)
+    fd = Findings()
+    sc = type('Scenario', (), {'end_ns': 1e12})()
+    checked = check_display(sc, logs, StoreFrames(), [], [0], [(0, 0)], fd)
+    assert not fd.items, fd.items
+    assert checked == V_ACTIVE
+
+
+@pytest.mark.parametrize('fault', ['missing_header', 'missing_run', 'missing_sample', 'all_black'])
+def test_low_display_rejects_missing_write_trace_or_all_black(fault):
+    logs = ring_display_fixture(fault=fault)
+    fd = Findings()
+    sc = type('Scenario', (), {'end_ns': 1e12})()
+    check_display(sc, logs, StoreFrames(), [], [0], [(0, 0)], fd)
+    expected = 'display/ll_word' if fault == 'all_black' else 'display/ring_trace'
+    assert expected in fd.groups(), fd.items
