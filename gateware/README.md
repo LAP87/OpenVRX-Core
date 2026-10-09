@@ -6,7 +6,7 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 ## Status 2026-10-09
 
-Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; C1-kandidatens nya siffror står separat efter tabellen.
+Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; historiska C1-värden och den accepterade C3-källans aktuella resultat står separat efter tabellen.
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
@@ -17,13 +17,15 @@ Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen frå
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 876 LUT 18 %, 17 BSRAM) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
 | **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 396 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 83 MHz mot 64,8) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 542 LUT 12 %, 0 BSRAM; 27 MHz-domän 177 MHz, dekoderklockorna 122 och 142 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 236 LUT 39 %, 25 BSRAM; SDRAM 101,15 MHz, pixel 123,69 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (29 gröna test i C1-sviten; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 236 LUT 39 %, 25 BSRAM; SDRAM 101,15 MHz, pixel 123,69 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (29 gröna test i C3-sviten; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
 | **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 542 LUT 60 %, 25 BSRAM; SDRAM 100,17 MHz, pixel 120,61 MHz, 27 MHz-domän 117,86 MHz mot 54,05; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
 **Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax nedan kommer från nextpnrs slutrapport efter routning, inte uppskattningen efter placering. M0, M2, M2s och M3 byggdes om 2026-10-07 från `f13581c`; M1, M1s och M2a byggdes 2026-10-06 från `62a69be`. Milstolpetabellens M4/M6-värden ovan hör till 2026-10-08 och byggindata som matchade `7cc4eda`; de ska inte läsas som C1-resultat. Alla fyra HDMI-par verifierades mot M0:s IOB-fuses även i C1-byggena.
 
-C1-kandidaten `3aed0b7` byggdes 2026-10-09. M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för alla fem klockor:
+### Historiska C1-byggen (`3aed0b7`, 2026-10-09)
+
+C1-källan byggdes 2026-10-09. M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för alla fem klockor:
 
 | Topp | Seed | LUT4 | BSRAM | Maxfrekvens efter routning (MHz) | Manifest SHA-256 |
 |---|---:|---:|---:|---|---|
@@ -33,6 +35,19 @@ C1-kandidaten `3aed0b7` byggdes 2026-10-09. M4 seed 0 och M6 seed 3 klarade rout
 På samma C1-källa misslyckades M6 seed 2 under global klockroutning med `Can't route the clocks.clk_27 net`; seed 3 routade. `boards/m6_puck_proto.seed` är fortfarande 2. Reproducera det godkända C1-bygget med `SEED=3 FREQ_MHZ=75 gateware/build.sh m6_puck_proto`. Ingen pin-, IOB-, SDC-, BUFG- eller BOM-ändring gjordes för seedbytet. M6 med seed 2 är ett separat senare krav i C2 och är inte styrkt av seed 3.
 
 C1:s frysta fullsvit gav 447 pass, noll fel, skips eller xfails på 5 376,375 s (1:29:36,375). Den råa körjournalens status är fortfarande `FAIL_SOURCE_CHANGED`: de enda tilläggen var 19 genererade cocotb `.result.xml`-filer. Den separata acceptanskontrollen verifierade hash för samtliga 172 frysta indatafiler och accepterade de 447 pytest-utfallen utan att ändra rå sammanfattning. Formell körning gav 7 `PROVEN`-bevis och 14 förväntade motexempel i negativa kontroller på 572,163 s. Fable rapporterade 433 pass på `e113cf6` och stängde Core #17/#18. Äldre `aece6eb`-utfall (432 pass, 2 xfail på 1:26:02) och `7cc4eda`-baslinjen (395 pass, 1 xfail på 1:25:56) är historiska. Kör ett tungt jobb i taget, enligt navets `AGENTS.md`.
+
+### Accepterad C3-källa `8d7b0e9` (2026-10-09)
+
+Den frysta sviten gav **490 pass**, inga fel, skips, xfails, xpasses eller saknade utfall, på 4 861,264 s (1:21:01,264). Alla 39 testfiler kördes och samtliga 157 indatahashar är oförändrade. Formaltestet gav 7 bevis och 14 verkliga negativa motexempel. Acceptanskvittots SHA-256 är `0ad1443dc8927ba6a721044b1e1b13a26807d3b41e225915a517f65f17111de0`.
+
+M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för samtliga fem klockor:
+
+| Topp | Seed | LUT4 | BSRAM | Maxfrekvens efter routning (MHz) | Manifest SHA-256 |
+|---|---:|---:|---:|---|---|
+| `m4_dual_mix` | 0 | 8 230 | 25 | `mix.b_clk` 163,16; `mix.a_clk` 137,49; `clocks.clk_27` 228,73; `sd_clk` 101,46; `clk_pixel` 104,80 | `135aedd90adfb6bd2ef021fd80fbaf701f73b73c650e20336abc2b7c4b049c53` |
+| `m6_puck_proto` | 3 | 12 625 | 25 | `mix.b_clk` 137,46; `mix.a_clk` 142,65; `clocks.clk_27` 119,70; `sd_clk` 108,87; `clk_pixel` 127,84 | `fc7f2e880052f012de6e0105479f16c9f734be52a2ee24740380c5bc6669b42a` |
+
+M0-referensen och alla fyra HDMI-par har godkända manifest/fuse-kontroller; 24 byggartefakter är arkiverade med acceptanskvittot. M6:s standardseed är fortfarande 2. Dessa seed-3-resultat ersätter inte C2:s senare seed-2-krav. Den nya 260-frökampanjen har inte startat. Inget är provat på hårdvara.
 
 ## Moduler (`rtl/`)
 
@@ -47,7 +62,7 @@ C1:s frysta fullsvit gav 447 pass, noll fel, skips eller xfails på 5 376,375 s 
 | `tvp_sync_rx.v` | Mottagare för separata synksignaler (HSYNC/VSYNC/AVID), självinställande polaritet och bytefas | `sim/test_m1s_input.py` |
 | `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | Ord om två pixlar, klockdomänsbyte, SDRAM-styrning (burstar om 8 ord), BT.601 till RGB utan signerad aritmetik | `sim/test_sdram.py`, `sim/test_m2.py` |
 | `fb_sdram.v`, `fb_display.v`, `field_phase.v` | Fältminne i SDRAM med fyra buffertar: väljer vid varje bildstart vilket fält som visas, håller reda på vilka rader som är lagrade och täcker de som saknas; radmappning med halv rads förskjutning mellan fälten; vilket fält som är det nedre avgörs på ankomsttid. Tiden från återställning till första referensraden räknas inte som ett intervall (till 2026-10-07 gjorde den det, och en progressiv källa vars första referensrad kom ungefär en radtid före ett fältintervall efter starten ritades ett fält en halv rad lägre; hittat med `sim/test_fuzz_chain.py`) | `sim/test_fb.py` mot `model/fb_ref.py` (varje beslut, varje läst rad), `model/test_fb_ref.py`; `sim/test_fb.py::test_first_interval_is_not_measured` |
-| `fb_backend.v`, `cdc_sync.v` | Fältminne + visning som en modul (ord in, RGB ut); delas av M2 och M4. **Låglatensläge** (`ll_mode`): förbi SDRAM, ringbuffert på 16 rader, utgången låst till ingångens fält. Klockdomänsövergångarna (toggle-handskakningar och synkade nivåer) ligger i `cdc_sync.v` | `sim/test_m2.py` (båda lägena); övergångarna formellt bevisade, se "Formella bevis" |
+| `fb_backend.v`, `cdc_sync.v` | Fältminne och visning, delad av M2 och M4. LOW:s 16 ringplatser delar RAM med BUF. En plats blir initialiserad efter accepterade skrivningar till dess ordadresser 0–359 i ordning, i BUF eller LOW. Global reset nollställer giltighetsmasken, inte RAM. LOW visar svart för en plats som saknar en komplett rad sedan reset. Senare partiella eller uteblivna rader behåller platsens giltighet och dess äldre, ej överskrivna ord. Klockdomänsövergångarna ligger i `cdc_sync.v` | `sim/test_m2.py` (båda lägena); `sim/test_ll_ring.py` mot `model/ll_ring_ref.py`, inklusive sex verkliga RTL-felvarianter; semantisk skriv-/displaykontroll i `sim/test_fuzz_chain.py`; CDC-handskakningar formellt bevisade, se "Formella bevis" |
 | `genlock_timing.v` | Tidsbas som `video_timing.v`, låsbar till ingångens fält (låglatensläget) och 720p50 för PAL. Varje fullständig utgångsbild har en full vsync. `JUMP_AFTER` tidiga triggers klipper efter den fulla synken och hoppar till sista porchraden; den direkt följande återhämtningsbilden kan också korta sin back porch. Övriga bilder är minst `V_TOTAL−1` rader. Både klipp och återhämtningsbild kör hela sista porchraden för att återställa skalning och radindex i `fb_display`; `HOLD` gäller mellan klipp | `sim/test_m2.py::m2_low_latency`, `sim/test_fb.py`, `sim/test_genlock.py`, formellt bevis |
 | `m2_core.v` | M2: en TVP (BT.656 eller separata synkar) → `fb_backend` | `sim/test_m2.py` |
 | `chan_capture.v`, `mix_chan.v`, `line_mixer.v`, `mixer2.v` | M4: två TVP-kanaler → radvis mixer → ordström. Reglerna står under M4 nedan | `sim/test_mixer.py` mot `model/line_mixer_ref.py`; regeln för parade rader mot Python-prototypen och fem egenskaper på slumpade radföljder i `model/test_line_mixer_ref.py` |
@@ -412,11 +427,11 @@ av kampanjens eget rundlås.
 Mixerns återkomsttest täcker nu både A och B, med den gamla domarregeln
 som negativ kontroll. En separat diagnostik för Core #18 kontrollerar
 modellens fältstarter mot F/radnummer i den utström som matchat RTL.
-Fable rapporterade #17/#18 stängda på `e113cf6`; den frysta C1-sviten har
-447 pass och inga xfails. Modell- och bänkfel är oväntade.
+Fable rapporterade #17/#18 stängda på `e113cf6`; den frysta C3-sviten har
+490 pass och inga xfails. Modell- och bänkfel är oväntade.
 Regeln för mixerns F-bit ändrades 2026-10-08 (#18), och #17 rättades samma dag.
 
-OVN-F1 är historisk evidens från källan `7cc4eda`: 72 RGB-prov avvek från blankbilden i en bild efter `LOW` → `BUF`, före `have_pub`. Körningen gjordes 2026-10-08 och arkiverades under `docs/overnight/2026-10-07/LOW_BUF_FINDING.md`. En strikt checker/hybrid-replay med seed 126 mot `e113cf6` återstår; det finns därför ingen fastställd öppen/stängd status för OVN-F1 på `e113cf6` eller C1-källan `3aed0b7`. Blanda inte den äldre observationen med C1-resultatet.
+Seed 126 gav samma store/read-checksummefel och X/Z på `e113cf6`-RTL med separat strikt checker och på ren C1-main `629806f`. C3-källan `8d7b0e9` passerar samma frö med 216 kontrollerade rader; kontrollen avvisar också den verkliga felvarianten som skriver till fel ringplats. `fb_display` använder reservvärdet `V_ACTIVE / 3`: fysisk 720-radersgeometri behåller 240. Aldrig initialiserade LOW-platser ger svart, medan äldre data i initialiserade platser behålls enligt ringens regel. Det styrker den testade körningen; den nya kampanjen återstår och alla LOW→BUF-faser är inte därmed verifierade. F-bit, triggerstyrd videogrind och regeln att fältet skrivaren gick med i inte publiceras är oförändrade.
 
 Checksumkontrollen gäller åter varje SDRAM-läsning, även utan efterföljande
 bildbeslut. För liten visningstäckning är ett benchfel även vid lägesbyte.
