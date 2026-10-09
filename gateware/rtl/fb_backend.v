@@ -22,7 +22,8 @@
 // comes early is delayed by half the difference, so that the output frames
 // are equally long: NTSC gives 720p at 59.94 Hz (frames of 750/751 lines),
 // PAL 720p50 (H_FP_ALT). The other field is the lower one and is drawn half a
-// source line lower. Lines that never arrive show whatever the slot held.
+// source line lower. Missing lines keep an initialized slot's old contents;
+// a slot with no complete line since reset is black.
 `default_nettype none
 module fb_backend #(
     parameter V_TOTAL = 750, V_ACTIVE = 720,
@@ -185,9 +186,66 @@ module fb_backend #(
     wire        lbw_we   = ll_s ? ll_take : lb_we;
     wire [12:0] lbw_addr = ll_s ? {e_line[3:0], e_idx} : {2'b00, lb_waddr};
     wire [31:0] lbw_data = ll_s ? f_data[31:0] : lb_wdata;
+    localparam [31:0] LINEBUF_BLACK = 32'h10801080;
+    reg [15:0] linebuf_initialized_s;
+    reg        linebuf_cover_active;
+    reg  [3:0] linebuf_cover_slot;
+    reg  [8:0] linebuf_cover_next;
+    // The shared RAM is not reset. Mark a physical slot initialized only after
+    // observing its accepted words 0..359 in order; LOW may begin mid-line, so
+    // an accepted word 359 alone is not enough. Idle cycles do not break a run.
+    always @(posedge sd_clk) begin
+        if (srst) begin
+            linebuf_initialized_s <= 16'd0;
+            linebuf_cover_active <= 1'b0;
+            linebuf_cover_slot <= 4'd0;
+            linebuf_cover_next <= 9'd0;
+        end else if (lbw_we) begin
+            if (lbw_addr[8:0] == 9'd0) begin
+                linebuf_cover_active <= 1'b1;
+                linebuf_cover_slot <= lbw_addr[12:9];
+                linebuf_cover_next <= 9'd1;
+            end else if (linebuf_cover_active && lbw_addr[12:9] == linebuf_cover_slot &&
+                         lbw_addr[8:0] == linebuf_cover_next) begin
+                if (lbw_addr[8:0] == 9'd359) begin
+                    linebuf_initialized_s[linebuf_cover_slot] <= 1'b1;
+                    linebuf_cover_active <= 1'b0;
+                    linebuf_cover_next <= 9'd0;
+                end else
+                    linebuf_cover_next <= linebuf_cover_next + 9'd1;
+            end else begin
+                // A later partial write never invalidates already initialized
+                // RAM, but it cannot complete a virgin slot's first full line.
+                linebuf_cover_active <= 1'b0;
+                linebuf_cover_next <= 9'd0;
+            end
+        end
+    end
     dual_clock_ram #(.DEPTH(8192), .AW(13), .W(32)) linebuf (
         .wclk(sd_clk), .we(lbw_we), .waddr(lbw_addr), .wdata(lbw_data),
         .rclk(pix_clk), .raddr(lb_raddr), .rdata(lb_rdata));
+
+    // These per-slot bits only move 0->1 between global resets, so each can
+    // cross independently. Sample slot/mode beside the RAM address: the
+    // registered metadata and registered data then describe the same read.
+    reg [15:0] linebuf_initialized_p1, linebuf_initialized_p2;
+    reg  [3:0] linebuf_read_slot;
+    reg        linebuf_read_low;
+    always @(posedge pix_clk) begin
+        if (prst) begin
+            linebuf_initialized_p1 <= 16'd0;
+            linebuf_initialized_p2 <= 16'd0;
+            linebuf_read_slot <= 4'd0;
+            linebuf_read_low <= 1'b0;
+        end else begin
+            linebuf_initialized_p1 <= linebuf_initialized_s;
+            linebuf_initialized_p2 <= linebuf_initialized_p1;
+            linebuf_read_slot <= lb_raddr[12:9];
+            linebuf_read_low <= ll_p;
+        end
+    end
+    wire [31:0] lb_rdisplay = (linebuf_read_low && !linebuf_initialized_p2[linebuf_read_slot])
+                            ? LINEBUF_BLACK : lb_rdata;
 
     // ---- low-latency trigger into the pixel domain ----
     wire       ll_ev;
@@ -220,7 +278,7 @@ module fb_backend #(
         .pub_toggle(s_pub_toggle), .pub_lines(pub_lines), .frame_low(frame_low),
         .fetch_toggle(p_fetch_toggle), .fetch_line(p_fetch_line), .fetch_slot(p_fetch_slot), .fetch_first(p_fetch_first),
         .ll(ll_p), .ll_lines(ll_lines), .ll_alive(ll_alive), .ll_triggered(t_tr), .ll_low(s_ll_low),
-        .lb_raddr(lb_raddr), .lb_rdata(lb_rdata),
+        .lb_raddr(lb_raddr), .lb_rdata(lb_rdisplay),
         .r(r), .g(g), .b(b), .yo(yo), .cbo(cbo), .cro(cro), .de_o(de), .hs_o(hsync), .vs_o(vsync), .have_video(have_video));
 endmodule
 `default_nettype wire

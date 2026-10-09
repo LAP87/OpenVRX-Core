@@ -64,6 +64,8 @@ module fb_display #(
     output reg         de_o, hs_o, vs_o,
     output reg         have_video
 );
+    localparam [9:0] DEFAULT_LINES = V_ACTIVE / 3;
+
     // ---- publications ----
     // crossings: cdc_sync.v (proven in formal/toggle_props.v and formal/level_props.v)
     wire       pub_ev, fl_q, lw_q;          // lw_q, fl_q: frame_low, ll_low synchronised
@@ -92,9 +94,9 @@ module fb_display #(
     wire line_start = (x == 0);
     wire frame_start = line_start && (y == V_TOTAL - 1);   // during the last blanking line
     always @(posedge clk) if (rst) begin
-        lines <= 10'd240;
+        lines <= DEFAULT_LINES;
     end else if (frame_start) begin
-        lines <= ll ? ((ll_lines == 0) ? 10'd240 : ll_lines) : ((latest_lines == 0) ? 10'd240 : latest_lines);
+        lines <= ll ? ((ll_lines == 0) ? DEFAULT_LINES : ll_lines) : ((latest_lines == 0) ? DEFAULT_LINES : latest_lines);
     end
 
     // ---- video or blank: decided at the frame's first line, when the timing generator has
