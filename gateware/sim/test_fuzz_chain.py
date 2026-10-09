@@ -761,6 +761,21 @@ def check_display(sc, logs, frames, words, org, run, fd):
         except (IndexError, ValueError):
             fd.add('display', 'ring_trace', 0, f'malformed LBEND summary {endings[0]}')
     for t_ns, addr, data, npop, low, buf, line, blank in ring_samples:
+        # A physical-address trace describes what happened, not what should
+        # have happened. Bind LOW writes to the independently checked mixer
+        # stream even when the wrong slot leaves the displayed slot virgin.
+        if low:
+            if not 0 <= npop < len(words):
+                fd.add('display', 'll_origin', t_ns,
+                       f'LOW word-52 write has invalid mixer word index {npop}')
+            else:
+                _, source_line, source_index, source_word, *_ = words[npop]
+                expected_addr = ((source_line & 15) << 9) | source_index
+                if source_index != 52 or addr != expected_addr or data != source_word:
+                    fd.add('display', 'll_word', t_ns,
+                           f'LOW write {npop}: address {addr}, data {data:08x}; '
+                           f'mixer expects address {expected_addr}, index {source_index}, '
+                           f'data {source_word:08x}')
         matches = [r for r in ring_runs if r[2] <= addr <= r[3] and r[0] <= t_ns <= r[1]]
         if len(matches) != 1:
             fd.add('display', 'ring_trace', t_ns,
@@ -1367,7 +1382,7 @@ def ring_display_fixture(*, complete=True, fault=None):
                     ['X', str(y), f'{word if complete else BLACK:08x}',
                      str((start + y * H_TOTAL + 302) * T_P)]))
     sd = [['LBTRACE', '1'], ['LW', '0' if complete else '52', '359', '1', '360', '100.0', '200.0'],
-          ['L52', '52', f'{word:08x}', '0', '1', 'x', 'x', 'x', '150.0'],
+          ['L52', '52', f'{word:08x}', '52', '1', 'x', 'x', 'x', '150.0'],
           ['LBEND', '360' if complete else '308', '1']]
     if fault in ('missing_header', 'missing_run', 'missing_sample'):
         marker = dict(missing_header='LBTRACE', missing_run='LW', missing_sample='L52')[fault]
@@ -1379,12 +1394,17 @@ def ring_display_fixture(*, complete=True, fault=None):
     return dict(pix=pix, sd=sd)
 
 
+def ring_fixture_words():
+    """Independent mixer line; its word-52 value matches the positive fixture."""
+    return [(0, 0, idx, 0x66778899, idx, idx) for idx in range(360)]
+
+
 @pytest.mark.parametrize('complete', [False, True])
 def test_low_display_checks_virgin_black_and_initialized_words(complete):
     logs = ring_display_fixture(complete=complete)
     fd = Findings()
     sc = type('Scenario', (), {'end_ns': 1e12})()
-    checked = check_display(sc, logs, StoreFrames(), [], [0], [(0, 0)], fd)
+    checked = check_display(sc, logs, StoreFrames(), ring_fixture_words(), [0] * 360, [(0, 0)], fd)
     assert not fd.items, fd.items
     assert checked == V_ACTIVE
 
@@ -1394,6 +1414,31 @@ def test_low_display_rejects_missing_write_trace_or_all_black(fault):
     logs = ring_display_fixture(fault=fault)
     fd = Findings()
     sc = type('Scenario', (), {'end_ns': 1e12})()
-    check_display(sc, logs, StoreFrames(), [], [0], [(0, 0)], fd)
+    check_display(sc, logs, StoreFrames(), ring_fixture_words(), [0] * 360, [(0, 0)], fd)
     expected = 'display/ll_word' if fault == 'all_black' else 'display/ring_trace'
+    assert expected in fd.groups(), fd.items
+
+
+@pytest.mark.parametrize('fault', ['wrong_slot', 'wrong_payload', 'wrong_index', 'missing_word'])
+def test_low_write_binding_is_checked_even_when_display_is_virgin_black(fault):
+    logs = ring_display_fixture()
+    words = ring_fixture_words()
+    sample = next(ev for ev in logs['sd'] if ev[0] == 'L52')
+    if fault == 'wrong_slot':
+        run = next(ev for ev in logs['sd'] if ev[0] == 'LW')
+        run[1:3] = ['512', '871']
+        sample[1] = '564'
+        for ev in logs['pix']:
+            if ev[0] == 'X':
+                ev[2] = f'{BLACK:08x}'
+    elif fault == 'wrong_payload':
+        sample[2] = f'{int(sample[2], 16) ^ 1:08x}'
+    elif fault == 'wrong_index':
+        sample[3] = '51'
+    else:
+        sample[3] = str(len(words))
+    fd = Findings()
+    sc = type('Scenario', (), {'end_ns': 1e12})()
+    check_display(sc, logs, StoreFrames(), words, [0] * 360, [(0, 0)], fd)
+    expected = 'display/ll_origin' if fault == 'missing_word' else 'display/ll_word'
     assert expected in fd.groups(), fd.items
