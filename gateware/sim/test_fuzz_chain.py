@@ -76,6 +76,7 @@ import line_mixer_ref as lm  # noqa: E402
 import ll_ring_ref as ring  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
+H_TOTAL_ALT = 1980              # H_FP_ALT adds 330 clocks to the default 1650-clock line
 MAX_WAIT, HOLD = 8, 32
 DRAIN_MAX_CYCLES, DRAIN_STABLE_CYCLES = 4096, 4
 GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
@@ -730,6 +731,7 @@ def pix_frames(pix):
     for ev in pix:
         if ev[0] == 'V':
             out.append(dict(pc=int(ev[1]), lines=num(ev[2]), video=num(ev[3]), ll=num(ev[4]), low=None,
+                            alt=num(ev[5]) if len(ev) > 5 else None,
                             alive=num(ev[7]) if len(ev) > 7 else None,
                             triggered=num(ev[8]) if len(ev) > 8 else None,
                             src={}, shown={}, t={}))
@@ -743,9 +745,9 @@ def pix_frames(pix):
     return [f for f in out if len(f['src']) == V_ACTIVE and len(f['shown']) == V_ACTIVE]
 
 
-def video_event(pc, lines, video, ll, low, nlines, alive=0, triggered=0):
+def video_event(pc, lines, video, ll, alt, nlines, alive=0, triggered=0):
     """Build a complete V log row while keeping the historical first seven fields fixed."""
-    return ['V', str(pc), str(lines), str(video), str(ll), str(low), str(nlines),
+    return ['V', str(pc), str(lines), str(video), str(ll), str(alt), str(nlines),
             str(alive), str(triggered)]
 
 
@@ -802,14 +804,33 @@ def switch_windows(pix, starts):
     return out
 
 
+def display_switch_windows(pix, starts, alt):
+    """Display-data exclusion using the frame's active-area width, with the old end bound.
+
+    ALT is sampled in each V record. Unknown ALT keeps the original full-frame exclusion,
+    so malformed timing metadata cannot create new display coverage.
+    """
+    if alt not in (0, 1):
+        return switch_windows(pix, starts)
+    line_clocks = H_TOTAL_ALT if alt else H_TOTAL
+    active_span = V_ACTIVE * line_clocks
+    out = []
+    for ev in pix:
+        if ev[0] == 'M':
+            sw = int(ev[1])
+            later = [s for s in starts if s > sw]
+            out.append((sw - active_span, later[1] if len(later) > 1 else 1 << 60))
+    return out
+
+
 def check_display(sc, logs, frames, words, org, run, fd):
     pix = logs['pix']
     pf_all = pix_frames(pix)
     starts = frame_starts(pix)
-    sws = switch_windows(pix, starts)
+    sws = {alt: display_switch_windows(pix, starts, alt) for alt in (0, 1, None)}
 
-    def in_switch(pc):
-        return any(a <= pc < b for a, b in sws)
+    def in_switch(pc, alt):
+        return any(a <= pc < b for a, b in sws[alt if alt in (0, 1) else None])
 
     end_pc = (fz.RST_NS + sc.end_ns) / T_P
     by_pc = [(round(fr.cyc * T_S / T_P), fr) for fr in frames]
@@ -908,9 +929,15 @@ def check_display(sc, logs, frames, words, org, run, fd):
             fd.add('display', 'ring_trace', t_ns, str(err))
     checked = 0
     for pf in pf_all:
-        if not pf['video'] or in_switch(pf['pc']) or pf['pc'] > end_pc:
+        if not pf['video']:
             continue
         t_frame = pf['pc'] * T_P
+        if pf['alt'] not in (0, 1):
+            fd.add('display', 'alt_metadata', t_frame,
+                   f"complete video frame at pixel clock {pf['pc']} has unknown timing ALT {pf['alt']!r}")
+            continue
+        if in_switch(pf['pc'], pf['alt']) or pf['pc'] > end_pc:
+            continue
         if pf['lines'] > V_ACTIVE:
             # fb_display.v steps at most one source line per output line: it scales up only. The
             # default of 240 lines (no line count yet) is more than the scaled frame's 72 lines.
@@ -1791,19 +1818,28 @@ def test_no_display_coverage_is_a_failure_even_with_switches(tmp_path, monkeypat
     assert result['result'] == 'fail' and result['groups'] == ['bench/few_lines'], result
 
 
-def ring_display_fixture(*, complete=True, fault=None):
+def ring_display_fixture(*, complete=True, fault=None, geometry='scaled', start=500000, alt=0,
+                         switch_delta=None, cut=False):
     """One LOW frame with a known accepted write history, independent of DUT state."""
-    use_geometry('scaled')
-    start = 500000
+    use_geometry(geometry)
+    line_clocks = H_TOTAL_ALT if alt == 1 else H_TOTAL
     word = 0x66778899
-    pix = [video_event(start, 1, 1, 1, 0, V_TOTAL, 1, 1), ['B', '0']]
+    pix = [video_event(start, 1, 1, 1, alt, V_TOTAL, 1, 1), ['B', '0']]
     for y in range(V_ACTIVE):
+        if cut and y == V_ACTIVE - 1:
+            continue
         pix.extend((['Y', str(y), '0'],
                     ['X', str(y), f'{word if complete else BLACK:08x}',
-                     str((start + y * H_TOTAL + 302) * T_P)]))
+                     str((start + y * line_clocks + 302) * T_P)]))
     sd = [['LBTRACE', '1'], ['LW', '0' if complete else '52', '359', '1', '360', '100.0', '200.0'],
           ['L52', '52', f'{word:08x}', '52', '1', 'x', 'x', 'x', '150.0'],
           ['LBEND', '360' if complete else '308', '1']]
+    if switch_delta is not None:
+        switch_pc = start + switch_delta
+        pix.append(['M', str(switch_pc), '1', '0'])
+        # Two later V records define the original post-switch end boundary.
+        pix.extend(video_event(switch_pc + offset * H_TOTAL, 1, 0, 0, alt, V_TOTAL)
+                   for offset in (1, 2))
     if fault in ('missing_header', 'missing_run', 'missing_sample'):
         marker = dict(missing_header='LBTRACE', missing_run='LW', missing_sample='L52')[fault]
         sd = [event for event in sd if event[0] != marker]
@@ -1862,3 +1898,164 @@ def test_low_write_binding_is_checked_even_when_display_is_virgin_black(fault):
     check_display(sc, logs, StoreFrames(), words, [0] * 360, [(0, 0)], fd)
     expected = 'display/ll_origin' if fault == 'missing_word' else 'display/ll_word'
     assert expected in fd.groups(), fd.items
+
+
+def _check_ring_display(logs):
+    fd = Findings()
+    sc = type('Scenario', (), {'end_ns': 1e12})()
+    checked = check_display(sc, logs, StoreFrames(), ring_fixture_words(), [0] * 360,
+                            [(0, 0)], fd)
+    return checked, fd
+
+
+@pytest.mark.parametrize('geometry', ['scaled', 'full'])
+def test_display_active_window_admits_complete_area_before_switch(geometry):
+    try:
+        use_geometry(geometry)
+        active_span = V_ACTIVE * H_TOTAL
+        frame_span = V_TOTAL * H_TOTAL
+        delta = active_span + (frame_span - active_span) // 2
+        logs = ring_display_fixture(geometry=geometry, switch_delta=delta)
+        starts = frame_starts(logs['pix'])
+        old_window = switch_windows(logs['pix'], starts)[0]
+        assert old_window[0] <= 500000 < old_window[1]  # the old full-frame rule excludes it
+        display_window = display_switch_windows(logs['pix'], starts, 0)[0]
+        assert display_window == (500000 + delta - active_span, old_window[1])
+        checked, fd = _check_ring_display(logs)
+        assert checked == V_ACTIVE and not fd.items, (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('geometry', ['scaled', 'full'])
+@pytest.mark.parametrize('delta_kind', ['inside_last_active_line', 'exact_active_span'])
+def test_display_active_window_still_excludes_switch_in_active_area(geometry, delta_kind):
+    try:
+        use_geometry(geometry)
+        active_span = V_ACTIVE * H_TOTAL
+        # Probe x=400 on the final active line, not its horizontal blank tail.
+        delta = ((V_ACTIVE - 1) * H_TOTAL + 400
+                 if delta_kind == 'inside_last_active_line' else active_span)
+        logs = ring_display_fixture(geometry=geometry, switch_delta=delta)
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and not fd.items, (checked, fd.items)
+        starts = frame_starts(logs['pix'])
+        lo, hi = display_switch_windows(logs['pix'], starts, 0)[0]
+        assert lo <= 500000 < hi
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('geometry', ['scaled', 'full'])
+def test_pal_display_window_uses_1980_clocks_per_active_line(geometry):
+    try:
+        use_geometry(geometry)
+        short_span = V_ACTIVE * H_TOTAL
+        pal_span = V_ACTIVE * H_TOTAL_ALT
+        # This switch is after an NTSC-width active area but before PAL's wider one.
+        logs = ring_display_fixture(geometry=geometry, alt=1, switch_delta=short_span + 1)
+        starts = frame_starts(logs['pix'])
+        pal_window = display_switch_windows(logs['pix'], starts, 1)[0]
+        old_window = switch_windows(logs['pix'], starts)[0]
+        assert pal_window[0] == 500000 + short_span + 1 - pal_span
+        assert old_window[1] == pal_window[1]
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and not fd.items, (checked, fd.items)
+
+        # One clock beyond PAL's conservative active span is eligible; the shortened
+        # NTSC line length must not be used to calculate this boundary.
+        logs = ring_display_fixture(geometry=geometry, alt=1, switch_delta=pal_span + 1)
+        checked, fd = _check_ring_display(logs)
+        assert checked == V_ACTIVE and not fd.items, (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('alt', ['x', None, 2])
+def test_unknown_alt_video_frame_is_rejected_outside_switch_windows(alt):
+    try:
+        use_geometry('scaled')
+        logs = ring_display_fixture(alt=alt)
+        frame = pix_frames(logs['pix'])[0]
+        assert frame['alt'] == (2 if alt == 2 else None)
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and 'display/alt_metadata' in fd.groups(), fd.items
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('alt', [0, 1])
+def test_valid_alt_video_frame_without_switch_counts(alt):
+    try:
+        use_geometry('scaled')
+        logs = ring_display_fixture(alt=alt)
+        checked, fd = _check_ring_display(logs)
+        assert checked == V_ACTIVE and not fd.items, (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+def test_zero_video_with_unknown_alt_keeps_existing_blank_frame_handling():
+    try:
+        use_geometry('scaled')
+        logs = ring_display_fixture(alt='x')
+        next(ev for ev in logs['pix'] if ev[0] == 'V')[3] = '0'
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and not fd.items, (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+def test_cut_frame_is_not_display_coverage_even_with_a_switch():
+    try:
+        use_geometry('scaled')
+        logs = ring_display_fixture(switch_delta=V_ACTIVE * H_TOTAL + 1, cut=True)
+        assert pix_frames(logs['pix']) == []
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and not fd.items, (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('fault, expected', [('xword', 'display/ll_word'), ('ymap', 'display/map')])
+def test_newly_eligible_active_frame_keeps_independent_ring_and_source_checks(fault, expected):
+    try:
+        use_geometry('scaled')
+        logs = ring_display_fixture(switch_delta=V_ACTIVE * H_TOTAL + 1)
+        if fault == 'xword':
+            sample = next(ev for ev in logs['pix'] if ev[0] == 'X')
+            sample[2] = f'{int(sample[2], 16) ^ 1:08x}'
+        else:
+            sample = next(ev for ev in logs['pix'] if ev[0] == 'Y')
+            sample[2] = '1'
+        checked, fd = _check_ring_display(logs)
+        assert checked == 0 and expected in fd.groups(), (checked, fd.items)
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('alt, geometry', [(0, 'scaled'), (1, 'scaled'), (0, 'full'), (1, 'full')])
+def test_display_window_preserves_post_switch_end_bound(alt, geometry):
+    try:
+        use_geometry(geometry)
+        logs = ring_display_fixture(geometry=geometry, alt=alt,
+                                    switch_delta=V_ACTIVE * (H_TOTAL_ALT if alt else H_TOTAL) + 1)
+        starts = frame_starts(logs['pix'])
+        legacy = switch_windows(logs['pix'], starts)
+        corrected = display_switch_windows(logs['pix'], starts, alt)
+        assert len(corrected) == len(legacy) == 1
+        assert corrected[0][1] == legacy[0][1]
+    finally:
+        use_geometry('scaled')
+
+
+@pytest.mark.parametrize('sample_pc, expected_xz', [(7999, True), (8001, False)])
+def test_xz_invariant_keeps_original_mode_switch_window(sample_pc, expected_xz):
+    use_geometry('scaled')
+    pix = [video_event(pc, 1, 0, 0, 0, V_TOTAL) for pc in (100, 2000, 4000, 6000)]
+    pix.extend((['M', '8000', '1', '0'], ['Z', str(sample_pc)],
+                video_event(10000, 1, 0, 0, 0, V_TOTAL),
+                video_event(12000, 1, 0, 0, 0, V_TOTAL)))
+    fd = Findings()
+    check_invariants(None, dict(pix=pix, sd=[['end', '0']], mix=[['end']], stdout=''), fd)
+    assert ('output/xz' in fd.groups()) is expected_xz, fd.items
