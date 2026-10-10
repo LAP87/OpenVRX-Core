@@ -34,6 +34,11 @@ and against six invariants that do not depend on the models:
      switch runs through are not checked (README: the frame in progress at a switch shows
      what the line buffer holds).
 
+LOW display video additionally requires both the current LOW-period alive flag and the timing
+generator's trigger-started flag. A separate post-switch sample checks that have_video was cleared
+for the frame in progress; one eligible trigger-started frame at the new mode boundary may show.
+Every run must also finish with one bounded DRAIN receipt and no outstanding read or burst state.
+
 Scaled geometry (the clocks are the real ones): the fields of model/fuzz_stream.py
 (24 or 29 active lines), an output frame of 87 lines of 1650 pixel clocks (1.92 ms,
 720p's line) with 72 active lines (3 per source line, as 720 for 243), RT_NTSC 4,
@@ -72,6 +77,7 @@ import ll_ring_ref as ring  # noqa: E402
 
 T_S, T_P, H_TOTAL = fz.T_S, 13.4, 1650
 MAX_WAIT, HOLD = 8, 32
+DRAIN_MAX_CYCLES, DRAIN_STABLE_CYCLES = 4096, 4
 GEOMETRIES = {                  # output frame and field store thresholds per fuzz_stream geometry
     'scaled': dict(V_TOTAL=87, V_ACTIVE=72, V_FP=1, V_SYNC=1, RT=dict(RT_NTSC=4, RT_PAL=8, RT_HYST=2, RT_SPLIT=26)),
     'full': dict(V_TOTAL=750, V_ACTIVE=720, V_FP=5, V_SYNC=5, RT=dict(RT_NTSC=4, RT_PAL=44, RT_HYST=16, RT_SPLIT=270)),
@@ -118,9 +124,10 @@ def ctl_cycles(sc):
     return out
 
 
-def run_sim(sc, work, alter=None, timeout=3000):
+def run_sim(sc, work, alter=None, timeout=3000, stall_drain=False, gate_probe=0):
     """Run tb_chain.v on scenario sc in directory work. alter: {rtl file: (text, replacement)}
-    compiles an altered copy (negative controls). Returns the logs, split into fields."""
+    compiles an altered copy (negative controls). stall_drain withholds data after an accepted
+    read; gate_probe forces one LOW frame-gate input for exactly one checked frame."""
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -134,7 +141,8 @@ def run_sim(sc, work, alter=None, timeout=3000):
     (work / 'ctl.hex').write_text(''.join(f'{c << 3 | k << 1 | v:09x}\n' for c, k, v in ctl))
     p = dict(N_A=len(sc.a), N_B=len(sc.b), N_CTL=len(ctl), T_A=sc.t_a, T_B=round(sc.t_b, 6),
              START_A=round(sc.start_a, 3), START_B=round(sc.start_b, 3), LL=sc.ll0,
-             V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC, **RT)
+             V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC,
+             DRAIN_STALL_READ=int(stall_drain), GATE_PROBE=int(gate_probe), **RT)
     rtl = [GW / 'rtl' / n for n in RTL]
     for fname, (old, new) in (alter or {}).items():
         text = (GW / 'rtl' / fname).read_text()
@@ -150,6 +158,8 @@ def run_sim(sc, work, alter=None, timeout=3000):
         path = work / f'{name}.txt'
         logs[name] = [ln.split() for ln in path.read_text().split('\n') if ln] if path.exists() else []
     logs['stdout'] = run.stdout[-3000:]
+    logs['stderr'] = run.stderr[-3000:]
+    logs['returncode'] = run.returncode
     return logs
 
 
@@ -455,7 +465,7 @@ def check_store(logs, words, org, run, fd):
                 prev_st = st if st is not None else prev_st
                 st, pending, selected, active_read = None, [], [], None
             continue
-        if e in ('G', 'E', 'T', 'Q', 'LBTRACE', 'LBEND', 'LW', 'end'):
+        if e in ('G', 'E', 'T', 'Q', 'LBTRACE', 'LBEND', 'LW', 'DRAIN', 'end'):
             continue
         if e == 'w':
             addr, val = int(ev[1]), hexnum(ev[2])
@@ -678,13 +688,50 @@ def check_store(logs, words, org, run, fd):
     return result
 
 
+def check_drain(logs, fd):
+    """Require one bounded final receipt proving fetch and SDRAM burst state are idle."""
+    sd = logs.get('sd', [])
+    receipts = [ev for ev in sd if ev and ev[0] == 'DRAIN']
+    if len(receipts) != 1:
+        fd.add('store', 'drain', 0, f'expected one final DRAIN receipt, got {receipts[:2]}')
+        return
+    ev = receipts[0]
+    if len(ev) != 19:
+        fd.add('store', 'drain', 0, f'malformed DRAIN receipt {ev}')
+        return
+    if len(sd) < 2 or sd[-1][0] != 'end' or sd[-2] != ev:
+        fd.add('store', 'drain', 0, 'DRAIN is not the final SDRAM record before the protocol end marker')
+        return
+    try:
+        values = [int(x) for x in ev[2:]]
+    except ValueError:
+        fd.add('store', 'drain', 0, f'non-numeric DRAIN state {ev}')
+        return
+    (cycles, stable, fetch_ev, fetch_req, look, fetching, rd_inflight, req_valid,
+     grp_ready, writing, grp_mask, burst_state, stall_armed, pix_frozen, pc, x, y) = values
+    if ev[1] != 'pass':
+        fd.add('store', 'drain', 0, f'drain ended with status {ev[1]} after {cycles} clocks: {ev}')
+    elif logs.get('returncode', 0) != 0:
+        fd.add('store', 'drain', 0, f'simulator exited {logs["returncode"]} despite a pass receipt')
+    elif (cycles < DRAIN_STABLE_CYCLES or cycles > DRAIN_MAX_CYCLES or
+          stable != DRAIN_STABLE_CYCLES or stable > cycles):
+        fd.add('store', 'drain', 0, f'drain bound/count is invalid: {ev}')
+    elif (fetch_ev, fetch_req, look, fetching, rd_inflight, req_valid, grp_ready, writing,
+          grp_mask, burst_state, stall_armed, pix_frozen) != (0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1):
+        fd.add('store', 'drain', 0, f'drain receipt has outstanding fetch or SDRAM state: {ev}')
+    elif pc <= 0 or x != 0 or y != V_ACTIVE:
+        fd.add('store', 'drain', 0, f'drain did not freeze at the declared vertical-blank boundary: {ev}')
+
+
 # ---------------------------------------------------------------- pixel domain
 def pix_frames(pix):
-    """Per output frame: dict(pc, lines, video, ll, low, src={y: line}, shown={y: word}, t={y: ns})."""
+    """Per output frame, including the LOW source-alive and timing-trigger gate samples."""
     out = []
     for ev in pix:
         if ev[0] == 'V':
             out.append(dict(pc=int(ev[1]), lines=num(ev[2]), video=num(ev[3]), ll=num(ev[4]), low=None,
+                            alive=num(ev[7]) if len(ev) > 7 else None,
+                            triggered=num(ev[8]) if len(ev) > 8 else None,
                             src={}, shown={}, t={}))
         elif out and ev[0] == 'B':
             out[-1]['low'] = num(ev[1])
@@ -694,6 +741,54 @@ def pix_frames(pix):
             out[-1]['shown'][int(ev[1])] = hexnum(ev[2])
             out[-1]['t'][int(ev[1])] = float(ev[3])
     return [f for f in out if len(f['src']) == V_ACTIVE and len(f['shown']) == V_ACTIVE]
+
+
+def video_event(pc, lines, video, ll, low, nlines, alive=0, triggered=0):
+    """Build a complete V log row while keeping the historical first seven fields fixed."""
+    return ['V', str(pc), str(lines), str(video), str(ll), str(low), str(nlines),
+            str(alive), str(triggered)]
+
+
+def check_gate_probe(logs, gate_probe, fd):
+    """Bind an optional testbench force to one exact V sample; never infer video from DUT internals."""
+    pix = logs.get('pix', [])
+    markers = [ev for ev in pix if ev and ev[0] == 'GATE']
+    if gate_probe == 0:
+        if markers:
+            fd.add('bench', 'gate_probe', 0, f'unexpected GATE marker while probe is disabled: {markers[:2]}')
+        return
+    if gate_probe not in (1, 2):
+        fd.add('bench', 'gate_probe', 0, f'unsupported GATE_PROBE value {gate_probe}')
+        return
+    if len(markers) != 1:
+        fd.add('bench', 'gate_probe', 0, f'expected exactly one GATE marker, got {markers[:2]}')
+        return
+    ev = markers[0]
+    if len(ev) != 5:
+        fd.add('bench', 'gate_probe', 0, f'malformed GATE marker {ev}')
+        return
+    try:
+        kind, frame_pc, original_alive, original_triggered = map(int, ev[1:])
+    except ValueError:
+        fd.add('bench', 'gate_probe', 0, f'non-numeric GATE marker {ev}')
+        return
+    if (kind, original_alive, original_triggered) != (gate_probe, 1, 1):
+        fd.add('bench', 'gate_probe', frame_pc, f'GATE marker does not bind the requested original gates: {ev}')
+        return
+    frames = [row for row in pix if row and row[0] == 'V' and len(row) > 1 and num(row[1]) == frame_pc]
+    if len(frames) != 1:
+        fd.add('bench', 'gate_probe', frame_pc, f'GATE marker has {len(frames)} matching V records: {ev}')
+        return
+    frame = frames[0]
+    if len(frame) != 9:
+        fd.add('bench', 'gate_probe', frame_pc, f'GATE target V record is malformed: {frame}')
+        return
+    ll, alive, triggered = (num(frame[i]) for i in (4, 7, 8))
+    wanted = (1, 0, 1) if gate_probe == 1 else (1, 1, 0)
+    if (ll, alive, triggered) != wanted:
+        fd.add('bench', 'gate_probe', frame_pc,
+               f'GATE probe {gate_probe} expected target V (LOW, alive, triggered)={wanted}, '
+               f'observed {(ll, alive, triggered)}: {frame}')
 
 
 def switch_windows(pix, starts):
@@ -937,18 +1032,51 @@ def check_invariants(sc, logs, fd):
             if pc >= first_ok and not any(a + V_TOTAL * H_TOTAL <= pc < b for a, b in sws):
                 fd.add('output', 'xz', pc * T_P, f'X/Z on an output in the line ending at pixel clock {pc}')
                 break
-    # README (Bildvägen efter mixern): BUF -> LOW, the first frame after the switch has no video
-    vids = {}
+    # M's third payload field samples have_video one pixel clock after the synchronized mode edge.
+    # That is the display gate after fb_display applies its mode-switch reset.
+    mode_events = []
     for ev in pix:
-        if ev[0] == 'V':
-            vids[int(ev[1])] = num(ev[3])
+        if ev[0] != 'M':
+            continue
+        try:
+            sw, mode, gate = int(ev[1]), num(ev[2]), num(ev[3])
+        except (IndexError, ValueError):
+            fd.add('display', 'switch_metadata', 0, f'malformed mode-switch marker {ev}')
+            continue
+        if len(ev) != 4 or mode not in (0, 1) or gate not in (0, 1):
+            fd.add('display', 'switch_metadata', sw * T_P, f'invalid mode-switch metadata {ev}')
+            continue
+        mode_events.append((sw, mode))
+        if gate != 0:
+            fd.add('display', 'switch_video', sw * T_P,
+                   f'mode switch to {mode} at pixel clock {sw}: have_video remained {gate} after clear')
+
+    # V is sampled at x=1, after fb_display evaluates line_start at x=0. M records the
+    # effective synchronized mode-change edge. Only a change on that x=0 edge can win the
+    # mode-reset assignment over the frame-start gate and explain one blank eligible frame;
+    # in the logged clocks that is exactly V.pc == M.pc + 1. Later/earlier frames must show.
+    low_clear_race_starts = {sw + 1 for sw, mode in mode_events if mode == 1}
     for ev in pix:
-        if ev[0] == 'M' and ev[2] == '1':
-            sw = int(ev[1])
-            after = [s0 for s0 in starts if s0 > sw]
-            if after and vids.get(after[0]):
-                fd.add('display', 'switch_video', after[0] * T_P,
-                       f'BUF -> LOW at pixel clock {sw}: the first frame after it has video')
+        if ev[0] != 'V':
+            continue
+        try:
+            pc = int(ev[1])
+            if len(ev) != 9:
+                raise ValueError(f'expected 9 fields, got {len(ev)}')
+            lines, video, ll = (num(ev[i]) for i in (2, 3, 4))
+            alive, triggered = num(ev[7]), num(ev[8])
+        except (IndexError, ValueError):
+            fd.add('output', 'trigger_metadata', 0, f'malformed V frame marker {ev}')
+            continue
+        if any(value not in (0, 1) for value in (video, ll, alive, triggered)):
+            fd.add('output', 'trigger_metadata', pc * T_P, f'unknown video/mode gate in V frame marker {ev}')
+            continue
+        if video and ll and not (alive and triggered):
+            fd.add('display', 'trigger_gate', pc * T_P,
+                   f'LOW frame at pixel clock {pc} has video={video}, ll_alive={alive}, triggered={triggered}')
+        if ll and alive and triggered and not video and pc not in low_clear_race_starts:
+            fd.add('display', 'trigger_missing', pc * T_P,
+                   f'eligible LOW frame at pixel clock {pc} has no video outside the one-clock switch-start race')
     # 2. Frame length and sync pulse count, frame start to frame start. The bench counts output
     # lines directly because 720p50 lines are longer and the wait limit can add full lines.
     nlines = {int(ev[1]): num(ev[6]) for ev in pix if ev[0] == 'V' and len(ev) > 6}
@@ -1021,7 +1149,7 @@ def sort_known(sc, logs, fd):
 
 # ---------------------------------------------------------------- one seed
 def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled',
-             density=1.0):
+             density=1.0, gate_probe=0):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
     sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry, density=density)
@@ -1029,12 +1157,14 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
     try:
-        logs = run_sim(sc, work, alter)
+        logs = run_sim(sc, work, alter, gate_probe=gate_probe)
     except subprocess.TimeoutExpired:
         fd.add('bench', 'timeout', 0, 'simulation timed out')
         logs = None
     checked = 0
     if logs:
+        check_gate_probe(logs, gate_probe, fd)
+        check_drain(logs, fd)
         recs = receiver_records(sc)
         marks = check_rx(logs, recs, fd)
         dec, words = check_mixer(sc, logs, recs, marks, fd)
@@ -1045,7 +1175,7 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
         sort_known(sc, logs, fd)
         if checked < (2 if geometry == 'scaled' else 1) * V_ACTIVE:
             fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
-    if not keep and not fd.items and work.exists():
+    if not keep and gate_probe == 0 and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
                std=sc.std, ll0=sc.ll0, geometry=geometry, density=density, n_fields=n_fields,
@@ -1103,6 +1233,18 @@ NEGATIVE = {
     'ring': (49, ['mode_switch'], {'fb_backend.v': ("wire [12:0] lbw_addr = ll_s ? {e_line[3:0], e_idx} : {2'b00, lb_waddr};",
                                                     "wire [12:0] lbw_addr = ll_s ? {e_line[3:0] + 4'd1, e_idx} : {2'b00, lb_waddr};")},
              'display/ll_word'),
+    'trigger': (1201, ['mode_switch'],
+                {'fb_display.v': ("if (line_start && y == 0) have_video <= ll ? (ll_alive && ll_triggered) : have_pub;",
+                                  "if (line_start && y == 0) have_video <= ll ? ll_alive : have_pub;")},
+                'display/trigger_gate', 2),
+    'alive': (1201, ['mode_switch'],
+              {'fb_display.v': ("if (line_start && y == 0) have_video <= ll ? (ll_alive && ll_triggered) : have_pub;",
+                                "if (line_start && y == 0) have_video <= ll ? ll_triggered : have_pub;")},
+              'display/trigger_gate', 1),
+    'switch_clear': (1201, ['mode_switch'],
+                     {'fb_display.v': ("if (ll != ll_d) have_video <= 1'b0;",
+                                       "if (ll != ll_d) have_video <= have_video;")},
+                     'display/switch_video'),
 }
 
 
@@ -1110,12 +1252,52 @@ NEGATIVE = {
 def test_chain_checks_catch_faults(block):
     """Negative controls for the checks above: each altered RTL file is seen by the check of its
     block (the receiver's HF, the mixer's rounding in a blend, the field store's latest field,
-    the display's read address, the low-latency ring's slot). The 'ring' seed runs BUF, then LOW
-    from 3.3 ms; the others have no disturbance. Six fields each."""
-    seed, classes, alter, group = NEGATIVE[block]
-    res = run_seed(seed, classes, work=HERE / 'build' / 'fuzz' / f'neg_{block}', alter=alter, n_fields=6)
+    the display's read address, the low-latency ring's slot, and the LOW alive/trigger/mode gates).
+    The 'ring' seed runs BUF, then LOW from 3.3 ms. Gate mutants use the ten-field probe stimulus;
+    other mutants retain their six-field cases."""
+    seed, classes, alter, group, *probe = NEGATIVE[block]
+    gate_probe = probe[0] if probe else 0
+    n_fields = 10 if gate_probe else 6
+    work = HERE / 'build' / 'fuzz' / f'neg_{block}'
+    res = run_seed(seed, classes, work=work, alter=alter, n_fields=n_fields, gate_probe=gate_probe)
     seen = res['groups'] + [f"{k['block']}/{k['kind']}" for k in res['known']]     # also what #17 explains
     assert any(g.startswith(group) for g in seen), (block, seen, res['first'])
+    if gate_probe:
+        pix = [ln.split() for ln in (work / 'pix.txt').read_text().splitlines() if ln]
+        marker = [ev for ev in pix if ev[0] == 'GATE']
+        assert len(marker) == 1 and int(marker[0][1]) == gate_probe, marker
+        frame = [ev for ev in pix if ev[0] == 'V' and len(ev) == 9 and ev[1] == marker[0][2]]
+        assert len(frame) == 1 and frame[0][3] == '1', (marker, frame)
+
+
+@pytest.mark.parametrize('gate_probe', [1, 2])
+def test_gate_probe_baseline_native(tmp_path, gate_probe):
+    """The unmodified display blanks a frame when either required LOW gate is forced low."""
+    work = tmp_path / f'gate_probe_{gate_probe}'
+    res = run_seed(1201, ['mode_switch'], work=work, keep=True, n_fields=10, gate_probe=gate_probe)
+    assert res['result'] == 'pass' and res['checked'] >= 144, res
+    assert not (res['groups'] or res['known'] or res['edges'] or res['notes']), res
+    pix = [ln.split() for ln in (work / 'pix.txt').read_text().splitlines() if ln]
+    marker = [ev for ev in pix if ev[0] == 'GATE']
+    assert len(marker) == 1, marker
+    frame = [ev for ev in pix if ev[0] == 'V' and len(ev) == 9 and ev[1] == marker[0][2]]
+    assert len(frame) == 1 and frame[0][3] == '0', (marker, frame)
+    if gate_probe == 1:
+        assert frame[0][7:] == ['0', '1'], frame[0]
+    else:
+        assert frame[0][7:] == ['1', '0'], frame[0]
+
+
+def test_drain_timeout_catches_stalled_accepted_read_native(tmp_path):
+    """A real accepted read with withheld data must end in a bounded drain failure."""
+    use_geometry('scaled')
+    sc = fz.generate(1201, ['mode_switch'], n_fields=6)
+    logs = run_sim(sc, tmp_path / 'drain_stall', stall_drain=True)
+    receipts = [ev for ev in logs['sd'] if ev and ev[0] == 'DRAIN']
+    accepted = [ev for ev in logs['sd'] if ev and ev[0] == 'I']
+    assert len(receipts) == 1 and receipts[0][1] == 'fail_2', receipts[:2]
+    assert len(receipts[0]) == 19 and receipts[0][14] == '1', receipts[0]
+    assert accepted and logs['returncode'] != 0, (accepted[:1], logs['returncode'], logs['stdout'])
 
 def test_read_without_frame_decision_keeps_checksum_control():
     """A corrupt read before a frame decision must remain a finding.
@@ -1209,6 +1391,15 @@ def test_store_rejects_out_of_order_accepted_read_start():
     assert any('does not match selected source' in item['detail'] for item in fd.items), fd.items
 
 
+def test_store_rejects_missing_final_read_completion_at_eof():
+    logs, _, _ = accepted_read_fixture()
+    logs['sd'] = [ev for ev in logs['sd'] if ev[0] != 'R']
+    fd = Findings()
+    check_store(logs, [], [], [], fd)
+    assert 'store/log' in fd.groups(), fd.items
+    assert any('never completed' in item['detail'] for item in fd.items), fd.items
+
+
 def l52_for_fixture(logs, data, *, low='0', buf='0', line='5', blank='0', slot=2):
     marker = ['L52', str(slot * 512 + 52), f'{data:08x}', '0', low, buf, line, blank, '2000.0']
     start = next((i for i, ev in enumerate(logs['sd']) if ev[0] == 'I'), None)
@@ -1274,7 +1465,7 @@ def test_frame_length_uses_counted_lines_when_width_changes(line_count, expected
     span = 750 * H_TOTAL + 8 * 1980
     pix = []
     for k in range(5):
-        pix.extend((['V', str(k * span), '288', '1', '1', '0', str(line_count)],
+        pix.extend((video_event(k * span, 288, 1, 1, 0, line_count, 1, 1),
                     ['S', str(k * span + 5 * H_TOTAL)]))
     sc = type('Scenario', (), {'end_ns': 5 * span * T_P})()
     fd = Findings()
@@ -1296,7 +1487,7 @@ def timing_fixture(frame_lines, sync_counts=None):
     pix = []
     for k, start in enumerate(starts):
         n = frame_lines[k - 1] if k else V_TOTAL
-        pix.append(['V', str(start), str(V_ACTIVE), '0', '0', '0', str(n)])
+        pix.append(video_event(start, V_ACTIVE, 0, 0, 0, n))
     for i, (a, n) in enumerate(zip(starts, frame_lines)):
         for pulse in range(sync_counts[i]):
             pix.append(['S', str(a + min(n - 1, 1 + pulse) * H_TOTAL)])
@@ -1308,6 +1499,234 @@ def invariant_findings(pix):
     check_invariants(type('Scenario', (), {'end_ns': 1e12})(),
                      dict(pix=pix, sd=[['end', '0']], mix=[['end']], stdout=''), fd)
     return fd.groups(), fd.items
+
+
+def triggered_pixel_fixture(records, *, switch_video=0):
+    """Frame trace with a LOW switch; each record is (video, alive, triggered)."""
+    span = V_TOTAL * H_TOTAL
+    starts = [1_000_000 + k * span for k in range(len(records))]
+    pix = [['M', str(starts[0] - 1), '1', str(switch_video)]]
+    for start, (video, alive, triggered) in zip(starts, records):
+        pix.append(video_event(start, V_ACTIVE, video, 1, 0, V_TOTAL, alive, triggered))
+        pix.append(['S', str(start + 5)])
+    return pix
+
+
+def drain_values():
+    # cycles, stable, fetch event/request, look, fetching, read/request, queued group,
+    # active write, group mask, burst state, stall arm, frozen, pixel cycle, x, y
+    return [12, DRAIN_STABLE_CYCLES, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 1000, 0, V_ACTIVE]
+
+
+def drain_receipt(status='pass', *, values=None):
+    return ['DRAIN', status, *map(str, drain_values() if values is None else values)]
+
+
+def test_drain_receipt_accepts_only_a_single_bounded_idle_snapshot():
+    fd = Findings()
+    check_drain({'sd': [drain_receipt(), ['end', '0']], 'returncode': 0}, fd)
+    assert not fd.items, fd.items
+
+
+def _assert_drain_detail(sd, returncode, expected_detail):
+    fd = Findings()
+    check_drain({'sd': sd, 'returncode': returncode}, fd)
+    assert len(fd.items) == 1, fd.items
+    item = fd.items[0]
+    assert (item['block'], item['kind']) == ('store', 'drain'), item
+    assert expected_detail in item['detail'], item
+
+
+def test_drain_rejects_missing_duplicate_or_misplaced_receipt():
+    receipt = drain_receipt()
+    end = ['end', '0']
+    interleaved = ['LBEND', '0', '0']
+    expected = 'expected one final DRAIN receipt'
+    _assert_drain_detail([], 0, expected)
+    _assert_drain_detail([receipt, receipt, end], 0, expected)
+    placement = 'DRAIN is not the final SDRAM record before the protocol end marker'
+    _assert_drain_detail([receipt], 0, placement)
+    _assert_drain_detail([receipt, interleaved, end], 0, placement)
+
+
+def test_drain_rejects_malformed_and_unknown_receipt():
+    malformed = drain_receipt()[:-1]
+    _assert_drain_detail([malformed, ['end', '0']], 0, 'malformed DRAIN receipt')
+    _assert_drain_detail([drain_receipt('unknown'), ['end', '0']], 0,
+                         'drain ended with status unknown after 12 clocks')
+
+
+@pytest.mark.parametrize('receipt, returncode, expected_detail', [
+    (drain_receipt('fail_2'), 1, 'drain ended with status fail_2 after 12 clocks'),
+    (drain_receipt(values=[12, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 1000, 0, V_ACTIVE]),
+     0, 'drain bound/count is invalid'),
+    (drain_receipt(values=[12, 4, 0, 0, 'x', 0, 0, 0, 0, 0, 0, 2, 0, 1, 1000, 0, V_ACTIVE]),
+     0, 'non-numeric DRAIN state'),
+])
+def test_drain_reaches_failed_and_unsettled_state_checks(receipt, returncode, expected_detail):
+    _assert_drain_detail([receipt, ['end', '0']], returncode, expected_detail)
+
+
+@pytest.mark.parametrize('name, index, value', [
+    ('fetch event CDC', 2, 1), ('fetch request CDC', 3, 1), ('lookup', 4, 1),
+    ('fetching', 5, 1), ('read in flight', 6, 1), ('request valid', 7, 1),
+    ('queued writer group', 8, 1), ('active writer', 9, 1), ('nonempty group mask', 10, 1),
+    ('active burst', 11, 1), ('stall hook', 12, 1), ('unfrozen pixel clock', 13, 0),
+])
+def test_drain_rejects_each_outstanding_or_unsettled_state(name, index, value):
+    values = drain_values()
+    values[index] = value
+    _assert_drain_detail([drain_receipt(values=values), ['end', '0']], 0,
+                         'drain receipt has outstanding fetch or SDRAM state')
+
+
+def test_drain_rejects_nonzero_exit_even_with_valid_final_receipt():
+    _assert_drain_detail([drain_receipt(), ['end', '0']], 1,
+                         'simulator exited 1 despite a pass receipt')
+
+
+def gate_probe_fixture(probe, *, video=0, target=None, marker=True, duplicate_marker=False,
+                       marker_kind=None, marker_pc=None, original=(1, 1), malformed=False,
+                       duplicate_v=False):
+    frame_pc = 9000
+    alive, triggered = target or ((0, 1) if probe == 1 else (1, 0))
+    marker_kind = probe if marker_kind is None else marker_kind
+    marker_pc = frame_pc if marker_pc is None else marker_pc
+    pix = []
+    if marker:
+        row = ['GATE', str(marker_kind), str(marker_pc), str(original[0]), str(original[1])]
+        if malformed:
+            row.pop()
+        pix.append(row)
+        if duplicate_marker:
+            pix.append(row.copy())
+    frame = video_event(frame_pc, V_ACTIVE, video, 1, 0, V_TOTAL, alive, triggered)
+    pix.append(frame)
+    if duplicate_v:
+        pix.append(frame.copy())
+    return {'pix': pix}
+
+
+@pytest.mark.parametrize('probe', [1, 2])
+def test_gate_probe_checker_accepts_exact_frame_binding_without_using_video_as_oracle(probe):
+    for video in (0, 1):
+        fd = Findings()
+        check_gate_probe(gate_probe_fixture(probe, video=video), probe, fd)
+        assert not fd.items, fd.items
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'malformed', 'wrong_kind', 'wrong_frame', 'wrong_original',
+    'forced_input_high', 'other_input_low', 'unknown_input', 'missing_v_flags',
+    'wrong_mode', 'duplicate_v',
+])
+def test_gate_probe_checker_rejects_unbound_or_invalid_evidence(fault):
+    kwargs = {}
+    if fault == 'missing':
+        kwargs['marker'] = False
+    elif fault == 'duplicate':
+        kwargs['duplicate_marker'] = True
+    elif fault == 'malformed':
+        kwargs['malformed'] = True
+    elif fault == 'wrong_kind':
+        kwargs['marker_kind'] = 2
+    elif fault == 'wrong_frame':
+        kwargs['marker_pc'] = 9001
+    elif fault == 'wrong_original':
+        kwargs['original'] = (0, 1)
+    elif fault == 'forced_input_high':
+        kwargs['target'] = (1, 1)
+    elif fault == 'other_input_low':
+        kwargs['target'] = (0, 0)
+    elif fault == 'unknown_input':
+        kwargs['target'] = ('x', 1)
+    elif fault == 'missing_v_flags':
+        kwargs['missing_v_flags'] = True
+    elif fault == 'wrong_mode':
+        kwargs['target'] = (0, 1)
+        kwargs['wrong_mode'] = True
+    elif fault == 'duplicate_v':
+        kwargs['duplicate_v'] = True
+    fixture = gate_probe_fixture(1, **{k: v for k, v in kwargs.items()
+                                       if k not in ('wrong_mode', 'missing_v_flags')})
+    if fault == 'wrong_mode':
+        frame = next(ev for ev in fixture['pix'] if ev[0] == 'V')
+        frame[4] = '0'
+    elif fault == 'missing_v_flags':
+        frame = next(ev for ev in fixture['pix'] if ev[0] == 'V')
+        del frame[7:]
+    fd = Findings()
+    check_gate_probe(fixture, 1, fd)
+    assert fd.groups() == ['bench/gate_probe'], (fault, fd.items)
+
+
+def test_gate_probe_marker_is_forbidden_when_hook_is_disabled():
+    fd = Findings()
+    check_gate_probe(gate_probe_fixture(1), 0, fd)
+    assert fd.groups() == ['bench/gate_probe'], fd.items
+
+
+@pytest.mark.parametrize('alive, triggered', [(0, 1), (1, 0), (0, 0)])
+def test_low_video_requires_alive_and_triggered(alive, triggered):
+    records = [(1, 1, 1), (1, alive, triggered), (1, 1, 1), (1, 1, 1), (1, 1, 1)]
+    groups, items = invariant_findings(triggered_pixel_fixture(records))
+    assert 'display/trigger_gate' in groups, items
+
+
+def test_valid_triggered_first_frame_after_switch_is_allowed():
+    groups, items = invariant_findings(triggered_pixel_fixture([(1, 1, 1)] * 5))
+    assert 'display/switch_video' not in groups and 'display/trigger_gate' not in groups, items
+
+
+def test_coincident_switch_frame_may_be_blank_but_later_triggered_frame_must_show():
+    groups, items = invariant_findings(triggered_pixel_fixture(
+        [(0, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1)]))
+    assert not groups, items
+
+
+def test_mode_change_at_v_marker_does_not_exempt_frame_start_blank():
+    pix = triggered_pixel_fixture([(0, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1)])
+    pix[0][1] = next(ev[1] for ev in pix if ev[0] == 'V')
+    groups, items = invariant_findings(pix)
+    assert 'display/trigger_missing' in groups, items
+
+
+def test_distant_first_eligible_blank_after_switch_is_not_exempt():
+    pix = triggered_pixel_fixture([(0, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1), (1, 1, 1)])
+    first_v = next(ev for ev in pix if ev[0] == 'V')
+    pix[0][1] = str(int(first_v[1]) - 2 * H_TOTAL)
+    groups, items = invariant_findings(pix)
+    assert 'display/trigger_missing' in groups, items
+
+
+def test_all_black_eligible_low_frames_are_not_coverage():
+    groups, items = invariant_findings(triggered_pixel_fixture([(0, 1, 1)] * 5))
+    assert 'display/trigger_missing' in groups, items
+
+
+def test_mode_switch_marker_requires_post_clear_blank_sample():
+    pix = triggered_pixel_fixture([(1, 1, 1)] * 5, switch_video=1)
+    groups, items = invariant_findings(pix)
+    assert 'display/switch_video' in groups, items
+
+
+@pytest.mark.parametrize('fault', ['missing', 'unknown'])
+def test_v_frame_gate_metadata_is_mandatory_and_binary(fault):
+    pix = triggered_pixel_fixture([(1, 1, 1)] * 5)
+    v = next(ev for ev in pix if ev[0] == 'V')
+    if fault == 'missing':
+        del v[7:]
+    else:
+        v[8] = 'x'
+    groups, items = invariant_findings(pix)
+    assert 'output/trigger_metadata' in groups, items
+
+
+def test_mode_switch_metadata_is_mandatory():
+    pix = triggered_pixel_fixture([(1, 1, 1)] * 5)
+    pix[0].pop()
+    groups, items = invariant_findings(pix)
+    assert 'display/switch_metadata' in groups, items
 
 
 def test_vsync_count_is_a_finding():
@@ -1363,6 +1782,7 @@ def test_no_display_coverage_is_a_failure_even_with_switches(tmp_path, monkeypat
     monkeypatch.setattr(module, 'check_mixer', lambda *a: ([], []))
     monkeypatch.setattr(module, 'word_origins', lambda *a: ([], []))
     monkeypatch.setattr(module, 'check_store', lambda *a: [])
+    monkeypatch.setattr(module, 'check_drain', lambda *a: None)
     monkeypatch.setattr(module, 'check_display', lambda *a: 0)
     monkeypatch.setattr(module, 'check_invariants', lambda *a: None)
     monkeypatch.setattr(module, 'sort_known', lambda *a: None)
@@ -1376,7 +1796,7 @@ def ring_display_fixture(*, complete=True, fault=None):
     use_geometry('scaled')
     start = 500000
     word = 0x66778899
-    pix = [['V', str(start), '1', '1', '1', '0', str(V_TOTAL)], ['B', '0']]
+    pix = [video_event(start, 1, 1, 1, 0, V_TOTAL, 1, 1), ['B', '0']]
     for y in range(V_ACTIVE):
         pix.extend((['Y', str(y), '0'],
                     ['X', str(y), f'{word if complete else BLACK:08x}',
