@@ -10,21 +10,23 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-09, accepted C3 source `8d7b0e9`):** the frozen full
-regression has 490 passed outcomes, zero failures, skips, xfails, xpasses or
-missing outcomes, in 1:21:01. All 157 input hashes are unchanged. Formal
-checks produced 7 proofs and 14 expected negative-control counterexamples.
-The reviewed acceptance receipt is `0ad1443dc8927ba6a721044b1e1b13a26807d3b41e225915a517f65f17111de0`.
+**Status (2026-10-10, accepted C3 bench/checker package `0dcff5d`):** the frozen
+regression has 543 passed outcomes across all 39 test files, with zero failures,
+skips, xfails, xpasses or missing outcomes, in **1:23:13 (4993.121 s)**. All 157
+frozen source-input hashes are unchanged. Formal checks passed 7 proofs and 14
+negative-control counterexamples. Acceptance receipt SHA-256:
+`81eb8e3813a5f0099e06e450257e274df77edd2fdd87a4f880b9a830e8493d7b`.
 
-M4 seed 0 and M6 seed 3 routed with all five clocks meeting a 75 MHz
-requirement. The M0 reference manifest and all four HDMI IOB-fuse pairs
-passed verification; 24 build artifacts are archived. See
-[gateware/README.md](gateware/README.md) for routed figures and limits.
+The M4 seed-0 and M6 seed-3 routing reports, M0 reference manifest and four HDMI
+IOB-fuse checks remain the accepted `8d7b0e9` build evidence. Their existing M4/M6
+input manifests (46/47 inputs) match the accepted 8d inputs byte-for-byte; `0dcff5d`
+was not freshly routed. The 24 archived build artifacts are unchanged. See
+[gateware/README.md](gateware/README.md) for the figures and limits.
 
-C1's 447-pass result and M6 seed-2 routing failure remain historical.
-The board default is still seed 2; the accepted seed-3 build does not
-qualify seed 2. The new 260-seed C3 campaign has not started. Nothing has
-run on hardware.
+The older 490-/447-pass suites and C1's M6 seed-2 routing failure remain historical.
+The board default is still seed 2, and the accepted seed-3 report does not satisfy
+C2's requirement for a new seed-2 build. A fresh 260-seed campaign on accepted final
+main remains pending. No FPGA gateware has been verified on hardware.
 
 Most of this code was written with heavy AI assistance (Claude) and reviewed
 by the project owner; see the hub's
