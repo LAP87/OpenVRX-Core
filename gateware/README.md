@@ -49,7 +49,15 @@ M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för samtliga fem k
 
 M0-referensen och alla fyra HDMI-par har godkända manifest/fuse-kontroller; 24 byggartefakter är arkiverade med acceptanskvittot. M6:s standardseed är fortfarande 2. Dessa seed-3-resultat ersätter inte C2:s senare seed-2-krav. En ny 260-frökampanj på accepterad slutlig main återstår. Inget är provat på hårdvara.
 
-### Accepterat C3-bänkpaket `0dcff5d`
+### Accepterad C3-displaychecker `79b1406`
+
+Den frysta regressionen gav **566 pass i 39 testfiler**, utan fel, skips, xfails, xpasses eller saknade utfall, på **1:21:34 (4893.875 s)**. Alla 157 frysta källhashar är oförändrade; 7 formella bevis och 14 negativa motexempel passerar. Acceptanskvittots SHA-256: `a1944cc5b161fe12535cee25acb743a91455c3617d1260ff0bde3ce2e0746847`.
+
+Före ett lägesbyte undantas en bild från displaykontrollen bara om dess aktiva bild överlappar bytet. Radlängden kommer från bildens observerade NTSC/PAL-timing; okänd timing är ett fel. Hela bildens tidigare undantag för X/Z-kontrollen och fönstret efter bytet är oförändrade. 23 nya rena kontroller täcker gränserna, inklusive sista aktiva pixeln, fel ringord och fel källmappning. 50 sparade kampanjspår passerar. Native-omspelningen av seed 1249 har byte-identiskt stimulus och råspår, 144 kontrollerade rader och inga findings/known/edges/notes. Den tidigare körningens FAIL med 72 rader bevaras.
+
+Fullsvitens efterkontroll stannade först på `/` i ett rent Python-testnamn. Separat eftervalidering filtrerar bort XML-kandidater som saknar cocotb-modul; alla 19 verkliga XML-identiteter och den strikta SDRAM-kontrollen behålls. Testerna kördes inte om och källan ändrades inte. Produktions-RTL och de 24 arkiverade byggartefakterna är oförändrade; M4 seed 0/M6 seed 3 återanvänds genom identiska byggindata. Ny 260-frökampanj och C2:s M6 seed 2 återstår. FPGA-kedjan är inte verifierad på hårdvara.
+
+### Tidigare accepterat C3-bänkpaket `0dcff5d`
 
 Den frysta regressionen gav **543 pass** i **39 testfiler**, utan fel, skips, xfails, xpasses eller saknade utfall, på **1:23:13 (4993.121 s)**. Alla 157 frysta källhashar är oförändrade. Acceptanskvittots SHA-256: `81eb8e3813a5f0099e06e450257e274df77edd2fdd87a4f880b9a830e8493d7b`. Formalgrinden gav 7 bevis och 14 verkliga motexempel. Ändringen gäller bänk och checker; produktions-RTL är oförändrad.
 
@@ -437,7 +445,7 @@ av kampanjens eget rundlås.
 Mixerns återkomsttest täcker nu både A och B, med den gamla domarregeln
 som negativ kontroll. En separat diagnostik för Core #18 kontrollerar
 modellens fältstarter mot F/radnummer i den utström som matchat RTL.
-Fables rapport om #17/#18 på `e113cf6` och de 490 passen från `8d7b0e9` är historik; det accepterade bänkpaketets 543-testresultat står i avsnittet ovan. Modell- och bänkfel är oväntade.
+Fables rapport om #17/#18 på `e113cf6` och de 490/543 passen från tidigare C3-paket är historik; den accepterade displaycheckerns 566-testresultat står i avsnittet ovan. Modell- och bänkfel är oväntade.
 Regeln för mixerns F-bit ändrades 2026-10-08 (#18), och #17 rättades samma dag.
 
 Seed 126 gav samma store/read-checksummefel och X/Z på `e113cf6`-RTL med separat strikt checker och på ren C1-main `629806f`. C3-källan `8d7b0e9` passerar samma frö med 216 kontrollerade rader; kontrollen avvisar också den verkliga felvarianten som skriver till fel ringplats. `fb_display` använder reservvärdet `V_ACTIVE / 3`: fysisk 720-radersgeometri behåller 240. Aldrig initialiserade LOW-platser ger svart, medan äldre data i initialiserade platser behålls enligt ringens regel. Det styrker den testade körningen; den nya kampanjen återstår och alla LOW→BUF-faser är inte därmed verifierade. F-bit, triggerstyrd videogrind och regeln att fältet skrivaren gick med i inte publiceras är oförändrade.

@@ -10,16 +10,24 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-10, accepted C3 bench/checker package `0dcff5d`):** the frozen
-regression has 543 passed outcomes across all 39 test files, with zero failures,
-skips, xfails, xpasses or missing outcomes, in **1:23:13 (4993.121 s)**. All 157
+**Status (2026-10-10, accepted C3 display checker `79b1406`):** the frozen
+regression has 566 passed outcomes across all 39 test files, with zero failures,
+skips, xfails, xpasses or missing outcomes, in **1:21:34 (4893.875 s)**. All 157
 frozen source-input hashes are unchanged. Formal checks passed 7 proofs and 14
 negative-control counterexamples. Acceptance receipt SHA-256:
-`81eb8e3813a5f0099e06e450257e274df77edd2fdd87a4f880b9a830e8493d7b`.
+`a1944cc5b161fe12535cee25acb743a91455c3617d1260ff0bde3ce2e0746847`.
+
+The display checker excludes a pre-switch frame only when its active picture
+overlaps the switch, using the observed NTSC/PAL line timing. Fifty saved traces
+pass; seed 1249 also passes a native replay with identical stimulus and traces.
+Corrupted ring words and source mappings still fail. The suite's XML postprocessor
+initially rejected a pure Python parameter name containing `/`; the separate
+acceptance filters out non-cocotb candidates while retaining all 19 actual XML
+report bindings. The completed tests were not rerun.
 
 The M4 seed-0 and M6 seed-3 routing reports, M0 reference manifest and four HDMI
 IOB-fuse checks remain the accepted `8d7b0e9` build evidence. Their existing M4/M6
-input manifests (46/47 inputs) match the accepted 8d inputs byte-for-byte; `0dcff5d`
+input manifests (46/47 inputs) match the accepted 8d inputs byte-for-byte; `79b1406`
 was not freshly routed. The 24 archived build artifacts are unchanged. See
 [gateware/README.md](gateware/README.md) for the figures and limits.
 
