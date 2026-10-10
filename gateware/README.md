@@ -4,7 +4,7 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-09
+## Status 2026-10-10
 
 Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; historiska C1-värden och den accepterade C3-källans aktuella resultat står separat efter tabellen.
 
@@ -47,7 +47,17 @@ M4 seed 0 och M6 seed 3 klarade routning med krav på 75 MHz för samtliga fem k
 | `m4_dual_mix` | 0 | 8 230 | 25 | `mix.b_clk` 163,16; `mix.a_clk` 137,49; `clocks.clk_27` 228,73; `sd_clk` 101,46; `clk_pixel` 104,80 | `135aedd90adfb6bd2ef021fd80fbaf701f73b73c650e20336abc2b7c4b049c53` |
 | `m6_puck_proto` | 3 | 12 625 | 25 | `mix.b_clk` 137,46; `mix.a_clk` 142,65; `clocks.clk_27` 119,70; `sd_clk` 108,87; `clk_pixel` 127,84 | `fc7f2e880052f012de6e0105479f16c9f734be52a2ee24740380c5bc6669b42a` |
 
-M0-referensen och alla fyra HDMI-par har godkända manifest/fuse-kontroller; 24 byggartefakter är arkiverade med acceptanskvittot. M6:s standardseed är fortfarande 2. Dessa seed-3-resultat ersätter inte C2:s senare seed-2-krav. Den nya 260-frökampanjen har inte startat. Inget är provat på hårdvara.
+M0-referensen och alla fyra HDMI-par har godkända manifest/fuse-kontroller; 24 byggartefakter är arkiverade med acceptanskvittot. M6:s standardseed är fortfarande 2. Dessa seed-3-resultat ersätter inte C2:s senare seed-2-krav. En ny 260-frökampanj på accepterad slutlig main återstår. Inget är provat på hårdvara.
+
+### Accepterat C3-bänkpaket `0dcff5d`
+
+Den frysta regressionen gav **543 pass** i **39 testfiler**, utan fel, skips, xfails, xpasses eller saknade utfall, på **1:23:13 (4993.121 s)**. Alla 157 frysta källhashar är oförändrade. Acceptanskvittots SHA-256: `81eb8e3813a5f0099e06e450257e274df77edd2fdd87a4f880b9a830e8493d7b`. Formalgrinden gav 7 bevis och 14 verkliga motexempel. Ändringen gäller bänk och checker; produktions-RTL är oförändrad.
+
+Efter `TAIL` väntar bänken in vertikalsläckningen och stoppar pixelklockan på följande negativa flank. SDRAM-klockan fortsätter medan CDC-signaler och redan accepterade läsningar och skrivburstar blir inaktiva; fyra inaktiva SDRAM-klockor krävs i följd. Dräneringen har en simulerad tidsgräns och ett slutkvitto för tillstånd och klockor; timeout är ett fel. Varje `V`-bild måste bära `ll_alive` och `triggered`, och LOW-video tillåts bara när båda är sanna. `M`-raden kontrollerar direkt att videon släckts vid lägesbytet. De tio riktade körningarna omfattade fungerande baslinjer, samma stimuli för baslinje och felvarianter av alive-/triggergrinden, switch-clear-fel och blockerad dränering.
+
+De sex fuzzinvarianterna, strikt SDRAM-läsningskontroll och ringadressbindning är kvar; `LOW_LOCK_GROUPS = ()`, alltså inga #17-masker. En äldre avbruten kampanj med 23 sparade rader (17 PASS, 6 FAIL) bevaras för bänk-triage. En ny kampanj med 260 frön på accepterad slutlig main återstår. Den analoga AIO/Moneagle-kamerabilden verifierar inte FPGA-kedjan; FPGA:n är inte provad på hårdvara.
+
+M4 seed 0 och M6 seed 3 ovan återanvänder de godkända `8d7b0e9`-byggena: deras befintliga indata (46/47 poster) matchar de arkiverade manifesten byte för byte. Ingen ny routning eller nya FPGA-byggsiffror hävdas för `0dcff5d`.
 
 ## Moduler (`rtl/`)
 
@@ -427,8 +437,7 @@ av kampanjens eget rundlås.
 Mixerns återkomsttest täcker nu både A och B, med den gamla domarregeln
 som negativ kontroll. En separat diagnostik för Core #18 kontrollerar
 modellens fältstarter mot F/radnummer i den utström som matchat RTL.
-Fable rapporterade #17/#18 stängda på `e113cf6`; den frysta C3-sviten har
-490 pass och inga xfails. Modell- och bänkfel är oväntade.
+Fables rapport om #17/#18 på `e113cf6` och de 490 passen från `8d7b0e9` är historik; det accepterade bänkpaketets 543-testresultat står i avsnittet ovan. Modell- och bänkfel är oväntade.
 Regeln för mixerns F-bit ändrades 2026-10-08 (#18), och #17 rättades samma dag.
 
 Seed 126 gav samma store/read-checksummefel och X/Z på `e113cf6`-RTL med separat strikt checker och på ren C1-main `629806f`. C3-källan `8d7b0e9` passerar samma frö med 216 kontrollerade rader; kontrollen avvisar också den verkliga felvarianten som skriver till fel ringplats. `fb_display` använder reservvärdet `V_ACTIVE / 3`: fysisk 720-radersgeometri behåller 240. Aldrig initialiserade LOW-platser ger svart, medan äldre data i initialiserade platser behålls enligt ringens regel. Det styrker den testade körningen; den nya kampanjen återstår och alla LOW→BUF-faser är inte därmed verifierade. F-bit, triggerstyrd videogrind och regeln att fältet skrivaren gick med i inte publiceras är oförändrade.
