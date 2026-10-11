@@ -6,10 +6,10 @@
     python gateware/tools/snowlog.py --summary emi.csv
 On Windows the port is COM5 and the like (set up with the `mode` command; not tried on a real port yet).
 
-Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD o ll
+Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD T/V o ll
 snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), noise A, noise B
 (luma samples outside 16..235 in the last 1024 lines), % of mixer decisions from A / B /
-blended, band+channel, MHz, mode, "!" once the mixer has dropped a line since reset
+blended, band+channel, MHz, mode, filter (T=TV, V=VCR), "!" once the mixer has dropped a line since reset
 (else "-"), and per decoder A, B since the previous line: "L" a poll round read the
 "lost lock" bit (88h bit 4), "-" it did not, "?" no whole poll round. Lines from older
 bitstreams (no lost-lock field, no noise values, possibly no "!"/"-") are read too; the
@@ -23,6 +23,7 @@ Change one thing at a time (HDMI on/off, channel, distance, shield).
 import argparse
 import csv
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -30,32 +31,71 @@ import time
 from collections import defaultdict
 
 FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
-          'mhz', 'mode', 'dropped', 'lost_a', 'lost_b']
+          'mhz', 'mode', 'filter', 'dropped', 'lost_a', 'lost_b']
 
 
 def parse(line):
     """A log line as a dict, or None for anything else (also a line damaged on the way)."""
     p = line.split()
     lost = None
-    if len(p) == 13:                                   # with the lost-lock field
-        lost, p = p[12], p[:12]
-        if len(lost) != 2 or any(c not in '-L?' for c in lost):
+    filter_value = None
+    noise = None
+    new_filter = False
+
+    def blank_filter_slot():
+        # The new fixed-width row adds a T/V byte and its separator after mode. If
+        # the byte is blank but both separators remain, token count looks legacy;
+        # reject that malformed shape. If the token/separator were truly removed,
+        # the bytes are identical to a legacy row, which remains filter=None.
+        if len(p) not in (12, 13) or p[0] != 'S':
+            return False
+        spans = list(re.finditer(r'\S+', line))
+        if len(spans) != len(p) or len(spans) <= 11:
+            return False
+        mode = p[10]
+        expected_gap = 1 + max(0, 3 - len(mode))  # old fixed-width MIX / A / B mode plus delimiter
+        gap = line[spans[10].end():spans[11].start()]
+        return len(gap) in (expected_gap + 1, expected_gap + 2) and p[11] in ('-', '!')
+
+    if len(p) == 14:                                   # new noise format with filter and lost-lock suffix
+        if len(p[13]) != 2 or any(c not in '-L?' for c in p[13]):
             return None
-    if len(p) == 12:                                   # current format, with the noise values
+        if p[12] not in ('-', '!') or p[11] not in ('T', 'V'):
+            return None
+        noise, lost, filter_value, new_filter = p[3:5], p[13], p[11], True
+        p = p[:3] + p[5:13]
+    elif len(p) == 13:
+        if p[12] in ('-', '!'):                       # new noise format without lost-lock suffix
+            if blank_filter_slot() or p[11] not in ('T', 'V'):
+                return None
+            noise, filter_value, new_filter = p[3:5], p[11], True
+            p = p[:3] + p[5:13]
+        else:                                          # legacy noise format with lost-lock suffix
+            lost = p[12]
+            if len(lost) != 2 or any(c not in '-L?' for c in lost) or blank_filter_slot():
+                return None
+            noise = p[3:5]
+            p = p[:3] + p[5:12]
+    elif len(p) == 12:                                # legacy noise format without lost-lock suffix
+        if blank_filter_slot():
+            return None
         noise, p = p[3:5], p[:3] + p[5:]
-    elif len(p) in (9, 10):                            # older bitstreams: no noise values
+    elif len(p) in (9, 10):                           # older bitstreams: no noise values
         noise = None
     else:
         return None
-    if p[0] != 'S' or (len(p) == 10 and p[9] not in '-!'):
+    if (p[0] != 'S' or (new_filter and p[10] not in '-!')
+            or (not new_filter and len(p) == 10 and p[9] not in '-!')):
         return None
     num = lambda s: None if s.startswith('-') else int(s)  # noqa: E731
     flag = lambda f, i: None if f is None or f[i] == '?' else int(f[i] == 'L')  # noqa: E731
+    drop_token = p[10] if new_filter else p[9] if len(p) == 10 else None
     try:
         return {'snow_a': num(p[1]), 'snow_b': num(p[2]),
                 'noise_a': num(noise[0]) if noise else None, 'noise_b': num(noise[1]) if noise else None,
                 'use_a': int(p[3]), 'use_b': int(p[4]), 'use_mix': int(p[5]), 'channel': p[6], 'mhz': int(p[7]),
-                'mode': p[8], 'dropped': int(len(p) == 10 and p[9] == '!'),
+                'mode': p[8], 'filter': filter_value,
+                'dropped': int(drop_token == '!'),
                 'lost_a': flag(lost, 0), 'lost_b': flag(lost, 1)}
     except ValueError:
         return None

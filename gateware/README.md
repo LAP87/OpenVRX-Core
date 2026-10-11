@@ -4,11 +4,27 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-11
+## Status 2026-10-12
 
 Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; historiska C1- och C3-resultat står separat efter tabellen.
 
-### Aktuell mixergräns, källa `6c12099`
+### Aktuell TV/VCR-meny, källa `c3fda21`
+
+M6 kan begära TV eller VCR för båda dekodrarna via filterfältet i menyn. Styrenheten håller ett pågående skrivvärde fast, registrerar det faktiskt kvitterade värdet per dekoder och försöker igen efter parad pollning vid NACK. OLED, OSD och USB-logg visar det begärda menyvalet; loggen är 62 byte inklusive CRLF och `snowlog.py` bevarar de äldre radformaten.
+
+Den frysta sviten gav **604 pass i 39 filer**, utan fel, skips eller xfails, på **5411,439 s (1:30:11)**. Alla 570 tidigare testnoder finns kvar och samtliga 157 källhashar är oförändrade. Root granskade 19 cocotb-rapportidentiteter, 7 formella bevis och 14 verkliga negativa motexempel. Riktad C2-verifiering gav 56 pass och två subtester; nio isolerade gamla BUS-/parser-vakter underkänns för de avsedda semantiska felen. Svitens acceptans-SHA-256: `c783407e79a31e9a09f3bc82f76debff1160aebee80091c25368d261d1c09bfc`.
+
+Färska byggen från samma källa, med beslutade seeds och oförändrade stift, IOB och SDC:
+
+| Topp | Seed | Maxfrekvenser efter routning (MHz), krav 75 för alla klockor | Manifest SHA-256 |
+|---|---:|---|---|
+| M0 | 0 | pixel 149,37; 27 MHz-domän 359,84 | `23063bf9ae841a126293ed9123a5edfff95a4632fc3e0edf7a89fd64a6d73e78` |
+| M4 | 0 | A 149,54; B 161,55; 27 MHz-domän 215,7; SDRAM 101,69; pixel 115,75 | `f839035d920ab3fb8089c72d3b3514492f123ce374e7f2838754cf01831db7b9` |
+| M6 | 2 | A 150,22; B 131,08; 27 MHz-domän 128,3; SDRAM 104,85; pixel 120,88 | `d2b55005f80878b99555abe1220d51a76d10b46f66945f08f77433d1a24b667e` |
+
+Samtliga 24 arkiverade byggartefakter och deras manifest är granskade. Alla fyra HDMI-par matchar M0:s IOB-fuses i både M4 och M6. En ny slutkampanj återstår; den gamla kampanjens seed 1345 är fortfarande FAIL med 72 kontrollerade rader mot minst 144. Ingen FPGA-hårdvara eller TV/VCR-bildskillnad är mätt.
+
+### Tidigare mixergräns, källa `6c12099`
 
 Ett helt utelämnat fält kunde förbruka F-gränsen utan att skicka ord. När nästa synliga fält började med ett högre radnummer än det föregående slog BUF och LOW ihop dem. Mixern håller nu gränsen väntande tills en rad skickas; flera helt utelämnade fält ger en enda synlig växling. Kanalval, radurval och dekoderns F-bit är oförändrade.
 
@@ -22,7 +38,7 @@ Färska byggen från samma källa, utan pin-, IOB-, SDC- eller seedbyte:
 | M4 | 0 | A 134,44; B 150,40; 27 MHz-domän 224,57; SDRAM 113,08; pixel 103,84 | `fe33bddd07834312f871900e7d0c6c5ed0b4bc09b47e1940a63a6f22aa145b95` |
 | M6 | 2 | A 154,32; B 113,78; 27 MHz-domän 125,47; SDRAM 106,10; pixel 124,66 | `7a2317922e96c3039d3ca51d1c6b1856b6dea184b20215ae4b6554358967eea0` |
 
-Alla fyra HDMI-par matchar M0:s IOB-fuses. Ny slutkampanj och det separata TV/VCR-paketet återstår. Ingen FPGA-hårdvara är verifierad.
+Alla fyra HDMI-par matchar M0:s IOB-fuses. Vid denna B-acceptans återstod ny slutkampanj och det separata TV/VCR-paketet. Ingen FPGA-hårdvara var verifierad.
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
@@ -276,11 +292,11 @@ Två likadana moduler svarar på samma I2C-adress (B8h), därför egen SDA per d
 - tid: vid 99 kHz tar varje byte 91 µs, alltså ungefär 0,1 s per kilobyte och dekoder;
 - prov på kortet med och utan patch.
 
-**Dekoderns init-lista** (`rtl/tvp_ctrl.v`, båda dekodrarna, i den här ordningen): 00h = 00h (ingång AIP1A), 04h = FCh (SECAM, NTSC 4.43, PAL-N och PAL-M maskade ur autoswitchen), 0Dh = 47h (8 bit BT.656, inbäddad synk), 28h = 00h, 02h = 30h, och sist 03h = 0Dh (utgångarna på; läses tillbaka vid varje pollning). Värdena är ur SLES209E (3.21.3, 3.21.5, 3.21.32).
+**Dekoderns init-lista** (`rtl/tvp_ctrl.v`, båda dekodrarna, i den här ordningen): 00h = 00h (ingång AIP1A), 04h = FCh (SECAM, NTSC 4.43, PAL-N och PAL-M maskade ur autoswitchen), 0Dh = 47h (8 bit BT.656, inbäddad synk), 28h = `VIDEO_STD` (standard 00h), 02h = `selected_mode`, och sist 03h = 0Dh (utgångarna på; läses tillbaka vid varje pollning). Vid reset får `selected_mode` värdet från `OP_MODE`, som är 30h (TV). M6:s meny kan begära TV eller VCR för båda dekodrarna. Värdena är ur SLES209E (3.21.3, 3.21.5, 3.21.32).
 - **28h = 00h, autoswitch**, uttryckligen skrivet fast det är standardvärdet, så att båda dekodrarna är inställda lika efter varje återstart. Dekoderunderlaget i navet (avsnitt 2) föreslår att låsa NTSC eller PAL, så att två dekodrar i brus inte kan välja olika standard. Pucken tar kameror med båda standarderna (PAL ger 288 rader i `BUF` och 720p50 i `LOW`), och en låst standard skulle ta bort den andra. Därför gäller autoswitch, begränsad av 04h till (M) NTSC och (B, G, H, I) PAL. Att dekodrarna kan välja olika i brus kvarstår som risk.
-- **02h = 30h, TV/VCR-läget låst till TV** (bit 5:4 = 11; 10 är VCR, 01 reserverat; övriga bitar som standard). I automatläge går en dekoder till VCR-läge vid instabil eller avvikande synk: kamfiltret stängs av och färgfällan slås på. Två dekodrar kan då filtrera olika, och mixerns HF-jämförelse jämför två olika filter. TV-läget håller kamfiltret på i båda, vilket ger bäst Y/C-separation på en ren bild; VCR-läget (20h) är det dekodern själv väljer vid instabil synk och kan hålla låset bättre i brus. Vilket som ger bäst bild vid svag signal är inte mätt. **Ägarens beslut väntar på bänken:** båda lägena ska provas på riktig signal innan valet låses, och om skillnaden är stor bör läget bli en menyinställning (OSD) i stället för en parameter. Värdena är parametrar (`VIDEO_STD`, `OP_MODE`).
+- **02h — TV/VCR-läge.** TV, 30h (bit 5:4 = 11), är standard vid reset; 20h väljer VCR (bit 5:4 = 10), medan 01 är reserverat. M6:s filterfält begär samma läge för båda dekodrarna. TV behåller kamfiltret; VCR stänger av det och slår på färgfällan. Vilket läge som ger bäst bild eller lås vid svag signal är inte mätt. Båda ska jämföras med den avsedda kameran och signalen på bänken. M4 behåller sitt `OP_MODE`-parametergränssnitt; menyvalet finns i M6.
 
-Simulerat i `sim/test_tvp_ctrl.py` (listan i ordning, en gång; negativa kontroller: 02h = 20h, och 02h före 28h). Inte provat mot en riktig TVP5150AM1.
+Simulerat i `sim/test_tvp_ctrl.py`: init-listans registerordning, två dekodrars TV/VCR-värden, senaste menyval, kvittens för en äldre pågående överföring samt NACK och omförsök efter parad pollning. Negativa kontroller kör verkliga felvarianter av styrenheten och granskar den upplösta I²C-bussens stiftspår. Inte provat mot en riktig TVP5150AM1.
 
 M4 ställer själv båda mottagarna på F4 5800 MHz (`rtl/rx5808_tune.v`, samma stift som M3 och M6): 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst. Testat mot en modell av regeln i `sim/test_rx5808_tune.py`.
 
@@ -334,11 +350,13 @@ Skärmen (exakt 21 tecken per rad; `>` visar valt fält):
 >BAND F   CH 4  5800
  MODE MIX VIEW A  BUF
  A LOCK    B NOSIG
- SE BAND OK
+ SE BAND OK  FILT TV
 ```
-OK byter fält (band → kanal → läge → latens → sida), NEXT stegar värdet. `BUF`/`LOW` är videovägen: `BUF` går via SDRAM-bildbufferten, `LOW` är låglatensläget (se nedan). Bandbyte och kanalbyte programmerar om båda mottagarna direkt. Kanalen skrivs också 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst (`rtl/rx5808_tune.v`). Läge MIX låter mixern välja; A eller B tvingar en mottagare. Kanaler utanför 5725–5875 MHz visar `!OUTSIDE SE BAND`. Start: F4 5800 MHz.
+OK byter fält (band → kanal → mixläge → latensläge → filter → sida → band). NEXT ändrar det markerade fältet: band, kanal, MIX/A/B, BUF/LOW, TV/VCR eller huvud-/mätarsida. `BUF` och `LOW` väljer videoväg (se nedan). Filtervalet återställs till TV vid reset; det är oberoende av MIX/A/B och BUF/LOW. På rad 4 står `>` före `FILT` när filterfältet är valt och längst till vänster när sidfältet är valt; bara ett fält är valt åt gången. Band- och kanalbyte programmerar om båda mottagarna direkt. Kanalen skrivs också 0,5 s efter start och sedan varannan sekund så länge ingen dekoder är låst (`rtl/rx5808_tune.v`). MIX låter mixern välja; A eller B tvingar en mottagare. För kanal utanför 5725–5875 MHz visar rad 4 `!SE BAND`. Start: F4 5800 MHz. Skärmraderna fylls med blanktecken till 21 tecken; avslutande blanktecken är utelämnade i exemplet.
 
-**Mätarsidan ("snö-mätare")**: OK till femte fältet (markören hamnar på rad 4), NEXT växlar sida.
+**Avstämning av dekoderläget:** styrenheten tar emot senaste menyvalet och jämför det med senast kvitterat värde per dekoder. Efter båda startinitieringslistorna sker en första avstämning före pollningen. Därefter sker den vid den avslutande gränsen efter båda dekodrarnas pollförsök: vid normala svar efter båda kompletta 88h/89h/03h-tripletterna. Ett NACK avslutar pollförsöket utan att räknas som en hel frisk runda. Varje avstämning försöker skriva till varje dekoder högst en gång. Ett påbörjat I²C-skrivvärde och dess SDA-linje hålls fasta till transaktionens slut. En kvittens för ett äldre val registrerar värdet som faktiskt skrevs och lämnar ett nyare val väntande. Vid NACK behålls tidigare kvitterat värde; pollningen fortsätter och ett nytt försök kommer vid en senare avstämning. Lägestransaktionen ändrar inte F/register 15h, `round_ok`, `status_valid`, `dev_err`, statuspublicering eller låsförlustvärdet; dessa uppdateras fortfarande av vanliga poll- och återinitieringsvägar.
+
+**Mätarsidan ("snö-mätare")**: OK flyttar markeringen genom de sex fälten till sida. När sidfältet är markerat växlar NEXT mellan huvud- och mätarsidan, oavsett vilken sida som visas.
 ```
 >METER   F4  5800
 A  12345 ########
@@ -351,11 +369,11 @@ Används för egenstörningsmätningen i `design/PUCK_2027_KONCEPT.md` i OpenVRX
 
 **OSD i videon** (`osd_overlay.v`): samma fyra rader som OLED:n, 3× förstorade, vita på en halvmörk platta längst ned i 4:3-fönstret (x 176, y 576 i 720p). Syns i 5 s efter varje knapptryck och hela tiden på mätarsidan, så att menyn går att läsa i bilden, utan att se på pucken. Pixelexakt testad (`sim/test_osd.py`).
 
-**Mätlogg över USB** (`uart_tx.v`, PIN69 → kortets BL616 USB-UART, 115200 8N1): en rad per mätfönster (≈ 15/s), 60 byte med CR LF:
+**Mätlogg över USB** (`uart_tx.v`, PIN69 → kortets BL616 USB-UART, 115200 8N1): en rad per mätfönster (≈ 15/s), 62 byte inklusive CR LF:
 ```
-S 012345 002345 000017 000000 040 034 025 F4 5800 MIX - --
+S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T - --
 ```
-snö A, snö B, brus A, brus B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, läge, `!` om mixern sedan start har tappat en rad för att dess radplatser var fulla (annars `-`), och sist ett tecken per dekoder (A, B) för tiden sedan förra raden: `L` om någon hel pollrunda läste "lost lock" (88h bit 4), `-` om rundorna inte gjorde det, `?` om ingen hel runda kom (dekodern saknas eller hittades återställd). Äldre bitströmmar skickar raden utan låsfältet (57 byte) eller utan brusvärdena (43 byte); `snowlog.py` läser alla tre.
+snö A, snö B, brus A, brus B (`------` = inga rader), % av mixerbesluten från A / B / blandning, kanal, MHz, mixläge, filter (`T` = TV, `V` = VCR), `!` om mixern sedan start har tappat en rad för att dess radplatser var fulla (annars `-`), och sist ett tecken per dekoder (A, B) för tiden sedan förra raden: `L` om någon hel pollrunda läste "lost lock" (88h bit 4), `-` om rundorna inte gjorde det, `?` om ingen hel runda kom (dekodern saknas eller hittades återställd). Äldre bitströmmar skickar raden utan filtertokenen (60 byte), utan filtertokenen och låsfältet (57 byte) eller utan brusvärdena (43 byte); `snowlog.py` läser även dessa äldre former; deras CSV-filtervärde är tomt. För nya rader valideras den separata T/V-tokenen och skadade rader räknas som damaged. Filtertecknet visar menyvalet som begärts, inte en återläsning av dekoderns 02h-register. En pågående överföring eller ett NACK kan därför lämna en dekoder i tidigare läge tills avstämningen lyckas.
 
 **88h bit 4** betyder enligt SLES209E 3.21.49 att låset har tappats sedan status 1 lästes senast. Dekodern nollställer biten själv när 88h läses, och `tvp_ctrl.v` läser 88h i varje pollrunda (ungefär var 20:e ms per dekoder). En loggrad omfattar ungefär tre rundor, därför samlas biten över alla rundor sedan förra raden. Utöver läsningen nollställs biten inte, och mixern använder den inte: det ska avgöras på riktig signal om den säger något som H- och V-låset inte redan säger. Simulerat mot slavmodellen, som nollställer biten vid läsning som databladet anger (`sim/test_tvp_ctrl.py::test_lost_lock_flag`, `sim/test_puck_ui.py`).
 
@@ -367,7 +385,7 @@ python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_pa --seconds 30 --out
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label hdmi_av --seconds 30 --out emi.csv
 python gateware/tools/snowlog.py --summary emi.csv
 ```
-(BL616 visar två serieportar; UART:en är oftast den andra.) Sammanfattningen visar medianen per etikett, alltså en mätserie per testvillkor. CSV:n har kolumnerna `time, label, snow_a, snow_b, noise_a, noise_b, use_a, use_b, use_mix, channel, mhz, mode, dropped, lost_a, lost_b` (`lost_*`: 1, 0 eller tomt för `?`), och sammanfattningen räknar rader med tappat lås per dekoder; `snowlog.py` vägrar lägga till rader i en fil med andra kolumner.
+(BL616 visar två serieportar; UART:en är oftast den andra.) Sammanfattningen visar medianen per etikett, alltså en mätserie per testvillkor. CSV:n har kolumnerna `time, label, snow_a, snow_b, noise_a, noise_b, use_a, use_b, use_mix, channel, mhz, mode, filter, dropped, lost_a, lost_b` (`lost_*`: 1, 0 eller tomt för `?`), och sammanfattningen räknar rader med tappat lås per dekoder; `snowlog.py` vägrar lägga till rader i en fil med andra kolumner.
 
 Ingen RSSI ännu: RX5808:s RSSI är analog och Tang Nano 20K saknar ADC. Det kommer med en extern I2C-ADC eller med GW5A-25:s inbyggda ADC.
 

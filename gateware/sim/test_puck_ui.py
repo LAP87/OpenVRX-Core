@@ -110,16 +110,35 @@ def test_puck_ui():
 
     ev = screens(log)
     s0 = screen_before(ev, 'default')
-    assert s0 == ['>BAND F   CH 4  5800 ', ' MODE MIX VIEW A  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK          '], s0
+    assert s0 == ['>BAND F   CH 4  5800 ', ' MODE MIX VIEW A  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK  FILT TV '], s0
     s1 = screen_before(ev, 'band_L')
-    assert s1[0] == '>BAND L   CH 4  5473 ' and s1[3] == ' !OUTSIDE SE BAND    ', s1
+    assert s1[0] == '>BAND L   CH 4  5473 ' and s1[3] == ' !SE BAND  FILT TV   ', s1
+    s_oob_vcr = screen_before(ev, 'filter_oob')
+    assert s_oob_vcr[3] == ' !SE BAND >FILT VCR  ', s_oob_vcr
     s2 = screen_before(ev, 'final')
-    assert s2 == [' BAND A   CH 6  5765 ', '>MODE A   VIEW B  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK          '], s2
+    assert s2 == [' BAND A   CH 6  5765 ', '>MODE A   VIEW B  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK  FILT VCR'], s2
     final = re.search(r'MARK final force=(\d+)', log)[1]
     assert final == '10', 'mode A must mark receiver B bad'
     s_lat = screen_before(ev, 'lat')
     assert s_lat[1] == ' MODE A   VIEW B >LOW', s_lat
     assert re.search(r'MARK lat low_lat=(\d)', log)[1] == '1'
+
+    s_filter_vcr = screen_before(ev, 'filter_select_vcr')
+    s_filter_tv = screen_before(ev, 'filter_select_tv')
+    s_page = screen_before(ev, 'page_selected')
+    assert s_filter_vcr[3] == ' SE BAND OK >FILT VCR', s_filter_vcr
+    assert s_filter_tv[3] == ' SE BAND OK >FILT TV ', s_filter_tv
+    assert s_page[3] == '>SE BAND OK  FILT TV ', s_page
+    osd_rows = {int(tag): row for tag, row in re.findall(r'^OSDROW (\d+) (.{21})$', log, re.M)}
+    assert set(osd_rows) == set(range(5)) and all(len(row) == 21 for row in osd_rows.values()), osd_rows
+    assert osd_rows[0] == s0[3]
+    assert osd_rows[1] == s_oob_vcr[3]
+    assert osd_rows[2] == s_filter_vcr[3]
+    assert osd_rows[3] == s_filter_tv[3]
+    assert osd_rows[4] == s_page[3]
+    assert [int(v) for v in re.findall(r'^FIELD (\d+)$', log, re.M)] == [0, 1, 2, 3, 4, 5, 0]
+    assert res['filter_pulses'] == '2' and res['filter_width_errors'] == '0'
+    assert res['final_filter_vcr'] == '0'
 
     s3 = screen_before(ev, 'MARK_END')
     assert s3 == ['>METER   A6  5765    ', 'A  12345 ########    ', 'B   2345 ######      ',
@@ -128,10 +147,14 @@ def test_puck_ui():
     # UART log: fixed-width lines, the last one reflects the final state
     text = ''.join(chr(int(h, 16)) for h in re.findall(r'^U (\w\w)$', log, re.M))
     lines = [l for l in text.split('\r\n') if l]
-    assert lines and all(len(l) == 58 for l in lines), lines[:3]
-    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX - --' in lines, lines[:5]
+    assert lines and all(len(l) == 60 for l in lines), lines[:3]
+    assert all(l[50:53] in ('MIX', 'A  ', 'B  ') and l[53] == ' ' and l[54] in 'TV'
+               and l[55] == ' ' and l[56] in '-!' and l[57] == ' '
+               and len(l[58:60]) == 2 and all(c in '-L?' for c in l[58:60]) for l in lines), lines[:3]
+    assert any(l[54] == 'T' for l in lines) and any(l[54] == 'V' for l in lines), lines[:5]
+    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T - --' in lines, lines[:5]
     # the mixer dropped a line; decoder B has had no whole poll round since "unlock" (its stale bit 4 is ignored)
-    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   ! -?', lines[-3:]
+    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   T ! -?', lines[-3:]
     # decoder A read 88h bit 4 ("lost lock") in one poll round: exactly one line says so
     lost = [l for l in lines if l[-2] == 'L']
     assert len(lost) == 1 and lost[0].endswith(' L-'), [l[-4:] for l in lines]

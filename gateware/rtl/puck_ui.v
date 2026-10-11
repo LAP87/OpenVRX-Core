@@ -1,7 +1,7 @@
 // Puck prototype UI: two buttons, 4 x 21 character OLED text, RX5808 tuning.
 //
-//   OK   (short press) -> select the next field: band, channel, mode, latency, page
-//   NEXT (short press) -> step the selected field (page: main <-> meter)
+//   OK   (short press) -> select the next field: band, channel, mode, latency, filter, page
+//   NEXT (short press) -> step the selected field (filter: TV/VCR; page: main <-> meter)
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
 // register from vtx_channels.vh. The first write comes 0.5 s after reset, and
@@ -16,8 +16,8 @@
 //   >BAND F   CH 4  5800        (exactly 21 characters per row)
 //    MODE MIX VIEW A  BUF     (BUF / LOW: latency mode)
 //    A LOCK    B NOSIG
-//    SE BAND OK            or   !OUTSIDE SE BAND
-// '>' marks the selected field (in front of BAND, CH, MODE, BUF/LOW, or row 3 for the page).
+//    SE BAND OK  FILT TV     (row 3 also shows VCR and the independent page/filter markers)
+// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, FILT, or row 3 for the page).
 //
 // Meter page ("snow meter", self-interference / signal check):
 //   >METER   F4  5800
@@ -76,9 +76,11 @@ module puck_ui #(
     output reg  [2:0]  band,
     output reg  [2:0]  ch,
     output reg  [1:0]  mode,              // 0 MIX, 1 A, 2 B
-    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 page
+    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 page
     output reg         page,              // 0 main, 1 meter
-    output reg         low_lat            // 1 = low-latency video (no field buffer)
+    output reg         low_lat,           // 1 = low-latency video (no field buffer)
+    output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
+    output reg         filter_changed     // one-clock pulse only for NEXT on the filter field
 );
     `include "vtx_channels.vh"
     localparam MS = CLK_HZ / 1000;
@@ -135,17 +137,21 @@ module puck_ui #(
     wire [19:0] synth = chan[19:0];
 
     always @(posedge clk) begin
-        if (ev_ok) field <= (field == 3'd4) ? 3'd0 : field + 1'b1;
+        filter_changed <= 1'b0;
+        if (ev_ok) field <= (field == 3'd5) ? 3'd0 : field + 1'b1;
         if (ev_next) case (field)
             3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
             3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
             3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
             3'd3: low_lat <= ~low_lat;
-            default: page <= ~page;
+            3'd4: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
+            3'd5: page <= ~page;
+            default: page <= page;
         endcase
         if (rst) begin
             band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0;
             low_lat <= DEF_LOW_LAT[0];
+            filter_vcr <= 1'b0; filter_changed <= 1'b0;
         end
     end
     assign force_bad = {mode == 2'd1, mode == 2'd2};
@@ -263,6 +269,7 @@ module puck_ui #(
     wire [7:0] m_ch  = (field == 3'd1) ? ">" : " ";
     wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
     wire [7:0] m_lat = (field == 3'd3) ? ">" : " ";
+    wire [7:0] m_filter = (field == 3'd4) ? ">" : " ";
     wire [23:0] mode_s = (mode == 2'd0) ? "MIX" : (mode == 2'd1) ? "A  " : "B  ";
     function [39:0] dec_s(input present, input locked);
         dec_s = !present ? "---- " : locked ? "LOCK " : "NOSIG";
@@ -272,9 +279,12 @@ module puck_ui #(
                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), " "};
     wire [167:0] row1 = {m_mod, "MODE ", mode_s, " VIEW ", sv[1] ? "B" : "A", " ", m_lat, low_lat ? "LOW" : "BUF"};
     wire [167:0] row2 = {" A ", dec_s(sp0[1], sl0[1]), "   B ", dec_s(sp1[1], sl1[1]), "   "};
-    wire [7:0] m_pg  = (field == 3'd4) ? ">" : " ";
-    wire [167:0] row3 = legal ? {m_pg, "SE BAND OK", 80'h20202020202020202020}
-                              : {m_pg, "!OUTSIDE SE BAND", 32'h20202020};
+    wire [7:0] m_pg  = (field == 3'd5) ? ">" : " ";
+    wire [167:0] row3 = legal ?
+        (filter_vcr ? {m_pg, "SE BAND OK ", m_filter, "FILT VCR"} :
+                      {m_pg, "SE BAND OK ", m_filter, "FILT TV "}) :
+        (filter_vcr ? {m_pg, "!SE BAND ", m_filter, "FILT VCR  "} :
+                      {m_pg, "!SE BAND ", m_filter, "FILT TV   "});
     // meter page
     wire [167:0] mrow0 = {m_pg, "METER   ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
                           dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
@@ -306,9 +316,9 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || page;
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD o ll\r\n"  (60 bytes, zero-padded, ------ = no lines)
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V o ll\r\n" (62 bytes incl. CRLF)
     //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
-    //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B),
+    //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B), filter (T/V),
     //   o = "!" once the mixer has dropped a line because its line slots were full, else "-",
     //   ll = decoder A, decoder B since the previous line: "L" a whole poll round read 88h bit 4
     //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset)
@@ -334,11 +344,12 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 60;
+    localparam LOG_LEN = 62;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
-                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ", ovf_s[1] ? "!" : "-", " ",
+                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ",
+                             filter_vcr ? "V" : "T", " ", ovf_s[1] ? "!" : "-", " ",
                              ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), 16'h0D0A};
     reg  [8:0] log_wait;
     reg  [5:0] log_i;
