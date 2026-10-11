@@ -207,6 +207,9 @@ def check(name, a, b, params=None, ev_kw=None, alter=None, **model_kw):
     for i, (g, e) in enumerate(zip(out, m.out)):
         assert g == e, f'word {i}: rtl {g} model {e}'
     assert end[1] == m.cur
+    # Keep the bench's decoded word stream available to tests with downstream-only oracles.
+    # `check` has already established word-for-word RTL/model equality above.
+    m.rtl_out = out
     return m
 
 
@@ -601,6 +604,142 @@ def test_new_output_field_is_seen_downstream():
     if hidden:
         assert hidden == [((1, 3), (1, 15))], f'unexpected unmarked field starts: {hidden}'
         raise UnmarkedOutputField(f'F/line before and after field start: {hidden}')
+
+
+def omitted_intervening_field_streams(paired=True, omitted_fields=1):
+    """Real VBI on every field; incomplete early rows still advance input field counters.
+
+    Field 0 shows good lines 0..10. Each intervening field has incomplete lines 0..19 and a sole
+    complete bad line 20, which is omitted. The final field has incomplete lines 0..20 before
+    good lines 21..30. The actual V=1 interval resets decoded line numbering in each field. No
+    internal fc state is fabricated; incomplete line markers establish subsequent source fields.
+    """
+    a = Stream(31).field(0, amp=0, lines=11)
+    for field in range(1, omitted_fields + 1):
+        hooks = {VBI + n: ('late', LATE) for n in range(20)}
+        hooks[VBI + 20] = LONG
+        a.field(field, amp=0, lines=21, hooks=hooks)
+    visible_field = omitted_fields + 1
+    a.field(visible_field, amp=0, lines=31,
+            hooks={VBI + n: ('late', LATE) for n in range(21)})
+    a = a.done(f=0)
+    if paired:
+        b = Stream(32).field(0, amp=0, lines=11)
+        for field in range(1, omitted_fields + 1):
+            hooks = {VBI + n: ('late', LATE) for n in range(20)}
+            hooks[VBI + 20] = LONG
+            b.field(field, amp=0, lines=21, hooks=hooks)
+        b.field(visible_field, amp=0, lines=31,
+                hooks={VBI + n: ('late', LATE) for n in range(21)})
+        b = b.done(f=0)
+    else:
+        # B pairs with the priming field and then goes silent; the affected lines are lone A.
+        b = Stream(32).field(0, amp=0, lines=11).done(f=0)
+    return a, b
+
+
+def emitted_boundary_groups(out):
+    """Group actual emitted words by their (F, line) tags, then apply fb_sdram's split rule."""
+    groups = []
+    for f, line, index, _word in out:
+        if index == 0:
+            groups.append((f, line))
+    boundaries = []
+    for previous, current in zip(groups, groups[1:]):
+        if current[0] != previous[0] or current[1] <= previous[1]:
+            boundaries.append((previous, current))
+    return groups, boundaries
+
+
+def assert_omitted_field_boundary(out):
+    """The emitted words must restart their field after line 10 despite rising line numbers."""
+    groups, boundaries = emitted_boundary_groups(out)
+    assert [line for _, line in groups] == list(range(11)) + list(range(21, 31))
+    assert len(groups) == 21
+    if not any(previous[1] == 10 and current[1] == 21
+               for previous, current in boundaries):
+        raise UnmarkedOutputField(
+            f'no downstream boundary between emitted lines {groups[10]} and {groups[11]}')
+    assert boundaries == [(groups[10], groups[11])], boundaries
+    return groups, boundaries
+
+
+def check_omitted_field_boundary_scenario(paired, omitted_fields):
+    a, b = omitted_intervening_field_streams(paired, omitted_fields)
+    offset = T_PAIR / 2        # half of T_PAIR; paired rows are away from the window edge
+    source = {ch: bt656.Receiver().feed(data) for ch, data in ((0, a), (1, b))}
+    for ch in (0, 1):
+        recs = source[ch]
+        if ch == 1 and not paired:
+            assert [(r.field, r.line_in_field) for r in recs] == [(0, n) for n in range(11)]
+            continue
+        assert [(r.field, r.line_in_field) for r in recs[:11]] == [(0, n) for n in range(11)]
+        cursor = 11
+        for field in range(1, omitted_fields + 1):
+            intermediate = recs[cursor:cursor + 21]
+            assert [(r.field, r.line_in_field) for r in intermediate] == [
+                (field & 1, n) for n in range(21)]
+            assert all(r.active_count == 1440 - LATE for r in intermediate[:20]), intermediate[:20]
+            assert intermediate[20].active_count == 1440 and intermediate[20].length > LINE
+            cursor += 21
+        visible_field = omitted_fields + 1
+        final = recs[cursor:]
+        assert [(r.field, r.line_in_field) for r in final] == [
+            (visible_field & 1, n) for n in range(31)]
+        assert all(r.active_count == 1440 - LATE for r in final[:21]), final[:21]
+
+    m = check('tb_mixer_omitted_field_boundary', a, b,
+              params={'START_B': START_A + offset, 'T_B': T_A},
+              ev_kw={'start_a': START_A, 'start_b': START_A + offset,
+                     't_a': T_A, 't_b': T_A})
+    trace_rows = [(i, row) for i, row in enumerate(m.trace) if row[0]]
+    assert [row[3] for _, row in trace_rows] == list(range(11)) + list(range(21, 31))
+    omitted_at = list(range(11, 11 + omitted_fields))
+    assert [i for i, omitted in enumerate(m.omitted) if omitted] == omitted_at
+    for index in omitted_at:
+        pop = 0b11 if paired else 0b01
+        assert m.trace[index][0:2] == (ref.USE_NONE, pop) and m.trace[index][3] == 20, m.trace[index]
+    assert_omitted_field_boundary(m.rtl_out)
+
+
+@pytest.mark.parametrize('paired', [True, False], ids=['paired', 'lone'])
+def test_omitted_complete_field_boundary_is_visible_in_output(paired):
+    """An omitted complete line advances two source fields without emitting a word.
+
+    RTL/model agreement is checked first by check(). The oracle then examines the bench-emitted
+    words themselves using the downstream F-change/line-restart rule. The third input field
+    starts above the last emitted line after two admitted field starts, so the missing boundary
+    is independently observable regardless of which output tag the implementation chooses.
+    """
+    check_omitted_field_boundary_scenario(paired, omitted_fields=1)
+
+
+def test_consecutive_omitted_fields_coalesce_to_one_visible_boundary():
+    check_omitted_field_boundary_scenario(paired=True, omitted_fields=2)
+
+
+LEGACY_BOUNDARY = (
+    """                if (adm_new) begin boundary_pending <= 1'b1; join_a <= 1'b0; join_b <= 1'b0; end
+                if (pair || !x) begin join_a <= 1'b1; o_fc_a <= fca; end
+                if (pair || x)  begin join_b <= 1'b1; o_fc_b <= fcb; end
+                if (use_n != 2'b00) begin o_fbit <= tag_f; boundary_pending <= 1'b0; end""",
+    """                if (adm_new) begin o_fbit <= ~o_fbit; join_a <= 1'b0; join_b <= 1'b0; end
+                if (pair || !x) begin join_a <= 1'b1; o_fc_a <= fca; end
+                if (pair || x)  begin join_b <= 1'b1; o_fc_b <= fcb; end""",
+)
+
+
+def test_omitted_complete_field_old_consumption_mutant_is_caught():
+    """The old RTL admission toggle must fail the independent emitted-word boundary oracle."""
+    a, b = omitted_intervening_field_streams(paired=True, omitted_fields=1)
+    offset = T_PAIR / 2
+    _, _, out, end = run_sim(
+        a, b, HERE / 'build' / 'tb_mixer_omitted_field_boundary_old',
+        {'START_B': START_A + offset, 'T_B': T_A},
+        alter={'line_mixer.v': LEGACY_BOUNDARY})
+    assert end is not None and end[0] == 0
+    with pytest.raises(UnmarkedOutputField, match='no downstream boundary'):
+        assert_omitted_field_boundary(out)
 
 
 def test_unlocked_decoder_in_step_loses():

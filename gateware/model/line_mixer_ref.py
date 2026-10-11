@@ -41,7 +41,9 @@ line is admitted when it starts a new field or lies above the last line sent.
 Whether it starts a new field is judged on a channel that has a line in the
 current output field: for a pair whose current channel has none (the other one
 carried the field), on the partner.
-The F bit of the output is latched from the first line of each output field.
+The output F bit is a synthetic visible boundary tag, not the decoder's F.
+An admitted boundary remains pending while lines are omitted; the next emitted
+line toggles the last visible tag once, even after several fully omitted fields.
 
 Time is in ns, or in system clock edges. The RTL measures ages in system-clock
 cycles from the edge at which mix_chan takes a line's marker from its FIFO;
@@ -156,7 +158,8 @@ class Mixer:
         self.qfast = [False, False]   # the channels were in step when this one went quiet
         self.o_valid = False          # output field state
         self.o_line = 0
-        self.o_fbit = 1               # the first output field gets F = 0 (flips per field)
+        self.o_fbit = 1               # last visible tag; the first output field gets F = 0
+        self.pending_field = False    # an admitted field boundary not yet carried by output words
         self.o_fc = [0, 0]
         self.join = [False, False]
         self.trace = []               # (use, pop, field, line)
@@ -234,8 +237,8 @@ class Mixer:
             self._pairs()
 
     def _admit(self, ch, e, owner, step, judge=None):
-        """May this line leave now? Updates the output field state when it may. judge: the channel
-        whose output field state and field counter decide, if not ch (a pair, see _pair)."""
+        """May this line leave now? Updates admission/join state when it may; the visible F tag
+        is consumed later by _emit. judge: the channel whose field state decides, if not ch."""
         f, l = e.rec.field, e.rec.line_in_field
         jc, je = (ch, e) if judge is None else judge
         if not self.o_valid:
@@ -252,12 +255,16 @@ class Mixer:
         if ok:
             self.adm_new = new
             if new:
-                self.o_fbit ^= 1              # flips per output field, see line_mixer.v (#18)
+                self.pending_field = True     # a boundary is consumed only by a visible line
                 self.join = [False, False]
             self.o_valid, self.o_line = True, l
             self.join[ch] = True
             self.o_fc[ch] = e.fc
         return ok
+
+    def _next_fbit(self):
+        """Tag a line with the pending synthetic boundary, without consuming it yet."""
+        return self.o_fbit ^ self.pending_field
 
     def _omit(self, show, both_bad):
         """Is this shown line left out as bad on both receivers? Call after _admit."""
@@ -270,6 +277,9 @@ class Mixer:
     def _emit(self, use, pop, field, line, omitted=False, new=False):
         if omitted:
             use = USE_NONE
+        if use:
+            self.o_fbit = field
+            self.pending_field = False
         self.trace.append((use, pop, field, line))
         self.newfield.append(new)
         self.curs.append(self.cur)
@@ -298,7 +308,7 @@ class Mixer:
             other = 1 - self.cur
             self.join[other] = True
             self.o_fc[other] = (a, b)[other].fc
-            field = self.o_fbit
+            field = self._next_fbit()
         else:
             use, field = USE_NONE, own.rec.field
         omitted = self._omit(show, a.bad and b.bad)
@@ -330,4 +340,5 @@ class Mixer:
         self.quiet[x] = 0
         self.since_pair = min(self.since_pair + 1, self.n_step)
         self._emit((USE_B if x else USE_A) if show else USE_NONE, 0b10 if x else 0b01,
-                   self.o_fbit if show else e.rec.field, e.rec.line_in_field, omitted, show and self.adm_new)
+                   self._next_fbit() if show else e.rec.field, e.rec.line_in_field,
+                   omitted, show and self.adm_new)
