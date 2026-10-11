@@ -15,12 +15,10 @@
 //   28h = 00h  video standard: autoswitch (VIDEO_STD; SLES209E 3.21.32). Written although it is
 //              the default, so that both decoders are set alike after any reset. Not forced to
 //              NTSC or PAL: the puck takes cameras of either standard.
-//   02h = 30h  TV/VCR mode fixed to TV (OP_MODE bits 5:4 = 11; SLES209E 3.21.3; 10 = VCR, 01 is
-//              reserved). In automatic mode a decoder switches to VCR on unstable or nonstandard
-//              sync (comb filter off, chroma trap on), and two decoders could then filter
-//              differently. TV keeps the comb filter on for both. All other bits of 02h at their
-//              defaults (0). Which fixed mode gives the better picture on a weak signal is not
-//              measured; the owner wants to see both on the bench before fixing it for good.
+//   02h = 30h by default, or 20h when the menu selects VCR mode (OP_MODE bits 5:4 = 11 for TV,
+//              10 for VCR; SLES209E 3.21.3; 01 is reserved). Automatic mode switches to VCR on
+//              unstable or nonstandard sync (comb filter off, chroma trap on), so the menu lets
+//              both decoders be compared. All other bits of 02h stay at their defaults (0).
 //   03h = 0Dh  YCbCr, sync and SCLK outputs enabled (default 01h keeps the bus off)
 // 03h goes last, and the list stops at the first write that is not
 // acknowledged. So 03h = 0Dh means the whole list arrived.
@@ -75,11 +73,15 @@ module tvp_ctrl #(
     output reg  [1:0]  round_ok,          // pulse: a whole poll round found the decoder up (status words new now)
     output reg  [1:0]  lost_lock,         // 88h bit 4 of the decoder's last whole round (valid with round_ok)
     input  wire        hold,              // another master on the same bus wants it: start nothing new
+    input  wire        op_mode_req,       // one-clock request to select TV or VCR mode
+    input  wire        op_mode_vcr,       // value paired with op_mode_req: 0=TV, 1=VCR
     output wire        active             // a transaction is starting or running
 );
     localparam MS = CLK_HZ / 1000;
     localparam N_INIT = 6;
     localparam [7:0] MISC_ON = 8'h0D;     // register 03h when the decoder is up
+
+    reg [7:0] selected_mode;
 
     function [15:0] init_rom(input [2:0] i);
         case (i)
@@ -87,7 +89,7 @@ module tvp_ctrl #(
             3'd1: init_rom = 16'h04_FC;
             3'd2: init_rom = 16'h0D_47;
             3'd3: init_rom = {8'h28, VIDEO_STD};
-            3'd4: init_rom = {8'h02, OP_MODE};
+            3'd4: init_rom = {8'h02, selected_mode};
             default: init_rom = {8'h03, MISC_ON};
         endcase
     endfunction
@@ -101,13 +103,19 @@ module tvp_ctrl #(
     localparam [2:0] P_LAST = 3'd2;       // index of the read-back in poll_reg
 
     localparam S_POWER = 3'd0, S_RESET = 3'd1, S_BOOT = 3'd2, S_INIT = 3'd3, S_WAIT = 3'd4, S_POLL = 3'd5,
-               S_NEXT = 3'd6;
+               S_NEXT = 3'd6, S_MODE = 3'd7;
     reg [2:0]  st, ret;                   // ret: state after the running transaction
     reg [31:0] t;
     reg        di;                        // decoder index
     reg [2:0]  ii;                        // init entry / poll register
     reg        again;                     // the running init list is a re-initialisation inside a poll round
     reg [7:0]  p88, p89;                  // the running poll round's status, published when the round is whole
+    reg [1:0]  mode_ack_valid;
+    reg [7:0]  mode_acked0, mode_acked1;
+    reg        mode_cursor;               // reconciliation visits decoder 0 then decoder 1
+    reg        mode_tx, mode_tx_di;       // frozen 02h write tag/device, including init-list writes
+    reg [7:0]  mode_tx_value;             // frozen value recorded only if the transaction ACKs
+    reg        tx_sel1;                   // frozen physical SDA lane for the active transaction
 
     reg        start, rw;
     reg [6:0]  dev;
@@ -115,7 +123,7 @@ module tvp_ctrl #(
     wire       busy, done, nack;
     wire [7:0] rdata;
     wire       m_sda_low;
-    wire       sel1 = SPLIT_SDA && di;
+    wire       sel1 = SPLIT_SDA && tx_sel1;
     assign sda_low = {sel1 & m_sda_low, ~sel1 & m_sda_low};
     i2c_master #(.DIV(I2C_DIV)) i2c (
         .clk(clk), .rst(rst), .start(start), .rw(rw), .dev(dev), .addr(addr), .wdata(wdata),
@@ -129,6 +137,7 @@ module tvp_ctrl #(
     always @(posedge clk) begin
         start <= 1'b0;
         round_ok <= 2'b00;
+        if (op_mode_req) selected_mode <= op_mode_vcr ? 8'h20 : 8'h30;
         case (st)
         S_POWER: begin tvp_resetb <= 1'b1; t <= t + 1; if (t == POWER_MS * MS) begin t <= 0; st <= S_RESET; end end
         S_RESET: begin tvp_resetb <= 1'b0; t <= t + 1; if (t == RESET_MS * MS) begin t <= 0; st <= S_BOOT; end end
@@ -136,17 +145,34 @@ module tvp_ctrl #(
         S_INIT: if (!busy && !start && !hold) begin
             start <= 1'b1; rw <= 1'b0; dev <= di ? DEV1 : DEV0;
             {addr, wdata} <= init_rom(ii);
+            tx_sel1 <= di;
+            mode_tx <= (ii == 3'd4);
+            mode_tx_di <= di;
+            mode_tx_value <= selected_mode;
             st <= S_WAIT; ret <= S_INIT;
         end
         S_WAIT: if (done) begin
+            if (mode_tx) begin
+                if (!nack) begin
+                    mode_ack_valid[mode_tx_di] <= 1'b1;
+                    if (mode_tx_di) mode_acked1 <= mode_tx_value;
+                    else mode_acked0 <= mode_tx_value;
+                end
+                mode_tx <= 1'b0;
+            end
             if (ret == S_INIT) begin
                 dev_err[di] <= nack;
                 if (ii == N_INIT - 1 || nack) begin                  // list done, or nobody there
                     ii <= 0;
                     if (again) begin again <= 1'b0; st <= S_NEXT; end
-                    else if (di == N_DEV - 1) begin di <= 0; init_done <= 1'b1; t <= 0; st <= S_POLL; end
+                    else if (di == N_DEV - 1) begin
+                        di <= 0; init_done <= 1'b1; t <= 0; mode_cursor <= 0; st <= S_MODE;
+                    end
                     else begin di <= di + 1'b1; st <= S_INIT; end
                 end else begin ii <= ii + 1'b1; st <= S_INIT; end
+            end else if (ret == S_MODE) begin
+                if (!mode_cursor) begin mode_cursor <= 1'b1; st <= S_MODE; end
+                else begin mode_cursor <= 1'b0; di <= 0; ii <= 0; t <= 0; st <= S_POLL; end
             end else begin
                 if (nack) begin                                      // the round is void
                     dev_err[di] <= 1'b1; status_valid[di] <= 1'b0; st <= S_NEXT;
@@ -159,6 +185,7 @@ module tvp_ctrl #(
                     if (rdata != MISC_ON) begin                      // ... but the decoder has been reset
                         if (di) begin if (reinit1 != 8'hFF) reinit1 <= reinit1 + 1'b1; end
                         else    begin if (reinit0 != 8'hFF) reinit0 <= reinit0 + 1'b1; end
+                        mode_ack_valid[di] <= 1'b0;
                         status_valid[di] <= 1'b0;
                         again <= 1'b1; ii <= 0; st <= S_INIT;
                     end else begin
@@ -174,13 +201,33 @@ module tvp_ctrl #(
             if (t < POLL_MS * MS) t <= t + 1;
             else if (!busy && !start && !hold) begin
                 start <= 1'b1; rw <= 1'b1; dev <= di ? DEV1 : DEV0; addr <= poll_reg(ii[1:0]);
+                tx_sel1 <= di;
+                mode_tx <= 1'b0;
                 st <= S_WAIT; ret <= S_POLL;
             end
         end
         S_NEXT: begin                                                // next decoder; a pause after the last one
-            ii <= 0; st <= S_POLL;
-            if (di == N_DEV - 1) begin di <= 0; t <= 0; end
-            else begin di <= di + 1'b1; t <= POLL_MS * MS; end
+            ii <= 0;
+            if (di == N_DEV - 1) begin
+                di <= 0; t <= 0; mode_cursor <= 0; st <= S_MODE;
+            end
+            else begin di <= di + 1'b1; t <= POLL_MS * MS; st <= S_POLL; end
+        end
+        S_MODE: begin
+            if (!busy && !start && !hold) begin
+                if ((!mode_cursor && (!mode_ack_valid[0] || mode_acked0 != selected_mode)) ||
+                    ( mode_cursor && (!mode_ack_valid[1] || mode_acked1 != selected_mode))) begin
+                    start <= 1'b1; rw <= 1'b0; dev <= mode_cursor ? DEV1 : DEV0;
+                    addr <= 8'h02; wdata <= selected_mode;
+                    tx_sel1 <= mode_cursor;
+                    mode_tx <= 1'b1; mode_tx_di <= mode_cursor; mode_tx_value <= selected_mode;
+                    ret <= S_MODE; st <= S_WAIT;
+                end else if (!mode_cursor) begin
+                    mode_cursor <= 1'b1;
+                end else begin
+                    mode_cursor <= 1'b0; di <= 0; ii <= 0; t <= 0; st <= S_POLL;
+                end
+            end
         end
         default: st <= S_POWER;
         endcase
@@ -188,6 +235,8 @@ module tvp_ctrl #(
             st <= S_POWER; t <= 0; tvp_resetb <= 1'b1; init_done <= 1'b0; dev_err <= 2'b00;
             status_valid <= 2'b00; status0 <= 0; status1 <= 0; di <= 0; ii <= 0; start <= 1'b0;
             again <= 1'b0; reinit0 <= 0; reinit1 <= 0; round_ok <= 2'b00; lost_lock <= 2'b00;
+            selected_mode <= OP_MODE; mode_ack_valid <= 2'b00; mode_acked0 <= 0; mode_acked1 <= 0;
+            mode_cursor <= 0; mode_tx <= 1'b0; mode_tx_di <= 1'b0; mode_tx_value <= OP_MODE; tx_sel1 <= 1'b0;
         end
     end
 endmodule

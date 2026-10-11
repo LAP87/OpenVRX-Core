@@ -56,11 +56,13 @@ module m6_puck_proto #(
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid, round_ok, lost_lock;
     wire [15:0] st0, st1;
+    wire filter_vcr, filter_changed;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-                   .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold), .active(tvp_active));
+                   .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold),
+                   .op_mode_req(filter_changed), .op_mode_vcr(filter_vcr), .active(tvp_active));
     // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl (one master at a time)
     wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack;
     wire [1:0] trow, force_bad, sel_n;
@@ -94,7 +96,8 @@ module m6_puck_proto #(
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .uart_txd(uart_txd),
-                .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat));
+                .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
+                .filter_vcr(filter_vcr), .filter_changed(filter_changed));
     assign i2c_scl = (scl_low | oled_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;

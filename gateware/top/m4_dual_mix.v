@@ -57,7 +57,7 @@ module m4_dual_mix #(
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-                   .hold(1'b0), .active());
+                   .hold(1'b0), .op_mode_req(1'b0), .op_mode_vcr(1'b0), .active());
     assign i2c_scl = scl_low ? 1'b0 : 1'bz;
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;

@@ -16,12 +16,22 @@ module tb_puck_ui;
     wire [2:0] band, ch;
     wire [1:0] mode;
     wire [2:0] field;
+    wire filter_vcr, filter_changed;
     wire       low_lat;
     wire       page;
     reg  tg = 0;                                  // snow meter windows every 100 ms
     always #100_000_000 tg = ~tg;
     wire osd_show, txd;
     wire [6:0] osd_char;
+    reg [1:0] osd_row = 0;
+    reg [4:0] osd_col = 0;
+    integer filter_pulses = 0, filter_width_errors = 0;
+    reg filter_changed_d = 0;
+    always @(posedge clk) begin
+        if (filter_changed) filter_pulses = filter_pulses + 1;
+        if (filter_changed && filter_changed_d) filter_width_errors = filter_width_errors + 1;
+        filter_changed_d = filter_changed;
+    end
     reg  [1:0] dec_locked = 2'b01;                // decoder A locked, B not
     reg  mix_overflow = 0;                        // set after the "final" mark
     // decoder poll rounds (tvp_ctrl round_ok): both every 20 ms. A's round reads 88h bit 4 once,
@@ -49,9 +59,10 @@ module tb_puck_ui;
         .noise_a(20'd17), .noise_b(20'd654321), .noise_toggle_a(tg), .noise_toggle_b(tg),
         .rx_spi_clk(sclk), .rx_spi_data(sdat), .rx_spi_sel_n(sel_n),
         .text_row(row), .text_col(col), .text_char(chr),
-        .osd_row(2'd0), .osd_col(5'd0), .osd_char(osd_char), .osd_show(osd_show),
+        .osd_row(osd_row), .osd_col(osd_col), .osd_char(osd_char), .osd_show(osd_show),
         .mix_overflow(mix_overflow), .uart_txd(txd),
-        .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat));
+        .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
+        .filter_vcr(filter_vcr), .filter_changed(filter_changed));
 
     wire scl_low, sda_low, s_low, hold, frame_done, nack_error;
     reg  other_active = 0;
@@ -112,14 +123,37 @@ module tb_puck_ui;
         integer target;
         begin target = frames + n; wait (frames >= target); end
     endtask
+    task sample_osd_row(input integer tag);
+        integer k;
+        reg [167:0] sampled;
+        begin
+            osd_row = 2'd3;
+            sampled = {21{8'h20}};
+            for (k = 0; k < 21; k = k + 1) begin
+                osd_col = k;
+                @(posedge clk);
+                #1 sampled[(20 - k) * 8 +: 8] = {1'b0, osd_char};
+            end
+            $display("OSDROW %0d %s", tag, sampled);
+        end
+    endtask
 
     initial begin
         #3000 rst = 0;
         wait_frames(2);
         $display("MARK default");
+        sample_osd_row(0);
+        $display("FIELD %0d", field);
+        repeat (6) begin press(0); $display("FIELD %0d", field); end
         press(1); press(1);                       // band F -> R -> L  (L4 5473, outside SE band)
         wait_frames(2);
         $display("MARK band_L force=%b", force_bad);
+        press(0); press(0); press(0); press(0);    // field 4: filter
+        press(1);                                 // TV -> VCR
+        wait_frames(2);
+        $display("MARK filter_oob");
+        sample_osd_row(1);
+        press(0); press(0);                       // filter -> page -> band
         press(1);                                 // band -> A (A4 5805)
         press(0);                                 // field -> channel
         press(1); press(1);                       // A5, A6 (5765)
@@ -134,7 +168,18 @@ module tb_puck_ui;
         wait_frames(2);
         $display("MARK lat low_lat=%0d", low_lat);
         lost_a_once = 1;                          // decoder A's next poll round reads 88h bit 4
+        press(0);                                 // field -> filter
+        wait_frames(2);
+        $display("MARK filter_select_vcr");
+        sample_osd_row(2);
+        press(1);                                 // VCR -> TV
+        wait_frames(2);
+        $display("MARK filter_select_tv");
+        sample_osd_row(3);
         press(0);                                 // field -> page
+        wait_frames(2);
+        $display("MARK page_selected");
+        sample_osd_row(4);
         press(1);                                 // page -> meter
         wait_frames(2);
         $display("MARK meter page=%0d", page);
@@ -145,7 +190,8 @@ module tb_puck_ui;
         dec_locked = 2'b10;                       // B locks: no more repeats (the next was due after 30 ms)
         $display("MARK relock %0d", $time);
         #70_000_000;
-        $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d", collisions, nack_error, spi_idle_bad);
+        $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d filter_pulses=%0d filter_width_errors=%0d final_filter_vcr=%0d",
+                 collisions, nack_error, spi_idle_bad, filter_pulses, filter_width_errors, filter_vcr);
         $finish;
     end
     initial begin #5_000_000_000 $display("RESULT timeout"); $finish; end
