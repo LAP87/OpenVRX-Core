@@ -10,31 +10,34 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-10, accepted C3 display checker `79b1406`):** the frozen
-regression has 566 passed outcomes across all 39 test files, with zero failures,
-skips, xfails, xpasses or missing outcomes, in **1:21:34 (4893.875 s)**. All 157
-frozen source-input hashes are unchanged. Formal checks passed 7 proofs and 14
-negative-control counterexamples. Acceptance receipt SHA-256:
-`a1944cc5b161fe12535cee25acb743a91455c3617d1260ff0bde3ce2e0746847`.
+**Status (2026-10-12, accepted C2 source `c3fda21`):** the frozen regression
+passed all 604 tests in 39 files, with no failures, skips, xfails, xpasses or
+missing outcomes, in **1:30:11 (5411.439 s)**. All 157 source-input hashes are
+unchanged, and all 570 prior test nodes remain. Root reviewed 19 cocotb report
+bindings, 7 formal proofs and 14 actual negative-control counterexamples.
+Acceptance receipt SHA-256:
+`c783407e79a31e9a09f3bc82f76debff1160aebee80091c25368d261d1c09bfc`.
 
-The display checker excludes a pre-switch frame only when its active picture
-overlaps the switch, using the observed NTSC/PAL line timing. Fifty saved traces
-pass; seed 1249 also passes a native replay with identical stimulus and traces.
-Corrupted ring words and source mappings still fail. The suite's XML postprocessor
-initially rejected a pure Python parameter name containing `/`; the separate
-acceptance filters out non-cocotb candidates while retaining all 19 actual XML
-report bindings. The completed tests were not rerun.
+M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
+its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
+62-byte UART row show the requested menu mode, rather than a register readback.
+The parser retains legacy rows. Focused verification passed 56 tests and two
+subtests, with nine old-guard cases rejected for their intended semantic faults.
 
-The M4 seed-0 and M6 seed-3 routing reports, M0 reference manifest and four HDMI
-IOB-fuse checks remain the accepted `8d7b0e9` build evidence. Their existing M4/M6
-input manifests (46/47 inputs) match the accepted 8d inputs byte-for-byte; `79b1406`
-was not freshly routed. The 24 archived build artifacts are unchanged. See
-[gateware/README.md](gateware/README.md) for the figures and limits.
+Fresh M0 seed-0, M4 seed-0 and M6 seed-2 builds pass the 75 MHz requirement on
+all reported clocks. The five M4/M6 domains, source manifests, 24 archived
+artifacts and four TMDS pairs were reviewed. See
+[gateware/README.md](gateware/README.md) for clock figures and build hashes.
+Older suite and build receipts remain historical; the new seed-2 result does
+not erase earlier routing failures.
 
-The older 490-/447-pass suites and C1's M6 seed-2 routing failure remain historical.
-The board default is still seed 2, and the accepted seed-3 report does not satisfy
-C2's requirement for a new seed-2 build. A fresh 260-seed campaign on accepted final
-main remains pending. No FPGA gateware has been verified on hardware.
+The prior visible-field boundary and display-checker corrections remain.
+The last campaign stopped at 200 of 260 seeds: 199 PASS, 1 FAIL, 60 not run.
+Seed 1345 has 72 checked lines against the unchanged minimum of 144; only one
+complete eligible active frame arrived before source input ended. A longer
+stimulus requires a new source and parameter contract. This campaign is not
+accepted, and no FPGA gateware or TV/VCR picture difference is verified on
+hardware.
 
 Most of this code was written with heavy AI assistance (Claude) and reviewed
 by the project owner; see the hub's
