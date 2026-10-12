@@ -34,7 +34,11 @@ main ae993f8: 689 tests pass, nothing shared.
 2026-10-12, campaign: all 260 seeds of the C3 interference campaign have run. 257 pass with
 their original stimulus; three (1345, 1434, 1444) pass once four clean fields follow it. The
 remaining 60 found one RTL fault in the field store (the line the writer joins in the middle
-after LOW was counted as stored), now fixed. Suite: 691 tests pass. Details in
+after LOW was counted as stored), now fixed. Suite: 691 tests pass.
+
+2026-10-12: the two timing assumptions the formal proofs leave open (frame_low/ll_low before
+line 0, a line-buffer slot written before it is read) are checked in every field-store and
+chain simulation, with negative controls. Suite: 695 tests pass. Details in
 [gateware/sim/FUZZ_2026-10-07.md](gateware/sim/FUZZ_2026-10-07.md). Figures in [gateware/README.md](gateware/README.md).
 
 M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains

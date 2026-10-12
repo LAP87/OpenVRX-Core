@@ -55,8 +55,17 @@ def source(n_fields, period=P_NTSC, lines=LINES, vbi=VBI, interlaced=False, f_st
     return out
 
 
-def run_sim(name, src, alter=None, **params):
-    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls)."""
+def margin_faults(work):
+    """The margin checks of margin_checks.vh that fail: the value or line read is not the one
+    decided, or less than one pixel clock was left (formal/README.md, items 4 and 5)."""
+    rows = [ln.split() for ln in (work / 'margin.txt').read_text().splitlines() if ln]
+    return [r for r in rows if r[2] != '1' or float(r[3]) < T_P], rows
+
+
+def run_sim(name, src, alter=None, margins=True, **params):
+    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls).
+    margins: fail on a margin check of margin_checks.vh (off only for the negative controls of
+    other checks, whose faults may also break a margin)."""
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -77,12 +86,15 @@ def run_sim(name, src, alter=None, **params):
             text = text.replace(old, new)
         (work / fname).write_text(text)
         rtl = [work / fname if r.name == fname else r for r in rtl]
-    subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_fb', *[f'-Ptb_fb.{k}={v}' for k, v in p.items()],
+    subprocess.run(['iverilog', '-g2012', '-I', str(HERE), '-o', 'sim.vvp', '-s', 'tb_fb', *[f'-Ptb_fb.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_fb.v')], cwd=work, env=env, check=True)
     subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True)
     sd = [ln.split() for ln in (work / 'sd.txt').read_text().split('\n') if ln]
     pix = [ln.split() for ln in (work / 'pix.txt').read_text().split('\n') if ln]
     assert sd and sd[-1] == ['end', '0'], f'SDRAM protocol errors or no end: {sd[-1:]}'
+    if margins:
+        bad, rows = margin_faults(work)
+        assert not bad, f'margin: {len(bad)} of {len(rows)} checks fail, first {bad[:3]}'
     def num(x):
         return int(x) if x.isdigit() else -1          # x: read from SDRAM that was never written
 
@@ -830,6 +842,52 @@ def test_joined_line_check_is_tested():
     line, idx, stored, reads, buf = joined_partial_line(
         'tb_fb_joined_line_old', alter={'fb_sdram.v': (WHOLE_LINE, ";   // a line is complete")})
     assert idx != 0 and line in stored
+
+
+IL_SRC = source(9, interlaced=True, f_stuck=1)                       # BUF: frame_low alternates
+LL_SRC = source(14, period=P_LL, lines=9, vbi=4, interlaced=True)     # LOW: ll_low alternates
+LATE_FETCH = [("    reg        ok_s;\n",
+               "    reg        ok_s;\n    reg [10:0] late_n = 0;   // negative control: every fetch waits 2047 clocks\n"
+               "    always @(posedge clk) late_n <= (look == 2'd3) ? late_n + 11'd1 : 11'd0;\n"),
+              ("if (look == 2'd3) begin", "if (look == 2'd3 && &late_n) begin")]
+
+
+def late_sync(name, depth):
+    """fb_display.v with the frame_low or ll_low synchroniser fed `depth` pixel clocks late."""
+    d = {'fl': 'frame_low', 'lw': 'll_low'}[name]
+    return (f"    sync2 {name}_sync (.clk(clk), .d({d}), .q({name}_q));",
+            f"    reg [{depth - 1}:0] {name}_late = 0;   // negative control: {d} arrives {depth} clocks late\n"
+            f"    always @(posedge clk) {name}_late <= {{{name}_late[{depth - 2}:0], {d}}};\n"
+            f"    sync2 {name}_sync (.clk(clk), .d({name}_late[{depth - 1}]), .q({name}_q));")
+
+
+def test_margin_checks_see_every_kind():
+    """margin_checks.vh (formal/README.md, items 4 and 5) runs in every test of this file through
+    run_sim. Here: the checks are not vacuous. A BUF run with an interlaced source has frame_low
+    reads (F) and line-buffer reads (R), a LOW run ll_low reads (W); all pass with at least one
+    pixel clock to spare (the smallest margins seen in this file are about 22 us for F, 1.3 us
+    for W and 12.6 us for R)."""
+    for name, src, params, kinds in (('tb_fb_margin_buf', IL_SRC, dict(RT_EN=0), 'FR'),
+                                     ('tb_fb_margin_ll', LL_SRC, dict(LL=1, **LL_V), 'W')):
+        run_sim(name, src, **params)
+        bad, rows = margin_faults(HERE / 'build' / name)
+        assert not bad
+        for k in kinds:
+            assert sum(r[0] == k for r in rows) >= 5, f'{name}: too few {k} checks'
+
+
+@pytest.mark.parametrize('case', ['late_fetch', 'late_frame_low', 'late_ll_low'])
+def test_margin_checks_catch_late_arrival(case):
+    """Negative controls: a late line-buffer writer (every fetch held 2047 SDRAM clocks, more than
+    an output line), frame_low arriving 2048 pixel clocks late, ll_low arriving 256 pixel clocks
+    late (above the smallest margin seen). Each must fail run_sim's margin check."""
+    with pytest.raises(AssertionError, match='margin'):
+        if case == 'late_fetch':
+            run_sim('tb_fb_margin_late_fetch', IL_SRC, alter={'fb_sdram.v': LATE_FETCH}, RT_EN=0)
+        elif case == 'late_frame_low':
+            run_sim('tb_fb_margin_late_fl', IL_SRC, alter={'fb_display.v': late_sync('fl', 2048)}, RT_EN=0)
+        else:
+            run_sim('tb_fb_margin_late_lw', LL_SRC, alter={'fb_display.v': late_sync('lw', 256)}, LL=1, **LL_V)
 
 
 def test_mode_switch_checks_catch_faults():

@@ -45,7 +45,7 @@ def source_snapshot():
     paths = [t.GW / 'rtl' / name for name in t.RTL]
     paths += sorted((t.GW / 'rtl').glob('*.vh'))
     paths += sorted((t.GW / 'model').glob('*.py'))
-    paths += [HERE / name for name in ('fuzz_campaign.py', 'test_fuzz_chain.py', 'tb_chain.v', 'sdram_model.v')]
+    paths += [HERE / name for name in ('fuzz_campaign.py', 'test_fuzz_chain.py', 'tb_chain.v', 'margin_checks.vh', 'sdram_model.v')]
     files = {p.relative_to(t.PROJECT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in paths}
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=t.PROJECT,

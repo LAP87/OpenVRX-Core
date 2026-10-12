@@ -150,12 +150,12 @@ def run_sim(sc, work, alter=None, timeout=3000, stall_drain=False, gate_probe=0)
         assert text.count(old) == 1, f'{fname}: {old!r} not found once'
         (work / fname).write_text(text.replace(old, new))
         rtl = [work / fname if r.name == fname else r for r in rtl]
-    subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_chain', *[f'-Ptb_chain.{k}={v}' for k, v in p.items()],
+    subprocess.run(['iverilog', '-g2012', '-I', str(HERE), '-o', 'sim.vvp', '-s', 'tb_chain', *[f'-Ptb_chain.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_chain.v')],
                    cwd=work, env=env, check=True, capture_output=True)
     run = subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, capture_output=True, text=True, timeout=timeout)
     logs = {}
-    for name in ('mix', 'sd', 'pix'):
+    for name in ('mix', 'sd', 'pix', 'margin'):
         path = work / f'{name}.txt'
         logs[name] = [ln.split() for ln in path.read_text().split('\n') if ln] if path.exists() else []
     logs['stdout'] = run.stdout[-3000:]
@@ -689,6 +689,22 @@ def check_store(logs, words, org, run, fd):
     return result
 
 
+def check_margins(logs, fd):
+    """The margin checks of margin_checks.vh (formal/README.md, items 4 and 5): frame_low and
+    ll_low have arrived a pixel clock before line 0 takes them, and a BUF line-buffer slot holds
+    its line up to the last word when the display starts reading it."""
+    kinds = {'F': ('display', 'low_margin'), 'W': ('display', 'low_margin'), 'R': ('store', 'line_late')}
+    for row in logs.get('margin', []):
+        try:
+            kind, t_ns, ok, margin = row[0], float(row[1]), row[2], float(row[3])
+            block, what = kinds[kind]
+        except (IndexError, KeyError, ValueError):
+            fd.add('bench', 'margin_log', 0, f'malformed margin line {row}')
+            continue
+        if ok != '1' or margin < T_P:
+            fd.add(block, what, t_ns, f'{kind}: ok {ok}, margin {margin:.1f} ns (needs {T_P} ns)')
+
+
 def check_drain(logs, fd):
     """Require one bounded final receipt proving fetch and SDRAM burst state are idle."""
     sd = logs.get('sd', [])
@@ -1198,6 +1214,7 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
     if logs:
         check_gate_probe(logs, gate_probe, fd)
         check_drain(logs, fd)
+        check_margins(logs, fd)
         recs = receiver_records(sc)
         marks = check_rx(logs, recs, fd)
         dec, words = check_mixer(sc, logs, recs, marks, fd)
