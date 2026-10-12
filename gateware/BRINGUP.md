@@ -72,7 +72,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | M0 | `m0_testpattern` | bara Tang + HDMI | testbilden syns på skärmen |
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
 | M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
-| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, mätloggen kommer över USB |
+| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet `FILT` växlar TV/VCR, mätloggen kommer över USB (2.2) |
 
 ```bash
 gateware/build.sh m3_probe
@@ -95,6 +95,20 @@ openFPGALoader -b tangnano20k gateware/build/m2a_memtest.fs
 ```
 
 Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar `err=00000000` varv efter varv, och `err=00000001` medan S2 hålls intryckt. Visar en annan rad nollorna, eller ingen, står det i README ("M2a — minnestest av SDRAM") hur fasen och läspunkten byts. Bygg sedan M4 med den fas som gav ren rad.
+
+### 2.2 M6: filterfältet och mätloggen
+
+Menyns sista fält före sidvalet är `FILT`: `TV` eller `VCR` för båda dekodrarna (register 02h, 30h respektive 20h). Efter reset står det på `TV`. Det skrivs till dekodrarna mellan pollrundorna och igen efter en dekoderomstart. Vilket läge som håller låset och bilden bäst är inte avgjort; prova båda med samma kamera och kanal och logga varje läge för sig.
+
+Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **62 byte** inklusive CR LF. Efter mixläget står filtret som `T` eller `V`, före tappflaggan och de två låstecknen. Det är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i README under M6.
+
+```bash
+python gateware/tools/snowlog.py /dev/ttyUSB1 --label tv --seconds 30 --out filt.csv
+python gateware/tools/snowlog.py /dev/ttyUSB1 --label vcr --seconds 30 --out filt.csv
+python gateware/tools/snowlog.py --summary filt.csv
+```
+
+`snowlog.py` läser också de äldre raderna på 60, 57 och 43 byte från tidigare bitströmmar; deras filterkolumn blir tom.
 
 ## 3. Vad M3-proben ska visa
 

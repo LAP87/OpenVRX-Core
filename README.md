@@ -10,57 +10,41 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-12, accepted C2 source `c3fda21`):** the frozen regression
-passed all 604 tests in 39 files, with no failures, skips, xfails, xpasses or
-missing outcomes, in **1:30:11 (5411.439 s)**. All 157 source-input hashes are
-unchanged, and all 570 prior test nodes remain. Root reviewed 19 cocotb report
-bindings, 7 formal proofs and 14 actual negative-control counterexamples.
-Acceptance receipt SHA-256:
-`c783407e79a31e9a09f3bc82f76debff1160aebee80091c25368d261d1c09bfc`.
+**Status (2026-10-12, main `47b66e5`):** 695 tests, all pass, run with
+`gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 13 min);
+no two tests share a build directory. Nothing has run on hardware: "simulated" and
+"built" below, never "measured".
 
-2026-10-12, Fable: on main 2dca245 the suite collects 651 tests; run one process per
-simulation test, ten at a time, all 651 pass (18 min). Two parametrised mixer tests shared a
-build directory and raced in that runner; they now build apart. Nothing has run on hardware.
+Built with the open toolchain, figures after routing, every clock above its 75 MHz
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `0da655d` are those of
+`47b66e5`.
 
-2026-10-12, `gateware/tools/run_suite.py` runs the suite that way and audits that no two
-tests share a build directory or cocotb results file: 658 tests pass, nothing shared
-(633 s, ten at a time). The audit found three more shared directories, now separate.
+| Top | Built from | Seed | Note |
+|---|---|---:|---|
+| M0 | `0da655d` | 0 | reference for the HDMI pairs |
+| M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells |
+| M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
+| M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
+| M4 | `0da655d` | 0 | I/O registers in the I/O cells |
+| M6 | `0da655d` | 2 | seeds 0-3 also built from `94a2b32` |
 
-2026-10-12, later: the decoder SCLK pins no longer carry a BUFG flag, which removes the
-seed-dependent "Can't route the clocks.clk_27 net" in M6 (seeds 0-3 built). The SDRAM tops
-(M2, M2s, M2a, M4, M6) are built with I/O registers in the I/O cells by default. Suite on
-main ae993f8: 689 tests pass, nothing shared.
+What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
-2026-10-12, campaign: all 260 seeds of the C3 interference campaign have run. 257 pass with
-their original stimulus; three (1345, 1434, 1444) pass once four clean fields follow it. The
-remaining 60 found one RTL fault in the field store (the line the writer joins in the middle
-after LOW was counted as stored), now fixed. Suite: 691 tests pass.
+- The decoder SCLK pins carry no BUFG flag. Three BUFGs competed for global wires, and
+  some placements left `clocks.clk_27` unroutable in M6.
+- M2, M2s, M2a, M4 and M6 are built with their I/O registers in the I/O cells (owner's
+  decision), so the memory test on the board speaks for the picture builds.
+- All 260 seeds of the C3 interference campaign have run: 257 pass with their original
+  stimulus, three (1345, 1434, 1444) once four clean fields follow it. They found one RTL
+  fault, fixed: the line the field store joins in the middle after LOW counted as stored.
+  See [gateware/sim/FUZZ_2026-10-07.md](gateware/sim/FUZZ_2026-10-07.md).
+- The two timing assumptions the formal proofs leave open (frame_low/ll_low before line 0,
+  a line-buffer slot written before it is read) are checked in every field-store and chain
+  simulation, with negative controls.
 
-2026-10-12: the two timing assumptions the formal proofs leave open (frame_low/ll_low before
-line 0, a line-buffer slot written before it is read) are checked in every field-store and
-chain simulation, with negative controls. Suite: 695 tests pass. Details in
-[gateware/sim/FUZZ_2026-10-07.md](gateware/sim/FUZZ_2026-10-07.md). Figures in [gateware/README.md](gateware/README.md).
-
-M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
-its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
-62-byte UART row show the requested menu mode, rather than a register readback.
-The parser retains legacy rows. Focused verification passed 56 tests and two
-subtests, with nine old-guard cases rejected for their intended semantic faults.
-
-Fresh M0 seed-0, M4 seed-0 and M6 seed-2 builds pass the 75 MHz requirement on
-all reported clocks. The five M4/M6 domains, source manifests, 24 archived
-artifacts and four TMDS pairs were reviewed. See
-[gateware/README.md](gateware/README.md) for clock figures and build hashes.
-Older suite and build receipts remain historical; the new seed-2 result does
-not erase earlier routing failures.
-
-The prior visible-field boundary and display-checker corrections remain.
-The last campaign stopped at 200 of 260 seeds: 199 PASS, 1 FAIL, 60 not run.
-Seed 1345 has 72 checked lines against the unchanged minimum of 144; only one
-complete eligible active frame arrived before source input ended. A longer
-stimulus requires a new source and parameter contract. This campaign is not
-accepted, and no FPGA gateware or TV/VCR picture difference is verified on
-hardware.
+M6 has a TV/VCR filter field (`FILT`) for both decoders; the 62-byte UART row shows the
+requested mode as `T` or `V`. Which mode holds lock and picture better is not measured.
+Earlier acceptance receipts (C1, C2, C3) are kept in [gateware/README.md](gateware/README.md).
 
 Most of this code was written with heavy AI assistance (Claude) and reviewed
 by the project owner; see the hub's
@@ -95,7 +79,7 @@ testbenches look there first).
 ```sh
 .venv/bin/python gateware/tools/run_suite.py       # whole suite, one process per simulation test, ten at a time
 .venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools   # same tests in one process (over 90 min)
-SEED=3 FREQ_MHZ=75 gateware/build.sh m6_puck_proto  # accepted C3 source, seed 3 -> gateware/build/m6_puck_proto.fs
+gateware/build.sh m6_puck_proto                   # seed from boards/m6_puck_proto.seed -> gateware/build/m6_puck_proto.fs
 .venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m6_puck_proto.build.json --root .
 openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 ```
