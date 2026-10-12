@@ -520,15 +520,16 @@ källa kräver ett nytt rundnamn. Budgetuppskattningen tar med de tillagda fält
 och recovery-körningar behåller sina råfiler även vid PASS.
 
 **75 fokuserade tester passerade på 43,43 s.** Native-prover genom den verkliga
-worker-/seed-vägen på fryst `7754112` gav 360 rader på 215,8 s för skalad1345
-(density2,5,10originalfält+4recovery), och 6 480 rader på 1 954,0 s för fullPAL1601
-(density1,8originalfält+4recovery,forcedpal/mode_switch). Kamera-/CTL-, mixer-,
+worker-/seed-vägen på fryst `7754112` gav 360 rader på 215,8 s för skalat frö 1345
+(densitet 2,5, tio originalfält och fyra recovery-fält), och 6 480 rader på 1 954,0 s
+för frö 1601 med full PAL-geometri (densitet 1, åtta originalfält och fyra
+recovery-fält, tvingad `pal`/`mode_switch`). Kamera-/CTL-, mixer-,
 minnes- och bildspåren är byte-identiska med tidigare accepterade motsvarande
 prover. Kompilering, vvp och drain passerar utan fynd, known, edges eller notes.
-Root verifierade160källhashar och24råfiler, återläste modeller/invarianter och
-avvisade fel bildord/källrad i nybilden i båda fallen.144/720-raderskraven,
-3000s-timeout, checkerpredikat och RTL är oförändrade.
+Root verifierade 160 källhashar och 24 råfiler, återläste modeller/invarianter och
+avvisade fel bildord/källrad i nybilden i båda fallen. Kraven på 144/720 rader,
+3000 s timeout, checkerpredikat och RTL är oförändrade.
 
 Detta accepterar dessa två opt-in-prover och parameter-/resume-kontrollerna.
-Det är ingen ny260-frökampanj, helsvit eller FPGA-routning; gamlaFAIL-kvitton
-och C2:s tidigare604-pass-källa/byggen bevaras. Ingen FPGA-hårdvara är verifierad.
+Det är ingen ny 260-frökampanj, helsvit eller FPGA-routning; gamlaFAIL-kvitton
+och C2:s tidigare källa med 604 pass och dess byggen bevaras. Ingen FPGA-hårdvara är verifierad.
