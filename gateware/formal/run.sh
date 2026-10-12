@@ -61,6 +61,19 @@ FLOW="chformal -lower;" must_fail genlock_cut_no_sync genlock_props 130 "" "$wor
 sed 's/recover <= cut; cut <=/recover <= recover || cut; cut <=/' "$here/../rtl/genlock_timing.v" > genlock_sticky.v
 grep -Fq 'recover <= recover || cut;' genlock_sticky.v
 FLOW="chformal -lower;" must_fail genlock_sticky_recovery genlock_props 130 "" "$work/genlock_sticky.v" "$here/genlock_props.v" || status=1
+# WAIT_BEFORE_VSYNC = 1: the same properties, and every frame ends with its full back porch after the sync
+vb="chparam -set MODE 1 genlock_props;"
+FLOW="chformal -lower;" prove genlock_timing_wait_before_vsync genlock_props 150 "$vb" "$here/../rtl/genlock_timing.v" "$here/genlock_props.v" || status=1
+# negative controls: the natural frame skips a back-porch line instead of a front-porch line; the wait
+# ends past the first sync line
+sed -e 's/end else if (vc == V_ACTIVE - 1)/end else if (vc == V_SYNC_END - 1)/' -e 's/vc <= V_ACTIVE + 1;/vc <= V_SYNC_END + 1;/' \
+    "$here/../rtl/genlock_timing.v" > genlock_vb_short_bp.v
+grep -q 'vc <= V_SYNC_END + 1;' genlock_vb_short_bp.v
+FLOW="chformal -lower;" must_fail genlock_wait_before_vsync_short_back_porch genlock_props 150 "$vb" "$work/genlock_vb_short_bp.v" "$here/genlock_props.v" || status=1
+sed 's/vc <= V_SYNC_START; rel_trig <= pend || trig;/vc <= V_SYNC_START + 1; rel_trig <= pend || trig;/' \
+    "$here/../rtl/genlock_timing.v" > genlock_vb_nosync.v
+grep -q 'V_SYNC_START + 1; rel_trig' genlock_vb_nosync.v
+FLOW="chformal -lower;" must_fail genlock_wait_before_vsync_lost_sync_line genlock_props 150 "$vb" "$work/genlock_vb_nosync.v" "$here/genlock_props.v" || status=1
 
 # ---- clock domain crossings of fb_backend.v (rtl/cdc_sync.v, formal/README.md)
 cdc="$here/../rtl/cdc_sync.v"

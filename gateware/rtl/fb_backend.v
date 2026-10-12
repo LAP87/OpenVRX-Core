@@ -40,7 +40,8 @@ module fb_backend #(
     parameter VINTERP = `VINTERP,           // fb_display.v: 1 blends two source lines in BUF (build.sh VINTERP=1)
     parameter RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270,    // fb_sdram.v
     parameter LL_EQ = 1,                    // low-latency mode: delay early fields for frames of equal length
-    parameter JUMP_AFTER = 3, HOLD = 32     // genlock_timing.v
+    parameter JUMP_AFTER = 3, HOLD = 32,    // genlock_timing.v
+    parameter WAIT_BEFORE_VSYNC = 0         // genlock_timing.v: the varying line before vsync (needs V_FP >= 2)
 ) (
     input  wire        sd_clk,
     input  wire        sd_clk_shift,
@@ -284,7 +285,7 @@ module fb_backend #(
     wire t_de, t_hs, t_vs, t_fs, t_tr;
     genlock_timing #(.H_ACTIVE(H_ACTIVE), .H_FP(H_FP), .H_SYNC(H_SYNC), .H_BP(H_BP), .H_FP_ALT(H_FP_ALT),
                      .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .V_BP(V_TOTAL - V_ACTIVE - V_FP - V_SYNC),
-                     .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD))
+                     .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD), .WAIT_BEFORE_VSYNC(WAIT_BEFORE_VSYNC))
         timing (.clk(pix_clk), .rst(prst), .lock(ll_p), .trig(ll_trig), .h_alt(ll_p && ll_pal),
                 .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs), .frame_start(t_fs), .triggered(t_tr));
     assign tx = x;
