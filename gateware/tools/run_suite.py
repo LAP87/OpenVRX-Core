@@ -13,7 +13,9 @@ results.jsonl (one record per finished process), status.json (progress),
 report.txt, durations.json (used to start the longest tests first next time).
 
 --resume keeps the processes that passed in OUT and runs the rest; it refuses
-when the sources changed since the run it resumes. --budget S starts no process
+when sources or the collected test selection changed, or cached completed
+records lack their requested outcomes. Refused resumes leave OUT unchanged.
+--budget S starts no process
 that is not expected to finish within S seconds of the start (expected: its
 duration in durations.json, else --guess); what is left is reported and a later
 --resume runs it.
@@ -144,8 +146,51 @@ class Job:
                 'tests': {n: tests[n] for n in self.nodes}, 'claims': trace.get('claims', {})}
 
 
+ACCEPTED = ('passed', 'skipped', 'xfailed')
+
+
+def coverage_errors(rec, expected):
+    """Check identities independently of whether the recorded tests passed."""
+    errors = []
+    expected = set(expected)
+    recorded = rec.get('nodes')
+    tests = rec.get('tests')
+    if not isinstance(recorded, list) or not all(isinstance(n, str) for n in recorded):
+        errors.append('invalid cached nodes')
+    elif len(recorded) != len(set(recorded)) or set(recorded) != expected:
+        errors.append('cached nodes differ from requested nodes')
+    if not isinstance(tests, dict):
+        return errors + ['invalid cached tests']
+    for n in sorted(expected - tests.keys()):
+        errors.append(f'missing outcome: {n}')
+    for n in sorted(tests.keys() - expected):
+        errors.append(f'unrequested outcome: {n}')
+    for n, t in tests.items():
+        if not isinstance(t, dict) or not isinstance(t.get('outcome'), str):
+            errors.append(f'invalid outcome: {n}')
+    return errors
+
+
 def unit_ok(rec):
-    return rec['rc'] == 0 and all(t['outcome'] in ('passed', 'skipped', 'xfailed') for t in rec['tests'].values())
+    nodes = rec.get('nodes', [])
+    return (bool(nodes) and not coverage_errors(rec, nodes) and rec['rc'] == 0
+            and all(t['outcome'] in ACCEPTED for t in rec['tests'].values()))
+
+
+def resume_done(records, units):
+    """Refuse inconsistent evidence before scheduling or rewriting output."""
+    expected = dict(units)
+    newest = {r['unit']: r for r in records}
+    done = {}
+    for u, r in newest.items():
+        if u not in expected:
+            raise ValueError(f'unrequested cached unit: {u}')
+        errors = coverage_errors(r, expected[u])
+        if errors:
+            raise ValueError(f'{u}: ' + '; '.join(errors))
+        if unit_ok(r):
+            done[u] = r
+    return done
 
 
 def main(argv=None):
@@ -166,6 +211,7 @@ def main(argv=None):
     if nodes is None:
         print('collection failed')
         return 2
+    units = units_of(nodes)
     fp = fingerprint()
     run_file, results_file = out / 'run.json', out / 'results.jsonl'
     durations_file = out / 'durations.json'
@@ -177,7 +223,18 @@ def main(argv=None):
             print(f'--resume refused: sources changed since the run in {out} '
                   f'({prev["fingerprint"][:12]} -> {fp[:12]})')
             return 2
-        done = {r['unit']: r for r in read_jsonl(results_file) if unit_ok(r)}
+        # New manifests bind collected identities; legacy manifests require the
+        # same request text as well as complete records for current units.
+        same_selection = (set(prev['nodes']) == set(nodes) if 'nodes' in prev else
+                          prev.get('paths') == a.paths and prev.get('keyword') == a.keyword)
+        if not same_selection:
+            print('--resume refused: test selection changed; use a new output directory')
+            return 2
+        try:
+            done = resume_done(read_jsonl(results_file), units)
+        except (ValueError, KeyError, TypeError) as exc:
+            print(f'--resume refused: {exc}')
+            return 2
         results_file.write_text(''.join(json.dumps(r) + '\n' for r in done.values()))
     else:
         for d in ('logs', 'trace'):
@@ -185,9 +242,8 @@ def main(argv=None):
         results_file.unlink(missing_ok=True)
     for d in ('logs', 'trace'):
         (out / d).mkdir(parents=True, exist_ok=True)
-    run_file.write_text(json.dumps({'fingerprint': fp, 'paths': a.paths, 'keyword': a.keyword}, indent=1))
+    run_file.write_text(json.dumps({'fingerprint': fp, 'paths': a.paths, 'keyword': a.keyword, 'nodes': nodes}, indent=1))
 
-    units = units_of(nodes)
     expected = {u: sum(durations.get(n, a.guess) for n in ns) for u, ns in units}
     todo = sorted((u for u in units if u[0] not in done), key=lambda u: -expected[u[0]])
     total = len(units)
@@ -245,12 +301,28 @@ def main(argv=None):
 
 def finish(out, finished, left, nodes, t0):
     counts, bad = {}, []
+    expected = dict(units_of(nodes))
+    pending = dict(left)
+    if len(pending) != len(left):
+        bad.append(('pending', 'duplicate pending units', 'scheduler'))
+    for u, ns in pending.items():
+        if u not in expected or len(ns) != len(set(ns)) or set(ns) != set(expected[u]):
+            bad.append((u, 'invalid pending nodes', 'scheduler'))
+    for u, ns in expected.items():
+        if u not in finished and u not in pending:
+            bad.append((u, 'missing completed or pending unit', 'scheduler'))
+    for u, rec in finished.items():
+        errors = coverage_errors(rec, expected.get(u, []))
+        if u not in expected or rec.get('unit') != u or u in pending:
+            errors.append('unrequested or inconsistent completed unit')
+        for why in errors:
+            bad.append((u, why, rec.get('log', 'unknown')))
     for rec in finished.values():
         for n, t in rec['tests'].items():
             counts[t['outcome']] = counts.get(t['outcome'], 0) + 1
             if t['outcome'] not in ('passed', 'skipped', 'xfailed'):
                 bad.append((n, t['outcome'], rec['log']))
-        if rec['rc'] not in (0,) and all(t['outcome'] == 'passed' for t in rec['tests'].values()):
+        if rec['rc'] != 0:
             bad.append((rec['unit'], f'exit status {rec["rc"]}', rec['log']))
     lines = [f'{len(nodes)} tests: ' + ', '.join(f'{v} {k}' for k, v in sorted(counts.items())),
              f'wall time {time.monotonic() - t0:.0f} s (this invocation)']
