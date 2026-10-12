@@ -788,6 +788,50 @@ def test_writer_starting_mid_line_check_is_tested():
         mid_line_run('tb_fb_mid_line_old', alter={'fb_sdram.v': (PAD_BLACK, PAD_BLACK.replace('BLACK', 'grp[0]'))})
 
 
+WHOLE_LINE = "&&   // a line is complete\n                      whole_v && whole_line == grp_line;"
+
+
+def joined_partial_line(name, alter=None):
+    """mid_line_run's events of the field the writer joined: (joined line, its first word index,
+    lines marked stored, (buffer, line) sources read) between the first word and the drop."""
+    sd, _ = mid_line_run(name, alter)
+    a = next(i for i, (ev, *_) in enumerate(sd) if ev == 'A')
+    j = next(i for i, (ev, *_) in enumerate(sd) if ev == 'J' and i > a)
+    buf = sd[a][3]
+    _, f, line, idx, *_ = next(e for e in sd[a:j] if e[0] == 'W')
+    stored = [e[1] for e in sd[a:j] if e[0] == 'M']
+    reads = [(e[1], e[2]) for e in sd[a:j] if e[0] == 'S' and e[1] == buf]
+    return line, idx, stored, reads, buf
+
+
+def test_joined_line_from_the_middle_is_not_stored():
+    """After LOW -> BUF the writer joins line 4 at word 100: words 0..99 of that line are never
+    written to the SDRAM. A line counted as stored when its last group was written, so this one
+    was, and a frame showing the joined field (nothing is published yet) read its unwritten words
+    into the line buffer (test_fuzz_chain seeds 1437 and 1445, 2026-10-12; no video in that frame).
+    Now the line is not stored, the display falls back as for a missing line, and the model
+    (fb_ref.FieldStore.line_stored) refuses a stored mark for a line without its word 0."""
+    line, idx, stored, reads, buf = joined_partial_line('tb_fb_joined_line')
+    assert idx != 0, f'the writer joined line {line} at word {idx}: not the case this test is about'
+    assert line not in stored, f'line {line} joined at word {idx} was marked stored'
+    assert (buf, line) not in reads, f'line {line} of the joined field was read from buffer {buf}'
+    assert stored, 'no line of the joined field was stored: the run does not reach the case'
+    model = fb.FieldStore()
+    model.first_word(1, line)
+    model.word(1, line, idx, 0)
+    with pytest.raises(AssertionError, match='without its word 0'):
+        model.line_stored(line)
+    model.word(1, line + 1, 0, 1)
+    model.line_stored(line + 1)
+
+
+def test_joined_line_check_is_tested():
+    """Negative control: the old rule (last group written is enough) stores the joined line."""
+    line, idx, stored, reads, buf = joined_partial_line(
+        'tb_fb_joined_line_old', alter={'fb_sdram.v': (WHOLE_LINE, ";   // a line is complete")})
+    assert idx != 0 and line in stored
+
+
 def test_mode_switch_checks_catch_faults():
     """Negative control for test_mode_switch_buf_low_buf: the same run with faults made in the
     test bench (not the RTL), each of which the matching check must catch. Fault 1: one word
