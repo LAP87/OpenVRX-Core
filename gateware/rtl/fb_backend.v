@@ -63,7 +63,8 @@ module fb_backend #(
     output wire [7:0]  yo, cbo, cro,      // YCbCr with the same timing as r/g/b
     output wire [11:0] tx, ty,            // timing generator position (the video is valid 6 clocks later)
     output wire        have_video,        // pix domain: a field buffer is being shown
-    output wire        sdram_ready        // sd domain: SDRAM initialised
+    output wire        sdram_ready,       // sd domain: SDRAM initialised
+    output wire        hz50               // pix domain: the timing runs 720p50 lines (LOW with a PAL source)
 );
     reg [2:0] rst_s, rst_p;
     always @(posedge sd_clk  or posedge rst_async) if (rst_async) rst_s <= 3'b111; else rst_s <= {rst_s[1:0], 1'b0};
@@ -276,6 +277,7 @@ module fb_backend #(
     end
     wire ll_alive = !ll_since[22];
     wire ll_pal   = ll_lines > 10'd270;
+    assign hz50 = ll_p && ll_pal;
 
     // ---- pixel domain ----
     wire [11:0] x, y;

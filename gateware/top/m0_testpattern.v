@@ -48,7 +48,7 @@ module m0_testpattern (
     always @(posedge clk_pixel) {de_d, hs_d, vs_d} <= {de, hs, vs};
 
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst),
-                      .de(de_d), .hsync(hs_d), .vsync(vs_d), .r(r), .g(g), .b(b),
+                      .de(de_d), .hsync(hs_d), .vsync(vs_d), .r(r), .g(g), .b(b), .hz50(1'b0),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     reg [26:0] sec;

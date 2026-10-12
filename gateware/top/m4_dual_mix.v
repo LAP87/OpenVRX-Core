@@ -91,7 +91,7 @@ module m4_dual_mix #(
                 .dec_field(dec_field), .dec_line(dec_line));
 
     wire [7:0] r, g, b;
-    wire de, hs, vs, have_video, sdram_ready;
+    wire de, hs, vs, have_video, sdram_ready, hz50;
     fb_backend backend (
         .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(clk_pixel), .rst_async(rst), .ll_mode(LOW_LATENCY[0]),
         .f_empty(m_empty), .f_data(m_data), .f_pop(m_pop),
@@ -99,12 +99,12 @@ module m4_dual_mix #(
         .SDRAM_nWE(O_sdram_wen_n), .SDRAM_nRAS(O_sdram_ras_n), .SDRAM_nCAS(O_sdram_cas_n),
         .SDRAM_CLK(O_sdram_clk), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(O_sdram_dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hs), .vsync(vs),
-        .have_video(have_video), .sdram_ready(sdram_ready));
+        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50));
 
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst_sr[3]),
-                      .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b),
+                      .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b), .hz50(hz50),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B

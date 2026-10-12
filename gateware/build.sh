@@ -7,8 +7,9 @@
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
 #   IOREG=0 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default: 1 for the SDRAM tops)
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
-# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / an
-# IOREG other than the top's default).
+#   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
+# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI /
+# an IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
 # — flash with openFPGALoader -b tangnano20k <file>
 set -euo pipefail
@@ -38,6 +39,13 @@ case "$vinterp" in 0|1) ;; *) echo "VINTERP must be 0 or 1" >&2; exit 1 ;; esac
 if [ "$vinterp" = 1 ]; then
   defs="$defs -DVINTERP=1"
   out_fs="${out_fs%.fs}_vinterp.fs"
+fi
+# optional: HDMI with an AVI InfoFrame instead of DVI (tmds_link.v HDMI, default 0)
+hdmi="${HDMI:-0}"
+case "$hdmi" in 0|1) ;; *) echo "HDMI must be 0 or 1" >&2; exit 1 ;; esac
+if [ "$hdmi" = 1 ]; then
+  defs="$defs -DHDMI=1"
+  out_fs="${out_fs%.fs}_hdmi.fs"
 fi
 # I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob), on by default for
 # the tops with SDRAM: the SDRAM read and write timing then does not depend on where the placer puts the
@@ -86,7 +94,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.

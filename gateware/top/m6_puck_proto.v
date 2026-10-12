@@ -125,7 +125,7 @@ module m6_puck_proto #(
                 .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb));
 
     wire [7:0] r, g, b;
-    wire de, hs, vs, have_video, sdram_ready;
+    wire de, hs, vs, have_video, sdram_ready, hz50;
     wire [11:0] tx, ty;
     // ---- OSD: mirror the menu text into the overlay's RAM (board clock), draw it over the video
     reg  [1:0] scan_row, w_row;
@@ -150,12 +150,12 @@ module m6_puck_proto #(
         .SDRAM_nWE(O_sdram_wen_n), .SDRAM_nRAS(O_sdram_ras_n), .SDRAM_nCAS(O_sdram_cas_n),
         .SDRAM_CLK(O_sdram_clk), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(O_sdram_dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hs), .vsync(vs), .yo(), .cbo(), .cro(), .tx(tx), .ty(ty),
-        .have_video(have_video), .sdram_ready(sdram_ready));
+        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50));
 
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst_sr[3]),
-                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo),
+                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B

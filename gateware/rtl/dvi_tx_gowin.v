@@ -1,5 +1,5 @@
-// DVI transmitter for Gowin GW2A: three TMDS encoders, OSER10 serialisers and
-// true-LVDS output buffers (Tang Nano 20K HDMI connector uses TLVDS).
+// DVI (or, with HDMI = 1, HDMI with an AVI InfoFrame: tmds_link.v) transmitter for Gowin GW2A:
+// TMDS symbols, OSER10 serialisers and true-LVDS output buffers (Tang Nano 20K HDMI connector uses TLVDS).
 // Primitive usage follows the apicula DVI example (YosysHQ/apicula examples/DVI).
 `default_nettype none
 
@@ -13,15 +13,15 @@ module dvi_tx_gowin (
     input  wire [7:0] r,
     input  wire [7:0] g,
     input  wire [7:0] b,
+    input  wire       hz50,          // HDMI = 1: the timing is 720p50 (AVI VIC 19); ignored in DVI mode
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
     output wire [2:0] tmds_d_n
 );
     wire [9:0] sym [0:2];
-    tmds_encoder enc_b (.clk(clk_pixel), .rst(rst), .de(de), .data(b), .ctrl({vsync, hsync}), .q(sym[0]));
-    tmds_encoder enc_g (.clk(clk_pixel), .rst(rst), .de(de), .data(g), .ctrl(2'b00),          .q(sym[1]));
-    tmds_encoder enc_r (.clk(clk_pixel), .rst(rst), .de(de), .data(r), .ctrl(2'b00),          .q(sym[2]));
+    tmds_link link (.clk(clk_pixel), .rst(rst), .de(de), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
+                    .hz50(hz50), .sym0(sym[0]), .sym1(sym[1]), .sym2(sym[2]));
 
     wire [2:0] ser;
     genvar c;
