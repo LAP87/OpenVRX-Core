@@ -733,16 +733,17 @@ def parse_bus_text(output):
     return tuple(events)
 
 
-def run(present1, split=0, scenario=0, alter=None, trace=0):
+def run(present1, split=0, scenario=0, alter=None, trace=0, tag=''):
     """Returns the testbench's RESULT line as a dict, and its MID line (or None).
     alter: (text, replacement) in a copy of tvp_ctrl.v (negative controls).
-    With trace=1, also decodes only the resolved SCL/SDA pin samples from the bench."""
+    With trace=1, also decodes only the resolved SCL/SDA pin samples from the bench.
+    tag: appended to the build directory when two tests run the same bench."""
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
     # one build directory per alteration: the negative controls may run in separate processes at once
-    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}_{trace}{"_alt" + hashlib.md5((alter[0] + alter[1]).encode()).hexdigest()[:6] if alter else ""}'
+    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}_{trace}{"_alt" + hashlib.md5((alter[0] + alter[1]).encode()).hexdigest()[:6] if alter else ""}{tag}'
     work.mkdir(parents=True, exist_ok=True)
     ctrl = GW / 'rtl' / 'tvp_ctrl.v'
     if alter:
@@ -927,7 +928,7 @@ def init_list_ok(r):
 def test_init_list_in_order():
     """Decoder 0 gets exactly the init list, in order, once: 28h (autoswitch) and 02h (TV mode)
     are written explicitly, 03h last (SLES209E 3.21.3, 3.21.32; README under M4)."""
-    r, _ = run(1)
+    r, _ = run(1, tag='_init_list')
     assert r['log'] == INIT_LIST, r['log']
     assert init_list_ok(r)
 

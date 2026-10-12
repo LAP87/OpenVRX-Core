@@ -653,11 +653,11 @@ def _run(toplevel, test_filter, parameters=None, tag='', expect=''):
 
 
 def test_sdram_burst():
-    _run('tb_sdram', r'\.bursts_round_trip$')
+    _run('tb_sdram', r'\.bursts_round_trip$', tag='_burst')
 
 
 def test_sdram_sample_point_sweep():
-    _run('tb_sdram', r'\.sample_point_sweep$')
+    _run('tb_sdram', r'\.sample_point_sweep$', tag='_sweep')
 
 
 PHASE_PS = CLK_PS * 10 // 16           # the SDRAM clock is 225 degrees late

@@ -126,7 +126,13 @@ M4 seed 0 och M6 seed 3 ovan återanvänder de godkända `8d7b0e9`-byggena: dera
 - `.venv/` (uv): yowasp-yosys, yowasp-nextpnr-himbaechel-gowin, apycula (gowin_pack), cocotb, pytest.
 - `.tools/iverilog/` — Icarus Verilog 12 byggd från källkod.
 - Bygg: `gateware/build.sh <toppmodul>` → `gateware/build/<toppmodul>.fs`.
-- Simulera: `.venv/bin/python -m pytest -q gateware/sim gateware/model`.
+- Simulera hela sviten: `.venv/bin/python gateware/tools/run_suite.py` (se nedan). Ett enstaka test: `.venv/bin/python -m pytest -q gateware/sim/test_m2.py`.
+
+### Hela sviten parallellt
+
+`tools/run_suite.py` startar en pytest-process per test under `gateware/sim` och `gateware/tools` och en per fil för de rena Pythontesten, tio åt gången (`-j`). Varje process har en egen `--basetemp`. Längst först, efter tiderna från förra körningen. I `gateware/sim/build/suite/` (`--out`) hamnar en logg per process, `results.jsonl`, `status.json` och `report.txt`. Returkod 0 bara när alla test gick igenom och ingen byggkatalog delas; 1 vid fel eller delad katalog, 3 när `--budget S` lämnade test kvar. `--resume` kör det som återstår och vägrar om källorna ändrats sedan dess.
+
+Revisionen av byggkataloger går i samma körning: `tools/suite_trace.py` spelar in vilka kataloger under `gateware/build`, `gateware/sim/build` och `gateware/formal/build` varje tests underprocesser använder, och vilken cocotb-resultatfil. `tools/build_dirs.py --list` skriver ut dem per test och fäller en katalog eller fil som två test använder. Den fann tre sådana par på `main` f32407f (`tb_m2`, `tb_sdram`, `tb_tvp_ctrl_100_0`), som nu har egna kataloger. Med dem: 658 test gröna, 169 byggkataloger och 19 resultatfiler utan delning, 633 s med tio åt gången på en 24-trådars maskin (längst tar `tools/test_formal.py`, 7 minuter).
 - Flasha (när kortet finns): openFPGALoader behövs, t.ex. `sudo pacman -S openfpgaloader` (Arch), sedan
   `openFPGALoader -b tangnano20k gateware/build/m0_testpattern.fs` (RAM) eller med `-f` (flash).
 

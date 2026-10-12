@@ -242,7 +242,7 @@ def _run_m2(testcase):
     if iverilog_bin.exists():
         os.environ['PATH'] = f'{iverilog_bin}{os.pathsep}' + os.environ['PATH']
     r = get_runner('icarus')
-    build = HERE / 'build' / 'tb_m2'
+    build = HERE / 'build' / f'tb_m2_{testcase}'      # one build directory per test
     rtl = [GW / 'rtl' / n for n in ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'sdram_burst.v', 'field_phase.v',
                                     'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v', 'ycbcr2rgb.v',
                                     'cdc_sync.v', 'fb_display.v', 'fb_backend.v', 'm2_core.v')]
