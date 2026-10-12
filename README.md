@@ -28,8 +28,8 @@ tests share a build directory or cocotb results file: 658 tests pass, nothing sh
 
 2026-10-12, later: the decoder SCLK pins no longer carry a BUFG flag, which removes the
 seed-dependent "Can't route the clocks.clk_27 net" in M6 (seeds 0-3 built). The SDRAM tops
-(M2, M2s, M2a, M4, M6) are built with I/O registers in the I/O cells by default. Suite: 664
-tests pass. Figures in [gateware/README.md](gateware/README.md).
+(M2, M2s, M2a, M4, M6) are built with I/O registers in the I/O cells by default. Suite on
+main ae993f8: 689 tests pass, nothing shared. Figures in [gateware/README.md](gateware/README.md).
 
 M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
 its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
