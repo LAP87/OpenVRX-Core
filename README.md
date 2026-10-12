@@ -22,6 +22,10 @@ Acceptance receipt SHA-256:
 simulation test, ten at a time, all 651 pass (18 min). Two parametrised mixer tests shared a
 build directory and raced in that runner; they now build apart. Nothing has run on hardware.
 
+2026-10-12, `gateware/tools/run_suite.py` runs the suite that way and audits that no two
+tests share a build directory or cocotb results file: 658 tests pass, nothing shared
+(633 s, ten at a time). The audit found three more shared directories, now separate.
+
 M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
 its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
 62-byte UART row show the requested menu mode, rather than a register readback.
@@ -74,7 +78,8 @@ testbenches look there first).
 ## Run
 
 ```sh
-.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools
+.venv/bin/python gateware/tools/run_suite.py       # whole suite, one process per simulation test, ten at a time
+.venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools   # same tests in one process (over 90 min)
 SEED=3 FREQ_MHZ=75 gateware/build.sh m6_puck_proto  # accepted C3 source, seed 3 -> gateware/build/m6_puck_proto.fs
 .venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m6_puck_proto.build.json --root .
 openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
