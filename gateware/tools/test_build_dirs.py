@@ -67,8 +67,8 @@ def test_units_one_process_per_simulation_test_one_per_python_file():
 
 
 def test_unit_ok_needs_exit_status_zero_and_no_failed_test():
-    rec = {'rc': 0, 'tests': {'a': {'outcome': 'passed'}, 'b': {'outcome': 'skipped'}}}
+    rec = {'nodes': ['a', 'b'], 'rc': 0, 'tests': {'a': {'outcome': 'passed'}, 'b': {'outcome': 'skipped'}}}
     assert run_suite.unit_ok(rec)
     assert not run_suite.unit_ok({**rec, 'rc': 1})
-    assert not run_suite.unit_ok({'rc': 0, 'tests': {'a': {'outcome': 'missing'}}})
-    assert not run_suite.unit_ok({'rc': 0, 'tests': {'a': {'outcome': 'xpassed'}}})
+    assert not run_suite.unit_ok({'nodes': ['a'], 'rc': 0, 'tests': {'a': {'outcome': 'missing'}}})
+    assert not run_suite.unit_ok({'nodes': ['a'], 'rc': 0, 'tests': {'a': {'outcome': 'xpassed'}}})
