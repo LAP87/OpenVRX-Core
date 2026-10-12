@@ -490,3 +490,21 @@ Generatorns kameraförsprång kan förklara kameraålder men undantar inte
 fältminnets egen åldersinvariant. De övriga åldersklassificeringarna i
 Opus nattpaket finns kvar; kampanjtabellens äldre gröna siffror kommer
 från tidigare kontrollversioner.
+
+
+## Prefixbevarande recovery-verktyg, 2026-10-12
+
+`model/fuzz_recovery.py::append_camera_fields(scenario, fields=4)` returnerar en ny
+kameraström med rena fält efter originalet. Originalbytes, styrtider och byteklockor
+behålls; fortsättningen synkroniserar kanalernas ankomstfas efter blankning och
+följer interlaced/progressiv F-konvention. `generate()` och kampanjkommandona
+använder fortfarande originalstimulus. Recovery är ett eget kontrakt som behöver
+nytt rundnamn och ny evidens före kampanjstart.
+
+Fokuserad modell-/resume-verifiering gav **68 pass på 23,65 s**, varav 25 nya
+tester för verktyget. Nio fall täcker skalad/full geometri, NTSC/PAL och båda
+kamerakonventionerna. A/B-bytes matchar de tre tidigare accepterade native-proven
+1345, 1400 och full-PAL1601; skadat prefix och avklippt fortsättningsfält avvisas
+av samma oracle. Kampanjens verkliga källmanifest tar med verktyget och avvisar
+ett manifest från den gamla källan utan att ändra evidensen. Detta är helper-
+och modelltester, ingen ny helsvit, FPGA-routning eller hårdvarumätning.
