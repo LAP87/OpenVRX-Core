@@ -7,8 +7,9 @@ The store is modelled at the level of its decisions. Feed it the events of the
 SDRAM clock domain in the order they happen:
     first_word(f, line)   the first word of a field is at the head of the FIFO
     end_joined(f, line)   the field joined after reset ends and is dropped
-    word(f, line, idx, t) a word is taken (t in cycles)
-    line_stored(line)     the last group of a line has been written
+    word(f, line, idx, t) a word is taken (t in cycles); at least the first word of every line
+    line_stored(line)     the last group of a line has been written; refused (AssertionError)
+                          for a line whose word 0 was not taken in this field
     frame_start()         first line request of an output frame
     fetch(line)           a line request; returns (buffer, line) to read, or (BLANK, line)
 sim/test_fb.py replays the events of a simulation and compares every decision.
@@ -71,6 +72,7 @@ class FieldStore:
         self.cur_f = 0
         self.last_line = self.max_line = 0
         self.done_any, self.max_done = False, 0
+        self.whole_line = None                    # the line whose word 0 was taken in this field
         self.latest, self.latest_v = 0, False     # published buffers, newest first
         self.older, self.older_v = 0, False
         self.low_of = [False] * N_BUF
@@ -107,6 +109,7 @@ class FieldStore:
             self.cur, self.cur_f = nxt, f
             self.last_line = self.max_line = 0
             self.done_any, self.max_done = False, 0
+        self.whole_line = None
         self.ok[self.cur] = set()
         self.phase.new_field()
         return self.cur
@@ -118,6 +121,7 @@ class FieldStore:
         self.joined, self.cur, self.cur_f = False, nxt, f
         self.last_line = self.max_line = 0
         self.done_any, self.max_done = False, 0
+        self.whole_line = None
         self.ok[self.cur] = set()
         self.phase.new_field()
         return self.cur
@@ -126,10 +130,15 @@ class FieldStore:
         assert self.have_field and not self.is_new_field(f, line)
         self.last_line = line
         self.max_line = max(self.max_line, line)
+        if idx == 0:
+            self.whole_line = line
         if line == self.ref_line and idx == 0:
             self.phase.ref(t)
 
     def line_stored(self, line):
+        # Only a line written from its word 0 in this field is stored: not the one the writer
+        # joined in the middle after reset or LOW (its first words were never written).
+        assert self.whole_line == line, f'line {line} stored without its word 0 in this field'
         self.ok[self.cur].add(line)
         self.done_any, self.max_done = True, line
 

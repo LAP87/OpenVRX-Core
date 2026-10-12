@@ -3,7 +3,11 @@
 // Writer: pops tagged words {field, line, idx, data} from the input FIFO,
 // groups them into aligned 8-word bursts and writes them to the current
 // buffer. A line counts as stored when its last group (words 352..359) has
-// been written; that sets its bit in `ok`. When a new field starts (field bit
+// been written and its word 0 was taken in the same field; that sets its bit
+// in `ok`. Lines come whole from the mixer, except the one the writer joins in
+// the middle after reset or LOW: its first words were never written, and it
+// is not stored (until 2026-10-12 it was, and a frame showing the joined field
+// read those words from the SDRAM; test_fuzz_chain seeds 1437, 1445). When a new field starts (field bit
 // flips or the line number goes backwards) the buffer is published and the
 // next one is chosen: never the one just published, the one on screen or its
 // fallback. The `ok` bits of the new buffer are cleared before words are taken
@@ -106,6 +110,8 @@ module fb_sdram #(
     reg        grp_ready, writing;
     reg [2:0]  wr_k;
     assign wdata = grp[wr_k];
+    reg        whole_v;                  // word 0 of line `whole_line` was taken in this field
+    reg [9:0]  whole_line;
     reg        done_any;                 // a line of the current field is stored
     reg [9:0]  max_done;                 // the highest such line
     reg        sweeping;
@@ -159,7 +165,8 @@ module fb_sdram #(
     wire publish    = field_end && !joined;
     wire discard    = field_end && joined;
     wire take       = look_in && have_field && !new_field && !breaks_grp;
-    wire stored     = resetn && writing && wdata_take && wr_k == 3'd7 && grp_base == 6'd44;   // a line is complete
+    wire stored     = resetn && writing && wdata_take && wr_k == 3'd7 && grp_base == 6'd44 &&   // a line is complete
+                      whole_v && whole_line == grp_line;                                     // from its word 0
     wire ph_low;
     field_phase phase (.clk(clk), .rst(!resetn), .nf(first_word || field_end),
                        .at_ref(take && e_line == REF_LINE && e_idx == 9'd0),
@@ -192,7 +199,7 @@ module fb_sdram #(
         if (!resetn) begin
             cur_buf <= 0; have_field <= 0; joined <= 0; grp_mask <= 0; grp_ready <= 0; writing <= 0;
             last_line <= 0; max_line <= 0; fetching <= 0; rd_inflight <= 0; req_valid <= 0;
-            done_any <= 0; max_done <= 0; sweeping <= 0; mk_have <= 0;
+            done_any <= 0; max_done <= 0; sweeping <= 0; mk_have <= 0; whole_v <= 0;
             latest <= 0; older <= 0; latest_v <= 0; older_v <= 0; low_of <= 0; n1_v <= 0; pub_lines <= 0;
             show_buf <= 0; prev_buf <= 0; prev_ok <= 0; rt_prev <= 0; frame_low <= 0;
             look <= 0; rep_v <= 0; miss <= 0; f_blank <= 0;
@@ -205,13 +212,13 @@ module fb_sdram #(
             end else if (look_in) begin
                 if (first_word) begin
                     have_field <= 1'b1; cur_field <= e_field; joined <= 1'b1;
-                    sweeping <= 1'b1; sweep_i <= 0;
+                    sweeping <= 1'b1; sweep_i <= 0; whole_v <= 1'b0;
                 end else if (new_field || breaks_grp) begin
                     if (grp_mask != 0) grp_ready <= 1'b1;          // flush the open group first
                     else if (joined) begin                         // the joined field: drop it, move on
                         joined <= 1'b0; cur_field <= e_field; cur_buf <= nxt;
                         last_line <= 0; max_line <= 0; done_any <= 1'b0; max_done <= 0;
-                        sweeping <= 1'b1; sweep_i <= 0; mk_have <= 1'b0;
+                        sweeping <= 1'b1; sweep_i <= 0; mk_have <= 1'b0; whole_v <= 1'b0;
                     end else begin                                 // publish, move on
                         pub_valid <= 1'b1;
                         if (!n1_v) pub_lines <= n_now;
@@ -223,7 +230,7 @@ module fb_sdram #(
                         cur_buf   <= nxt;
                         cur_field <= e_field;
                         last_line <= 0; max_line <= 0; done_any <= 1'b0; max_done <= 0;
-                        sweeping <= 1'b1; sweep_i <= 0; mk_have <= 1'b0;
+                        sweeping <= 1'b1; sweep_i <= 0; mk_have <= 1'b0; whole_v <= 1'b0;
                     end
                 end else begin
                     in_pop <= 1'b1;
@@ -232,6 +239,7 @@ module fb_sdram #(
                     grp_line  <= e_line;
                     grp_base  <= e_idx[8:3];
                     last_line <= e_line;
+                    if (e_idx == 9'd0) begin whole_v <= 1'b1; whole_line <= e_line; end
                     if (e_line > max_line) max_line <= e_line;
                     if (e_idx[2:0] == 3'd7) grp_ready <= 1'b1;
                 end

@@ -29,7 +29,13 @@ tests share a build directory or cocotb results file: 658 tests pass, nothing sh
 2026-10-12, later: the decoder SCLK pins no longer carry a BUFG flag, which removes the
 seed-dependent "Can't route the clocks.clk_27 net" in M6 (seeds 0-3 built). The SDRAM tops
 (M2, M2s, M2a, M4, M6) are built with I/O registers in the I/O cells by default. Suite on
-main ae993f8: 689 tests pass, nothing shared. Figures in [gateware/README.md](gateware/README.md).
+main ae993f8: 689 tests pass, nothing shared.
+
+2026-10-12, campaign: all 260 seeds of the C3 interference campaign have run. 257 pass with
+their original stimulus; three (1345, 1434, 1444) pass once four clean fields follow it. The
+remaining 60 found one RTL fault in the field store (the line the writer joins in the middle
+after LOW was counted as stored), now fixed. Suite: 691 tests pass. Details in
+[gateware/sim/FUZZ_2026-10-07.md](gateware/sim/FUZZ_2026-10-07.md). Figures in [gateware/README.md](gateware/README.md).
 
 M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
 its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
