@@ -10,23 +10,23 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-12, main `47b66e5`):** 695 tests, all pass, run with
+**Status (2026-10-12, main with VINTERP, from `fc267a8`):** 713 tests, all pass, run with
 `gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 13 min);
 no two tests share a build directory. Nothing has run on hardware: "simulated" and
 "built" below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
-requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `0da655d` are those of
-`47b66e5`.
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `fc267a8` are those
+of main.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `0da655d` | 0 | reference for the HDMI pairs |
-| M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells |
+| M0 | `fc267a8` | 0 | reference for the HDMI pairs |
+| M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `0da655d` | 0 | I/O registers in the I/O cells |
-| M6 | `0da655d` | 2 | seeds 0-3 also built from `94a2b32` |
+| M4 | `fc267a8` | 0 | also with `VINTERP=1` |
+| M6 | `fc267a8` | 2 | also with `VINTERP=1`; seeds 0-3 built from `94a2b32` |
 
 What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
@@ -41,6 +41,8 @@ What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README
 - The two timing assumptions the formal proofs leave open (frame_low/ll_low before line 0,
   a line-buffer slot written before it is read) are checked in every field-store and chain
   simulation, with negative controls.
+- Vertical interpolation (two source lines per output line in BUF) is the build option
+  `VINTERP=1`, off by default: about 500 LUT4 and 4 BSRAM more in M4 and M6.
 
 M6 has a TV/VCR filter field (`FILT`) for both decoders; the 62-byte UART row shows the
 requested mode as `T` or `V`. Which mode holds lock and picture better is not measured.
