@@ -6,13 +6,14 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 ## Status 2026-10-12
 
-### Nuläge, `main` med VINTERP (från `fc267a8`)
+### Nuläge, `main` med HDMI-läge (från `4ad5a68`)
 
-Hela sviten: **713 test gröna** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 13 minuter), ingen delad byggkatalog. Inget är kört på hårdvara.
+Hela sviten: **724 test gröna** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 13 minuter), ingen delad byggkatalog. Inget är kört på hårdvara.
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
-| M0, M4, M6 | `fc267a8` (byggindata lika med `main`) | 0 (M6: 2) | "Interpolation i höjdled" under bildvägen (också med `VINTERP=1`) |
+| M0, M4, M6 | `4ad5a68` (byggindata lika med `main`) | 0 (M6: 2) | "DVI eller HDMI" under M0 (också med `HDMI=1`) |
+| M4, M6 med `VINTERP=1` | `fc267a8` | 0 (M6: 2) | "Interpolation i höjdled" under bildvägen |
 | M2, M2s | `0da655d` | 0 | "Störningskampanjen C3 avslutad" nedan |
 | M2a | `dc307bc` | 0 | "I/O-register i I/O-cellerna" nedan |
 | M3; M6 seed 0–3 | `94a2b32` | 0; 0–3 | "Klockroutningen, 2026-10-12" nedan |
@@ -56,18 +57,18 @@ Alla fyra HDMI-par matchar M0:s IOB-fuses. Vid denna B-acceptans återstod ny sl
 
 | Milstolpe | Toppmodul | Byggd | Verifierad |
 |---|---|---|---|
-| M0 — testbild 720p60 på kortets HDMI | `top/m0_testpattern.v` | ✔ `build/m0_testpattern.fs` (793 LUT, 3 %; pixel 147,49 MHz) | Simulering av TMDS och tidsbas |
+| M0 — testbild 720p60 på kortets HDMI | `top/m0_testpattern.v` | ✔ `build/m0_testpattern.fs` (788 LUT, 3 %; pixel 152,39 MHz; DVI, se M0) | Simulering av TMDS och tidsbas |
 | M1 — Moneagles TVP5150AM1 → HDMI (luma, 360×240, 720p60), inbäddad BT.656-synk | `top/m1_moneagle_view.v` | ✔ `build/m1_moneagle_view.fs` (809 LUT, 44/46 BSRAM) | Hela ingångsvägen mot facit |
 | M1s — samma, separata synksignaler (HSYNC/VSYNC/AVID) | `top/m1s_moneagle_view_sync.v` | ✔ `build/m1s_moneagle_view_sync.fs` (1 054 LUT, 44/46 BSRAM) | Båda polariteter och bytefaser |
 | **M2 — full upplösning i färg via SDRAM, fältminne med fyra buffertar** | `top/m2_moneagle_color.v` (kärna `rtl/m2_core.v`) | ✔ `build/m2_moneagle_color.fs` (3 474 LUT 16 %, 17 BSRAM, 2 PLL; SDRAM 125,79 MHz, pixel 120,89 MHz) | Tre klockdomäner + SDRAM-modell med databladets tider: SDRAM-innehåll och RGB-pixlar mot modell, inga protokollfel i minnesmodellen |
 | M2s — som M2 men separata synksignaler | `top/m2s_moneagle_color_sync.v` (`m2_core` med `DISCRETE_SYNC=1`) | ✔ `build/m2s_moneagle_color_sync.fs` (3 653 LUT 17 %, 17 BSRAM; SDRAM 111,66 MHz) | Mottagaren testad i M1s; kombinationen bara syntes/PnR |
 | **M2a — minnestest av SDRAM** (ingen bild; en rad per läspunkt över USB) | `top/m2a_memtest.v` (kärna `rtl/memtest_core.v`) | ✔ `build/m2a_memtest.fs` (2 393 LUT 11 %, 0 BSRAM, 1 PLL; SDRAM 92,68 MHz) | UART-raderna avkodade mot SDRAM-modellen: rätt läspunkt pekas ut för sex kombinationer av kortfördröjning och klockfas (`sim/test_memtest.py`) |
 | **M3 — uppstartsprob** för M4/M6-kopplingen (ingen bild; en rad per dekoder och sekund över USB) | `top/m3_probe.v` | ✔ `build/m3_probe.fs` (2 561 LUT 12 %, 0 BSRAM; 27 MHz-domän 196,66 MHz, dekoderklockorna 147,36 och 179,63 MHz) | Rapportraderna mot en frisk och en felkopplad dekoder, lysdioderna och RX5808-skrivningen på stiften (`sim/test_probe.py`) |
-| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 354 LUT 40 %, 25 BSRAM; SDRAM 128,40 MHz, pixel 112,38 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (33 gröna test i den aktuella sviten; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
+| **M4 — två egna TVP5150-moduler + radvis mixer** | `top/m4_dual_mix.v` | ✔ `build/m4_dual_mix.fs` (8 266 LUT 39 %, 25 BSRAM; SDRAM 104,87 MHz, pixel 147,36 MHz) | Mixern mot facit, beslut för beslut och ord för ord, på fält med riktig släcklucka och vid parningsfönstrets kant (33 gröna test i den aktuella sviten; `sim/test_mixer.py`); fältminnet och visningen mot facit (`sim/test_fb.py`); I2C mot slavmodeller; RESETB, lysdioder och RX5808-skrivning på toppmodulens stift (`sim/test_top_pins.py`); hela kedjan från två BT.656-strömmar till pixlarna under slumpade störningar, varje block mot sin modell (`sim/test_fuzz_chain.py`, kampanjen i `sim/FUZZ_2026-10-07.md`) |
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
-| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 788 LUT 61 %, 25 BSRAM; SDRAM 107,79 MHz, pixel 123,06 MHz, 27 MHz-domän 122,96 MHz; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
+| **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 736 LUT 61 %, 25 BSRAM; SDRAM 101,06 MHz, pixel 129,90 MHz, 27 MHz-domän 123,02 MHz; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax ovan kommer från nextpnrs slutrapport efter routning, med kravet 75 MHz för alla klockor. M0, M4 och M6 är byggda ur `fc267a8`, M2 och M2s ur `0da655d`, M2a ur `dc307bc`, M3 ur `94a2b32` (alla 2026-10-12; se "Nuläge"); M1 och M1s 2026-10-06 ur `62a69be`. HDMI-paren i M2, M2s, M4 och M6 har samma IOB-fuses som M0.
+**Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax ovan kommer från nextpnrs slutrapport efter routning, med kravet 75 MHz för alla klockor. M0, M4 och M6 är byggda ur `4ad5a68`, M2 och M2s ur `0da655d`, M2a ur `dc307bc`, M3 ur `94a2b32` (alla 2026-10-12; se "Nuläge"); M1 och M1s 2026-10-06 ur `62a69be`. HDMI-paren i M2, M2s, M4 och M6 har samma IOB-fuses som M0.
 
 ### Historiska C1-byggen (`3aed0b7`, 2026-10-09)
 
@@ -163,6 +164,21 @@ När verktygen ska starta flyttas föregående resultat till `build/previous/`. 
 ## M0 — första ljuset
 
 Koppla kortets HDMI till en TV/skärm. Förväntat: färgstaplar i en vit 4:3-ram, grå ramper på sidorna, en orange ruta som studsar. LED0 blinkar 1 Hz. S1 (stift 88) = reset.
+
+**DVI eller HDMI.** Alla byggen sänder som standard **DVI** (`rtl/tmds_link.v`, `HDMI = 0`): ren TMDS utan dataöar, RGB i fullt omfång utan att säga det. En skärm som följer CEA-861 strikt kan då ta bilden för begränsat omfång och krossa svärtan (navets `research/GOGGLES_OCH_XR_2026-10-12.md`, regel 4). Med `HDMI=1 gateware/build.sh <topp>` (filnamnet får `_hdmi`) sänds HDMI: förambel och skyddsband före varje aktiv rad, och efter varje vsync en dataö med en AVI-infoframe: RGB, 16:9, omfånget fullt, VIC 4 för 720p60 och VIC 19 medan `LOW` med PAL-källa ger 720p50 (`hz50` från `fb_backend.v`). Bilden går 10 klockor senare än i DVI-läget. Simulerat mot en avkodare i `sim/test_hdmi.py` (videon, förambler, skyddsband, en dataö per bild, paritet, kontrollsumma 2Bh/1Ch, VIC); negativa kontroller: fel VIC, fel kontrollsumma, fel paritetspolynom, inget skyddsband. Tabellerna (TERC4, skyddsband, paketets bitordning, BCH) är skrivna ur HDMI 1.4 och CEA-861 i både RTL och avkodare, så ett fel i läsningen av specifikationen kan finnas i båda; ingen riktig skärm har sett HDMI-läget. Mät rampen med DVI och HDMI på bänken innan standard ändras (`docs/MATPROTOKOLL.md` i navet, blad 16).
+
+Byggt ur `4ad5a68` (siffror efter routning, krav 75 MHz, HDMI-paren i alla sex som i M0 med DVI):
+
+| Topp | Läge | LUT4 | DFF | Pixelklocka (MHz) |
+|---|---|---:|---:|---:|
+| `m0_testpattern` seed 0 | DVI | 788 | 173 | 152,39 |
+| `m0_testpattern` seed 0 | HDMI | 948 | 397 | 125,82 |
+| `m4_dual_mix` seed 0 | DVI | 8 266 | 4 523 | 147,36 |
+| `m4_dual_mix` seed 0 | HDMI | 8 430 | 4 827 | 126,21 |
+| `m6_puck_proto` seed 2 | DVI | 12 736 | 6 209 | 129,90 |
+| `m6_puck_proto` seed 2 | HDMI | 13 024 | 6 514 | 110,24 |
+
+Övriga klockor i M4/M6 oförändrade i stort (alla över 100 MHz utom M6:s 27 MHz-domän, 123,02 respektive 124,61).
 
 ## M1 — koppla in Moneagle
 

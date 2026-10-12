@@ -34,7 +34,8 @@ module m2_core #(
     output wire [11:0] tx, ty,            // timing position; the video is valid 6 clocks later
     output wire        lines_arriving,    // tvp domain: BT.656 lines are being decoded
     output wire        have_video,        // pix domain: a field buffer is being shown
-    output wire        sdram_ready        // sd domain: SDRAM initialised
+    output wire        sdram_ready,       // sd domain: SDRAM initialised
+    output wire        hz50               // pix domain: 720p50 timing (fb_backend.v)
 );
     // ---- resets, synchronised per domain ----
     reg [2:0] rst_t, rst_s;
@@ -103,6 +104,6 @@ module m2_core #(
         .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
         .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .SDRAM_DQM(SDRAM_DQM),
         .r(r), .g(g), .b(b), .de(de), .hsync(hsync), .vsync(vsync), .yo(yo), .cbo(cbo), .cro(cro), .tx(tx), .ty(ty),
-        .have_video(have_video), .sdram_ready(sdram_ready));
+        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50));
 endmodule
 `default_nettype wire

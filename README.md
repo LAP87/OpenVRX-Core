@@ -10,23 +10,23 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-12, main with VINTERP, from `fc267a8`):** 713 tests, all pass, run with
+**Status (2026-10-12, main with the HDMI option, from `4ad5a68`):** 724 tests, all pass, run with
 `gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 13 min);
 no two tests share a build directory. Nothing has run on hardware: "simulated" and
 "built" below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
-requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `fc267a8` are those
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `4ad5a68` are those
 of main.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `fc267a8` | 0 | reference for the HDMI pairs |
+| M0 | `4ad5a68` | 0 | reference for the HDMI pairs; also with `HDMI=1` |
 | M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `fc267a8` | 0 | also with `VINTERP=1` |
-| M6 | `fc267a8` | 2 | also with `VINTERP=1`; seeds 0-3 built from `94a2b32` |
+| M4 | `4ad5a68` | 0 | also with `HDMI=1`; with `VINTERP=1` from `fc267a8` |
+| M6 | `4ad5a68` | 2 | also with `HDMI=1`; with `VINTERP=1` from `fc267a8`; seeds 0-3 from `94a2b32` |
 
 What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
@@ -43,6 +43,8 @@ What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README
   simulation, with negative controls.
 - Vertical interpolation (two source lines per output line in BUF) is the build option
   `VINTERP=1`, off by default: about 500 LUT4 and 4 BSRAM more in M4 and M6.
+- The output stays DVI by default. `HDMI=1` sends HDMI with an AVI InfoFrame (RGB, full
+  range, VIC 4 or 19), simulated against a decoder; no real sink has seen it.
 
 M6 has a TV/VCR filter field (`FILT`) for both decoders; the 62-byte UART row shows the
 requested mode as `T` or `V`. Which mode holds lock and picture better is not measured.
