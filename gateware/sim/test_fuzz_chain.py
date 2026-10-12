@@ -111,7 +111,7 @@ BLACK = fb.BLACK_WORD
 
 RTL = ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v', 'chan_capture.v', 'mix_chan.v',
        'line_mixer.v', 'snow_stats.v', 'noise_stats.v', 'mixer2.v', 'sdram_burst.v', 'field_phase.v',
-       'fb_sdram.v', 'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')
+       'fb_sdram.v', 'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'vblend.v', 'fb_backend.v')
 
 
 # ---------------------------------------------------------------- running the bench

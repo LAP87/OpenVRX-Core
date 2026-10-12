@@ -6,8 +6,9 @@
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
 #   IOREG=0 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default: 1 for the SDRAM tops)
-# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / an IOREG other
-# than the top's default).
+#   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
+# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / an
+# IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
 # — flash with openFPGALoader -b tangnano20k <file>
 set -euo pipefail
@@ -30,6 +31,13 @@ if [ -n "${SDRAM_PHASE:-}" ]; then
   case "$SDRAM_PHASE" in [0-9]|1[0-5]) ;; *) echo "SDRAM_PHASE must be 0..15" >&2; exit 1 ;; esac
   defs="-DSDRAM_PHASE=$SDRAM_PHASE"
   out_fs="${out_fs%.fs}_phase$SDRAM_PHASE.fs"
+fi
+# optional: vertical interpolation in the field store's display (fb_backend.v VINTERP, default 0)
+vinterp="${VINTERP:-0}"
+case "$vinterp" in 0|1) ;; *) echo "VINTERP must be 0 or 1" >&2; exit 1 ;; esac
+if [ "$vinterp" = 1 ]; then
+  defs="$defs -DVINTERP=1"
+  out_fs="${out_fs%.fs}_vinterp.fs"
 fi
 # I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob), on by default for
 # the tops with SDRAM: the SDRAM read and write timing then does not depend on where the placer puts the
@@ -78,7 +86,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.

@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 GW = HERE.parent
 PROJECT = GW.parent
 RTL = ('cdc_sync.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v', 'genlock_timing.v',
-       'ycbcr2rgb.v', 'fb_display.v')
+       'ycbcr2rgb.v', 'fb_display.v', 'vblend.v')
 HELD, LIVE = '.din(s_ll_pay)', '.din(s_ll_lines)'
 EXPECT = [0, 3]                      # no field before the first; the first field had lines 0-2
 

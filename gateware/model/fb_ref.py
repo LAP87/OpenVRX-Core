@@ -26,6 +26,26 @@ def src_line(j, lines, v_active, low=False):
     return max(0, min(lines - 1, a // (4 * v_active)))
 
 
+def src_lines(j, lines, v_active, low=False):
+    """VINTERP = 1 (fb_display.v): output line j blends source lines (s0, s1) with weight w eighths
+    of s1. The position is the one src_line rounds down: u = ((2j + 1) * 2 * lines - k * v_active) /
+    (4 * v_active), k = 1, or 3 for the lower field. Above the first line (u < 0) w is 0; s1 is
+    s0 + 1, or s0 at the last line; w = round(8 * frac(u)), halves rounded up, 0..8."""
+    a = (2 * j + 1) * 2 * lines - (3 if low else 1) * v_active
+    s0 = src_line(j, lines, v_active, low)
+    s1 = min(s0 + 1, lines - 1)
+    if a < 0:
+        return s0, s1, 0
+    frac = a % (4 * v_active)                    # position within the line, in 1 / (4 * v_active)
+    w = sum(frac >= ((2 * i + 1) * v_active) // 4 for i in range(8))
+    return s0, s1, w
+
+
+def vblend(a, b, w):
+    """rtl/vblend.v: (a * (8 - w) + b * w) // 8 for 8-bit samples a, b and w = 0..8; w = 0 gives a."""
+    return a if w == 0 else (a * (8 - w) + b * w) // 8
+
+
 class FieldPhase:
     """rtl/field_phase.v: which field of an interlaced pair, from arrival times (cycles)."""
 
