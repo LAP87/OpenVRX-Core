@@ -452,7 +452,7 @@ Tiderna räknas från att raden är klar i FPGA:n. Dekoderns egen fördröjning 
 
 Periodisk källförflyttning och fasgränsen provas separat i `sim/test_genlock.py`, inte formellt: senast vid den andra följande nominella triggern ligger bildstart högst en H-linje efter.
 
-Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal/`. Vad som inte är bevisat om klockdomänsövergångarna, och varför, står i [formal/README.md](formal/README.md): bland annat att två synksteg räcker mot metastabilitet, att SDRAM-sidan hinner skriva en rad, lågfördröjningsringen. Radantalet som följer lågfördröjningstriggern kunde ändras på vägen till pixeldomänen när ett fält var mycket kort; det hålls nu av `toggle_tx` (`sim/test_ll_payload.py`).
+Egenskaperna står i modulerna inom `ifdef FORMAL` eller i harneskarna i `formal/`. Vad som inte är bevisat om klockdomänsövergångarna, och varför, står i [formal/README.md](formal/README.md): bland annat att två synksteg räcker mot metastabilitet, att SDRAM-sidan hinner skriva en rad, lågfördröjningsringen. Att `frame_low`/`ll_low` hinner fram före rad 0 och att en radbuffertplats är skriven innan den läses kontrolleras sedan 2026-10-12 i varje körning av `sim/test_fb.py` och `sim/test_fuzz_chain.py` (`sim/margin_checks.vh`, minst en pixelklockas marginal, negativa kontroller med sen skrivare och sena signaler); simulerat, inte bevisat. Hela sviten därefter: 695 test gröna. Radantalet som följer lågfördröjningstriggern kunde ändras på vägen till pixeldomänen när ett fält var mycket kort; det hålls nu av `toggle_tx` (`sim/test_ll_payload.py`).
 
 ## Bygget av M6
 
