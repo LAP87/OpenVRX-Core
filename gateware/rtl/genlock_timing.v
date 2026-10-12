@@ -27,10 +27,11 @@
 // front-porch line repeats until `trig`, and then the frame runs its full sync and back porch.
 // The first active line therefore comes V_SYNC + V_BP lines after the trigger instead of on the
 // next line: 25 lines (0.56 ms) at 720p, and the low-latency ring writer is about 9 source lines
-// further ahead of the display, more than its 16 lines hold (fb_backend.v). A trigger is on time in
+// further ahead of the display; at the bottom of the picture that is more than its 16 lines hold
+// (fb_backend.v), so trying this on a screen needs a larger ring first. A trigger is on time in
 // the V_SYNC + V_BP lines up to the wait line, as many as before vsync otherwise. A cut goes straight
 // to the sync lines and keeps them and the full back porch; no recovery frame is needed. Needs
-// V_FP >= 2. For trying the other placement on a screen (gateware/README.md); not the default.
+// V_FP >= 2. Not the default (gateware/README.md, "Den varierande raden").
 `default_nettype none
 module genlock_timing #(
     parameter H_ACTIVE = 1280, H_FP = 110, H_SYNC = 40, H_BP = 220,
