@@ -5,7 +5,9 @@
 #   PULL=UP gateware/build.sh m3_probe      # weak pull-ups (or DOWN) on the decoder data pins: pull test
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
-# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE).
+#   IOREG=0 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default: 1 for the SDRAM tops)
+# Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / an IOREG other
+# than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
 # — flash with openFPGALoader -b tangnano20k <file>
 set -euo pipefail
@@ -29,8 +31,22 @@ if [ -n "${SDRAM_PHASE:-}" ]; then
   defs="-DSDRAM_PHASE=$SDRAM_PHASE"
   out_fs="${out_fs%.fs}_phase$SDRAM_PHASE.fs"
 fi
-# Place-and-route seed. With some seeds nextpnr cannot put the board clock on the global clock network
-# ("Can't route the clocks.clk_27 net"); a top that has met that keeps a seed that works in boards/<top>.seed.
+# I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob), on by default for
+# the tops with SDRAM: the SDRAM read and write timing then does not depend on where the placer puts the
+# registers, so the memory test on the board (m2a_memtest) speaks for the picture builds. Owner's decision
+# 2026-10-12; README section "I/O-register i I/O-cellerna".
+case " m2_moneagle_color m2s_moneagle_color_sync m2a_memtest m4_dual_mix m6_puck_proto " in
+  *" $top "*) ioreg_default=1 ;;
+  *) ioreg_default=0 ;;
+esac
+ioreg="${IOREG:-$ioreg_default}"
+case "$ioreg" in 0|1) ;; *) echo "IOREG must be 0 or 1" >&2; exit 1 ;; esac
+ioreg_opts=()
+if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob); fi
+if [ "$ioreg" != "$ioreg_default" ]; then out_fs="${out_fs%.fs}_ioreg$ioreg.fs"; fi
+# Place-and-route seed (boards/<top>.seed keeps the one a top was built with). "Can't route the <clock> net"
+# came from BUFG cells competing for global wires (README, "Klockroutningen, 2026-10-12"); another seed is a
+# way out, not a fix.
 seed="${SEED:-}"
 if [ -z "$seed" ] && [ -f "$here/boards/$top.seed" ]; then seed="$(tr -d '[:space:]' < "$here/boards/$top.seed")"; fi
 seed="${seed:-0}"
@@ -62,7 +78,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.
@@ -91,7 +107,7 @@ sdc=()
 if [ -f "$source_here/boards/$top.sdc" ]; then cp "$source_here/boards/$top.sdc" "$prefix.sdc"; sdc=(--sdc "$prefix.sdc"); fi
 "$bin/yowasp-nextpnr-himbaechel-gowin" --json "$prefix.synth.json" --write "$prefix.pnr.json" \
   --device GW2AR-LV18QN88C8/I7 --vopt family=GW2A-18C --vopt cst="$work/$prefix.cst" \
-  --freq "$freq" "${sdc[@]}" --seed "$seed" --log "$prefix.pnr.log" --quiet || {
+  --freq "$freq" "${sdc[@]}" --seed "$seed" "${ioreg_opts[@]}" --log "$prefix.pnr.log" --quiet || {
     grep -E "^ERROR" "$prefix.pnr.log" >&2 || true
     if grep -q "Can't route the .* net" "$prefix.pnr.log"; then echo "clock routing failed with seed $seed: try SEED=<n> $0 $top" >&2; fi
     exit 1

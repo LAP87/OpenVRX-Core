@@ -492,6 +492,25 @@ Alla fyra seeds routade i den historiska körningen med 12 600 LUT och 25 BSRAM.
 `tools/tmds_fuses.py`: alla fyra HDMI-par i M4 (seed 0) och M6 (seed 3) som i M0. På `main` före ändringen (`5314ed1`) routade M6 också med seed 0–3; felet syntes alltså inte på den källan, men risken fanns kvar.
 
 Iakttagelse: med seed 1 och 3 (och seed 3 före ändringen) når `sd_clk_shift`, SDRAM-klockan ut till stiftet, inte stiftet över dedikerad routning och går via vanliga ledningar. Det ger inget fel, men fördröjningen till SDRAM-klockstiftet beror då på placeringen; det är vad minnestestet `m2a_memtest` mäter på kortet.
+
+## I/O-register i I/O-cellerna
+
+Sedan 2026-10-12 (ägarens beslut, navets `docs/BESLUT_2026-10-12.md` punkt 2) bygger `build.sh` M2, M2s, M2a, M4 och M6 med `--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob`: nextpnr lägger in- och utregistren i I/O-cellerna, så SDRAM-gränssnittets timing beror inte på var placeraren lägger dem, och minnestestet på kortet gäller också bildbyggena. M0, M1, M1s och M3 byggs som förut. `IOREG=0` eller `IOREG=1` väljer annat än toppens standard; ett sådant bygge får suffixet `_ioreg0`/`_ioreg1` och ersätter inte det vanliga. Manifestet bokför valet (`options.ioreg`). Ingen RTL är ändrad.
+
+**Byggt, inte uppmätt.** Ur Core `dc307bc`, alla klockor krav 75 MHz, siffror efter routning, inga `ERROR` i loggarna, manifesten verifierade mot källorna:
+
+| Topp | Seed | LUT4 | DFF | BSRAM | Register i I/O-cell (in + ut) | Maxfrekvens efter routning (MHz) |
+|---|---:|---:|---:|---:|---|---|
+| `m2_moneagle_color` | 0 | 3 466 | 1 965 | 17 | 40 + 16 | `sd_clk` 120,28; `clk_pixel` 107,02; `clocks.clk_27` 439,37; `core.tvp_clk` 221,04 |
+| `m2s_moneagle_color_sync` | 0 | 3 677 | 2 057 | 17 | 42 + 16 | `sd_clk` 115,69; `clk_pixel` 115,57; `clocks.clk_27` 453,31; `core.tvp_clk` 204,58 |
+| `m2a_memtest` | 0 | 2 393 | 886 | 0 | 33 + 17 | `sd_clk` 92,68 |
+| `m4_dual_mix` | 0 | 8 302 | 4 512 | 25 | 49 + 20 | `mix.b_clk` 260,76; `mix.a_clk` 228,21; `clocks.clk_27` 211,64; `sd_clk` 104,18; `clk_pixel` 116,54 |
+| `m6_puck_proto` | 2 | 12 804 | 6 198 | 25 | 51 + 21 | `mix.b_clk` 199,68; `mix.a_clk` 284,50; `clocks.clk_27` 124,84; `sd_clk` 118,98; `clk_pixel` 123,93 |
+| `m0_testpattern` | 0 | 794 | 173 | 0 | 0 | `clocks.clk_27` 359,84; `clk_pixel` 149,37 (referens, utan flaggan) |
+
+Registren i I/O-cellerna är räknade som `IOLOGICI`/`IOLOGICO` i `.pnr.json`, samma antal som i experimentet 2026-10-06. LUT4 är oförändrat mot byggena utan flaggan (M4 8 302, M6 12 804 i avsnittet ovan). `tools/tmds_fuses.py`: alla fyra HDMI-par i M2, M2s, M4 och M6 som i M0. Hela sviten på samma källa: 664 test gröna, ingen delad byggkatalog (`tools/run_suite.py`).
+
+Vad som inte hamnar i cellerna (utrett i experimentet på M2a): skrivdata och utgångsaktivering för de 32 DQ-stiften, DQM, `cs_n`, `cke` och SDRAM-klockan. Yosys slår ihop de 32 utgångsaktiveringsregistren till ett, och ett register som driver 32 stift kan inte ligga i en cell; varför `dq_out` inte läggs där är inte utrett. Läsningen, där fönstret är 11,9 ns, är den del som flyttas: alla 32 DQ-ingångsregister ligger i cellerna. nextpnrs Fmax räknar bara register till register; fördröjningen mot stiften är inte begränsad, så tabellen visar inte om SDRAM-tiderna blev bättre. Det avgör minnestestet på kortet.
 - **Klockkrav.** `boards/m6_puck_proto.sdc` saknas i C1, så `clocks.clk_27` har samma 75 MHz-krav som övriga klockor. C1 seed 3 klarar det efter routning; seed 2 saknar färdig routing och därmed saknas slutligt timingresultat. `build.sh` läser fortfarande en `boards/<top>.sdc` om en sådan finns. C2:s senare seed-2-krav återstår separat.
 
 ## Verifiering 2026-10-08

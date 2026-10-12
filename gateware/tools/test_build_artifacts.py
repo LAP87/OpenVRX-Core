@@ -38,6 +38,7 @@ if stage == 'yowasp-yosys':
     Path(re.search(r'-json ([^;\s]+)', command)[1]).write_text(json.dumps({'compiled_source': compiled}))
     Path(re.search(r'tee -o (\S+)', command)[1]).write_text('new statistics\n')
 elif stage == 'yowasp-nextpnr-himbaechel-gowin':
+    (root / 'gateware/build/nextpnr.args').write_text(' '.join(sys.argv[1:]) + ' ')
     log = "Info: Max frequency for clock 'clk': 120.00 MHz (PASS at 75.00 MHz)\nRouting...\n"
     log += "Info: Max frequency for clock 'clk': 90.00 MHz (PASS at 75.00 MHz)\n"
     if failure == 'routing': log += 'ERROR: routing failed\n'
@@ -68,6 +69,7 @@ def project(tmp_path):
     (root / 'gateware/rtl/fixture.v').write_text('module fixture; endmodule\n')
     (root / 'gateware/rtl/fixture.vh').write_text('// included source\n')
     (root / 'gateware/top/demo.v').write_text('module demo; endmodule\n')
+    (root / 'gateware/top/m4_dual_mix.v').write_text('module m4_dual_mix; endmodule\n')
     (root / 'gateware/boards/tangnano20k.cst').write_text('IO_LOC "clk" 4;\n')
     (root / 'gateware/boards/demo.seed').write_text('2\n')
     (root / '.venv/bin/python').symlink_to(sys.executable)
@@ -83,7 +85,7 @@ def project(tmp_path):
 
 
 def build(project, failure='', top='demo', **settings):
-    env = {k: v for k, v in os.environ.items() if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ')}
+    env = {k: v for k, v in os.environ.items() if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ', 'IOREG')}
     env.update(settings, BUILD_TEST_FAILURE=failure)
     return subprocess.run(['bash', str(project / 'gateware/build.sh'), top],
                           cwd=project, env=env, capture_output=True, text=True, timeout=20)
@@ -178,10 +180,32 @@ def test_variant_outputs_and_manifests_do_not_replace_the_normal_build(project, 
 
 @pytest.mark.parametrize('top,settings', [('missing', {}), ('../demo', {}), ('demo', {'PULL': 'SIDEWAYS'}),
                                          ('demo', {'SDRAM_PHASE': '16'}), ('demo', {'SEED': 'two'}),
-                                         ('demo', {'FREQ_MHZ': '0'})])
+                                         ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'})])
 def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(project, top, settings):
     r = build(project, top=top, **settings)
     assert r.returncode != 0
     out = project / 'gateware/build'
     assert (out / 'demo.fs').read_bytes() == b'old successful bitstream'
     assert not (out / 'calls.log').exists()
+
+
+IOB_OPTS = '--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob '
+
+
+@pytest.mark.parametrize('top,settings,suffix,iob', [
+    ('m4_dual_mix', {}, '', True),                       # an SDRAM top: on by default
+    ('demo', {}, '', False),                             # any other top: off by default
+    ('m4_dual_mix', {'IOREG': '0'}, '_ioreg0', False),   # against the default: a variant beside the normal build
+    ('demo', {'IOREG': '1'}, '_ioreg1', True),
+    ('m4_dual_mix', {'IOREG': '1'}, '', True)])          # the default, asked for explicitly
+def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings, suffix, iob):
+    r = build(project, top=top, **settings)
+    assert r.returncode == 0, r.stdout + r.stderr
+    args = (project / 'gateware/build/nextpnr.args').read_text()
+    assert (IOB_OPTS in args) == iob and args.count('_in_iob') == (3 if iob else 0), args
+    out = project / 'gateware/build'
+    record = json.loads((out / f'{top}{suffix}.build.json').read_text())
+    assert record['options']['ioreg'] == ('1' if iob else '0')
+    assert (out / f'{top}{suffix}.fs').read_bytes() == b'new packed bitstream'
+    assert (out / 'demo.fs').read_bytes() == (b'new packed bitstream' if top == 'demo' and not suffix
+                                              else b'old successful bitstream')
