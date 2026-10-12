@@ -20,6 +20,17 @@
 //   the phase. Both keep the last line used to prepare the display's line 0.
 //   All other frames have at least V_TOTAL - 1 lines.
 // h_alt selects the H_FP_ALT front porch (720p50) and is taken at frame start.
+//
+// WAIT_BEFORE_VSYNC = 1 (default 0) moves the varying line before vsync, so that the distance
+// from vsync to the first active line is the same in every frame (V_SYNC + V_BP lines): the
+// natural frame skips the first front-porch line instead of the first back-porch line, the last
+// front-porch line repeats until `trig`, and then the frame runs its full sync and back porch.
+// The first active line therefore comes V_SYNC + V_BP lines after the trigger instead of on the
+// next line: 25 lines (0.56 ms) at 720p, and the low-latency ring writer is about 9 source lines
+// further ahead of the display, more than its 16 lines hold (fb_backend.v). A trigger is on time in
+// the V_SYNC + V_BP lines up to the wait line, as many as before vsync otherwise. A cut goes straight
+// to the sync lines and keeps them and the full back porch; no recovery frame is needed. Needs
+// V_FP >= 2. For trying the other placement on a screen (gateware/README.md); not the default.
 `default_nettype none
 module genlock_timing #(
     parameter H_ACTIVE = 1280, H_FP = 110, H_SYNC = 40, H_BP = 220,
@@ -28,7 +39,8 @@ module genlock_timing #(
     parameter H_POL = 1, V_POL = 1,
     parameter MAX_WAIT = 8,
     parameter JUMP_AFTER = 3,                                       // 1 .. 7
-    parameter HOLD = 32                                             // 0 .. 63 frames
+    parameter HOLD = 32,                                            // 0 .. 63 frames
+    parameter WAIT_BEFORE_VSYNC = 0                                 // 1: wait on the last front-porch line
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -57,10 +69,16 @@ module genlock_timing #(
     reg [3:0]  wait_n;
     reg [2:0]  early_n;            // early triggers in a row (saturates at JUMP_AFTER - 1)
     reg [5:0]  hold;               // frames until the next short frame is allowed
-    wire       on_time = vc >= V_SYNC_START;
+    reg        rel_trig;           // WAIT_BEFORE_VSYNC: this frame's wait was ended by a trigger
+    wire       rel = vc >= V_SYNC_START;   // WAIT_BEFORE_VSYNC: the wait is over, sync and back porch run
+    // a trigger is on time in the V_SYNC + V_BP lines before the frame can end: the vertical blanking
+    // (WAIT_BEFORE_VSYNC = 0), or the lines up to the wait line before vsync (= 1)
+    wire       on_time = (WAIT_BEFORE_VSYNC != 0) ? (!rel && vc + (V_SYNC + V_BP) >= V_SYNC_START)
+                                                  : (vc >= V_SYNC_START);
     wire       line_end = (hc == h_last);
     wire       recover_jump = recover && vc >= V_SYNC_END && vc < V_TOTAL - 1 && (pend || trig);
     wire       frame_end = line_end && lock && !jump && vc == V_TOTAL - 1 && (pend || trig || wait_n == MAX_WAIT);
+    wire       frame_end_b = line_end && lock && vc == V_TOTAL - 1;          // WAIT_BEFORE_VSYNC: fixed end
 
     always @(posedge clk) begin
         if (trig && lock) begin
@@ -72,14 +90,32 @@ module genlock_timing #(
         if (rst) begin
             hc <= 0; vc <= 0; alt <= 1'b0; pend <= 1'b0; jump <= 1'b0; wait_n <= 0; early_n <= 0; hold <= 0;
             cut <= 1'b0; recover <= 1'b0;
-            triggered <= 1'b0;
+            triggered <= 1'b0; rel_trig <= 1'b0;
         end else if (line_end) begin
             hc <= 0;
             if (!lock) begin
                 vc <= (vc == V_TOTAL - 1) ? 12'd0 : vc + 12'd1;
                 pend <= 1'b0; jump <= 1'b0; wait_n <= 0; early_n <= 0;
-                cut <= 1'b0; recover <= 1'b0;
+                cut <= 1'b0; recover <= 1'b0; rel_trig <= 1'b0;
                 if (vc == V_TOTAL - 1) triggered <= 1'b0;
+            end else if (WAIT_BEFORE_VSYNC != 0) begin
+                if (frame_end_b) begin                           // end of the fixed back porch: next frame
+                    vc <= 0; wait_n <= 0; triggered <= rel_trig; rel_trig <= 1'b0; cut <= 1'b0; jump <= 1'b0;
+                    if (hold != 0 && !jump) hold <= hold - 1'b1;  // a jump taken here starts its hold now
+                end else if (jump && !rel) begin                 // cut: straight to the sync lines
+                    vc <= V_SYNC_START; jump <= 1'b0; pend <= 1'b0; wait_n <= 0;
+                    cut <= 1'b1; rel_trig <= 1'b1;
+                end else if (!rel && vc == V_SYNC_START - 1) begin   // the wait line, before vsync
+                    if (pend || trig || wait_n == MAX_WAIT) begin
+                        vc <= V_SYNC_START; rel_trig <= pend || trig; pend <= 1'b0; wait_n <= 0;
+                    end else
+                        wait_n <= wait_n + 1'b1;                 // repeat the last front-porch line
+                end else if (vc == V_ACTIVE - 1)
+                    vc <= V_ACTIVE + 1;                          // natural frame: skip the first front-porch line
+                else begin
+                    vc <= vc + 12'd1;
+                    if (rel) jump <= 1'b0;                       // a jump while sync runs: its pend starts the next frame
+                end
             end else if (frame_end) begin
                 vc <= 0; pend <= 1'b0; wait_n <= 0; triggered <= pend || trig;
                 recover <= cut; cut <= 1'b0;
@@ -125,10 +161,13 @@ module genlock_timing #(
     reg        f_recover;                                 // the immediately preceding frame was cut
     reg [11:0] f_sync_lines;
     reg [5:0]  f_left;                                    // frame starts still to come before the next cut
-    wire       f_wrap = line_end && !rst && (lock ? frame_end : vc == V_TOTAL - 1);
+    wire       f_wrap = line_end && !rst && (lock ? (WAIT_BEFORE_VSYNC != 0 ? frame_end_b : frame_end) : vc == V_TOTAL - 1);
+    reg [11:0] f_bp_lines;                                // back-porch lines finished in this frame
     always @(posedge clk)
-        if (rst) begin f_lines <= 0; f_cut <= 1'b0; f_recover <= 1'b0; f_left <= 0; f_sync_lines <= 0; end
+        if (rst) begin f_lines <= 0; f_cut <= 1'b0; f_recover <= 1'b0; f_left <= 0; f_sync_lines <= 0; f_bp_lines <= 0; end
         else begin
+            if (hc == 0 && vc == 0) f_bp_lines <= 0;
+            else if (line_end && vc >= V_SYNC_END && f_bp_lines != 12'hFFF) f_bp_lines <= f_bp_lines + 1'b1;
             if (hc == 0 && vc == 0) begin f_lines <= 0; f_sync_lines <= 0; end
             else if (line_end && f_lines != 12'hFFF) f_lines <= f_lines + 1'b1;
             if (line_end && vc >= V_SYNC_START && vc < V_SYNC_END) f_sync_lines <= f_sync_lines + 1'b1;
@@ -146,8 +185,12 @@ module genlock_timing #(
         assert (f_lines <= V_TOTAL + MAX_WAIT);
         // induction strengthening: waiting only happens on the last line, and the
         // frame so far is no longer than the lines counted plus the repeats
-        if (wait_n != 0) assert (vc == V_TOTAL - 1);
-        if (!(hc == 0 && vc == 0)) assert (f_lines <= vc + wait_n);
+        if (wait_n != 0) assert (vc == (WAIT_BEFORE_VSYNC != 0 ? V_SYNC_START - 1 : V_TOTAL - 1));
+        // (with WAIT_BEFORE_VSYNC the frame goes on after its wait: at most MAX_WAIT lines more than vc then)
+        if (!(hc == 0 && vc == 0)) begin
+            if (WAIT_BEFORE_VSYNC == 0 || vc < V_SYNC_START) assert (f_lines <= vc + wait_n);
+            else assert (f_lines <= vc + MAX_WAIT);
+        end
         assert (early_n < JUMP_AFTER);
         assert (hold <= HOLD);
         assert (f_left <= hold);
@@ -162,6 +205,12 @@ module genlock_timing #(
             else assert (f_sync_lines == V_SYNC);
         end
         if (f_wrap) assert (f_sync_lines == V_SYNC);
+        if (WAIT_BEFORE_VSYNC != 0) begin
+            // the point of this placement: every frame ends with its full back porch after the sync
+            if (f_wrap && lock) assert (f_bp_lines + 1 == V_BP);
+            assert (!recover);                                                  // nothing recovers
+            if (!(hc == 0 && vc == 0) && vc >= V_SYNC_END) assert (f_bp_lines == vc - V_SYNC_END);
+        end
     end
 `endif
 endmodule

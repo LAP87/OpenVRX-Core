@@ -518,34 +518,63 @@ def check_frame_vsync(pix, label):
 # Low-latency runs use a frame of 48 lines with 10 lines of back porch: the timing generator
 # takes a trigger anywhere in the vertical blanking, and 720p has 25 lines of that.
 LL_V = dict(V_TOTAL=48)
+# WAIT_BEFORE_VSYNC = 1 (genlock_timing.v): the varying line before vsync; it needs two front-porch lines
+LL_VB = {0: LL_V, 1: dict(V_TOTAL=48, V_FP=2, WAIT_BEFORE_VSYNC=1)}
+
+
+def ll_name(name, vb):
+    return name if vb == 0 else f'{name}_vb'
+
+
+def vsync_to_picture(name):
+    """Lines from each vsync start to the next frame's first active line (pix.txt of a run)."""
+    ev = [ln.split() for ln in (HERE / 'build' / name / 'pix.txt').read_text().splitlines() if ln]
+    out, vs = [], None
+    for e in ev:
+        if e[0] == 'S':
+            vs = int(e[1])
+        elif e[0] == 'V' and vs is not None:
+            out.append(round((int(e[1]) - vs) / H_TOTAL))
+            vs = None
+    return out
 P_LL = 48 * OUT_LINE * 1.001 / 13.5         # 13.5 source lines per field: 3.56 output lines per source line
 
 
-def test_low_latency_frames_are_equally_long():
+@pytest.mark.parametrize('vb', [0, 1])
+def test_low_latency_frames_are_equally_long(vb):
     """Low-latency mode with an interlaced source: the fields arrive 13 and 14 line periods
     apart in turn. The frame start of the early field is delayed by half a line period and
     the late field is drawn half a source line lower; the output frames then differ by at
     most one line. Negative control (LL_EQ = 0): they alternate between 47 and 50 lines."""
     src = source(14, period=P_LL, lines=9, vbi=4, interlaced=True)
-    trig, frames, _ = ll_run('tb_fb_ll', src, **LL_V)
+    trig, frames, _ = ll_run(ll_name('tb_fb_ll', vb), src, **LL_VB[vb])
     # trigger k is field k + 1: field 0, which the ring writer joined, fires none; the odd fields are the late, lower ones
     assert [low for _, low in trig[3:]] == [(k + 1) % 2 == 1 for k in range(3, len(trig))], 'every other field is the lower one'
     locked = ll_picture(frames, 4, 13)
     assert [f['low'] for f in locked[:4]] == [1, 0, 1, 0]
     # after the start the output is a few lines behind and catches up with frames of 47 lines
     assert set(lengths(locked)) <= {47, 48, 49} and set(lengths(locked)[-5:]) <= {48, 49}, lengths(locked)
-    trig0, frames0, _ = ll_run('tb_fb_ll0', src, LL_EQ=0, **LL_V)
+    # the placement of the varying line: with WAIT_BEFORE_VSYNC the distance from vsync to the picture
+    # is V_SYNC + V_BP lines in every locked frame; without it the frames' extra lines change it
+    # (frames 4 .. 12 are locked; mode 0 measured 10, 10, 11, 12, 11, ...)
+    lead = vsync_to_picture(ll_name('tb_fb_ll', vb))[4:13]
+    if vb:
+        assert set(lead) == {LL_VB[1]['V_TOTAL'] - V_ACTIVE - LL_VB[1]['V_FP']}, lead
+    else:
+        assert len(set(lead)) > 1, lead
+    trig0, frames0, _ = ll_run(ll_name('tb_fb_ll0', vb), src, LL_EQ=0, **LL_VB[vb])
     lens0 = lengths(ll_picture(frames0, 4, 13))[-5:]
     assert max(lens0) - min(lens0) >= 2, lens0
 
 
-def test_low_latency_field_without_its_reference_line():
+@pytest.mark.parametrize('vb', [0, 1])
+def test_low_latency_field_without_its_reference_line(vb):
     """Line 1 of one field is missing: its frame starts a line late (after line 2) and there
     is no arrival time to measure. The field keeps the phase the alternation predicts, the
     output catches up with frames one line short of nominal, never shorter, and the fields
     before and after it are shown intact."""
     src = source(14, period=P_LL, lines=9, vbi=4, interlaced=True, drop={(7, 1)})
-    trig, frames, _ = ll_run('tb_fb_ll_noref', src, **LL_V)
+    trig, frames, _ = ll_run(ll_name('tb_fb_ll_noref', vb), src, **LL_VB[vb])
     assert [low for _, low in trig[3:]] == [(k + 1) % 2 == 1 for k in range(3, len(trig))]   # trigger k is field k + 1
     before = ll_picture(frames, 5, 7)
     ll_picture(frames, 9, 13)
@@ -554,7 +583,8 @@ def test_low_latency_field_without_its_reference_line():
     assert max(lens) in (51, 52) and min(lens) == 47 and lens[-1] in (48, 49), lens
 
 
-def test_low_latency_false_field_start_does_not_cut_the_frame():
+@pytest.mark.parametrize('vb', [0, 1])
+def test_low_latency_false_field_start_does_not_cut_the_frame(vb):
     """The line numbers restart in the middle of field 7 (as when the mixer changes to a
     receiver that is out of step): a frame trigger in the middle of the output frame. It is
     ignored; no frame is shorter than 47 lines and the fields after it are shown intact.
@@ -564,15 +594,16 @@ def test_low_latency_false_field_start_does_not_cut_the_frame():
     32 frames; that cut frame has no video and is not in the lengths."""
     src = [(t, f, n if (tag != 8 or n < 5) else n - 5, tag)
            for t, f, n, tag in source(14, period=P_LL, lines=9, vbi=4, interlaced=True)]
-    trig, frames, lens = ll_run('tb_fb_ll_false', src, **LL_V)
+    trig, frames, lens = ll_run(ll_name('tb_fb_ll_false', vb), src, **LL_VB[vb])
     ll_picture(frames, 5, 7)
     ll_picture(frames, 9, 13)
     assert min(lens) >= 47, lens
-    trig1, frames1, lens1 = ll_run('tb_fb_ll_false1', src, JUMP_AFTER=1, HOLD=0, **LL_V)
+    trig1, frames1, lens1 = ll_run(ll_name('tb_fb_ll_false1', vb), src, JUMP_AFTER=1, HOLD=0, **LL_VB[vb])
     assert min(lens1) < 40, lens1
 
 
-def test_low_latency_source_moves():
+@pytest.mark.parametrize('vb', [0, 1])
+def test_low_latency_source_moves(vb):
     """From field 7 on every field comes 0.4 field periods later (another camera, a receiver
     that locked elsewhere). The first early triggers are ignored; after the third the output
     realigns with a clipped frame and its directly following short recovery frame. The recovery
@@ -583,14 +614,14 @@ def test_low_latency_source_moves():
     field = 13.5 * P_LL
     src = [(t + (round(0.4 * field) if tag >= 8 else 0), f, n, tag)
            for t, f, n, tag in source(16, period=P_LL, lines=9, vbi=4, interlaced=True)]
-    trig, frames, lens = ll_run('tb_fb_ll_move', src, **LL_V)
+    trig, frames, lens = ll_run(ll_name('tb_fb_ll_move', vb), src, **LL_VB[vb])
     ll_picture(frames, 5, 7)
     ll_picture(frames, 12, 15)
     gaps = [n for n in lens if n > 47 + 8]
     short = [i for i, n in enumerate(lens) if n < 47]
     assert len(short) <= 2 and (len(short) < 2 or short[1] == short[0] + 1), lens
     if len(short) == 2:
-        assert lens[short[1]] >= V_ACTIVE + V_FP + V_SYNC + 1, lens
+        assert lens[short[1]] >= V_ACTIVE + LL_VB[vb].get('V_FP', V_FP) + V_SYNC + 1, lens
     assert len(gaps) <= 1 and all(n <= 4 * (47 + 8) for n in gaps), lens
 
 

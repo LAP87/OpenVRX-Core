@@ -16,5 +16,5 @@ def test_formal_proofs():
     r = subprocess.run([str(GW / 'formal' / 'run.sh')], capture_output=True, text=True)
     lines = r.stdout.splitlines()
     assert r.returncode == 0, r.stdout + r.stderr
-    assert sum(l.startswith('PROVEN') for l in lines) == 7, lines
-    assert sum(l.startswith('CONTROL OK') for l in lines) == 14, lines
+    assert sum(l.startswith('PROVEN') for l in lines) == 8, lines
+    assert sum(l.startswith('CONTROL OK') for l in lines) == 16, lines
