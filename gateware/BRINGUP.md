@@ -1,6 +1,6 @@
 # Uppstart på bänken: Tang Nano 20K + två TVP5150-moduler + två RX5808
 
-Ordningen är M0 → M3 → M4 → M6. Varje steg bevisar en sak innan nästa läggs på. Allt nedan gäller stiftplanen i `boards/m4_dual_mix.cst` (samma i M3 och M6).
+Ordningen är M0 → M3 → M2a → M4 → M6; M2a kan också tas direkt efter M0 (avsnitt 2.1). Varje steg bevisar en sak innan nästa läggs på. Allt nedan gäller stiftplanen i `boards/m4_dual_mix.cst` (samma i M3 och M6).
 
 ## 0. Innan något kopplas in
 
@@ -71,6 +71,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 |---|---|---|---|
 | M0 | `m0_testpattern` | bara Tang + HDMI | testbilden syns på skärmen |
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
+| M2a | `m2a_memtest` | bara Tang + USB | en ren läspunkt `rs=5` (avsnitt 2.1) |
 | M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
 | M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet `FILT` växlar TV/VCR, mätloggen kommer över USB (2.2) |
 
@@ -205,6 +206,6 @@ gateware/build.sh m0_testpattern && gateware/build.sh m4_dual_mix && gateware/bu
 .venv/bin/python gateware/tools/tmds_fuses.py
 ```
 
-I byggena från 2026-10-05 har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0. Klockparet har 18 satta; med RESETB på stift 25 var det 16 i M4 och M6. Om en skärm bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
+I alla byggen sedan 2026-10-05, senast ur `0da655d` (2026-10-12, även M2 och M2s), har alla fyra HDMI-par i M4 och M6 samma IOB-fuses som i M0. Klockparet har 18 satta; med RESETB på stift 25 var det 16 i M4 och M6. Om en skärm bryr sig om skillnaden är inte provat. Regeln gör att en fungerande M0 säger något om HDMI-utgången i M4 och M6.
 
 Om bit 0 eller 5 på dekoder B visar sig störd (BL616): byt den signalen mot stift 71 och flytta SPI-klockan till lysdiodsstift 17 (J6-15; lysdiod 2 försvinner då). Ändringen görs i `boards/*.cst` och `top/*.v`.
