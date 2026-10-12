@@ -18,7 +18,7 @@ import ll_ring_ref as ring  # noqa: E402
 
 RTL = (
     'async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
-    'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v',
+    'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'vblend.v', 'fb_backend.v',
 )
 
 

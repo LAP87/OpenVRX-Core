@@ -26,6 +26,7 @@ with (root / 'gateware/build/calls.log').open('a') as f:
 failure = os.environ.get('BUILD_TEST_FAILURE', '')
 def arg(name): return sys.argv[sys.argv.index(name) + 1]
 if stage == 'yowasp-yosys':
+    (root / 'gateware/build/yosys.cmd').write_text(arg('-p'))
     Path(arg('-l')).write_text('new synthesis log\n')
     if failure == 'synthesis': sys.exit(2)
     command = arg('-p')
@@ -85,7 +86,7 @@ def project(tmp_path):
 
 
 def build(project, failure='', top='demo', **settings):
-    env = {k: v for k, v in os.environ.items() if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ', 'IOREG')}
+    env = {k: v for k, v in os.environ.items() if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ', 'IOREG', 'VINTERP')}
     env.update(settings, BUILD_TEST_FAILURE=failure)
     return subprocess.run(['bash', str(project / 'gateware/build.sh'), top],
                           cwd=project, env=env, capture_output=True, text=True, timeout=20)
@@ -180,7 +181,8 @@ def test_variant_outputs_and_manifests_do_not_replace_the_normal_build(project, 
 
 @pytest.mark.parametrize('top,settings', [('missing', {}), ('../demo', {}), ('demo', {'PULL': 'SIDEWAYS'}),
                                          ('demo', {'SDRAM_PHASE': '16'}), ('demo', {'SEED': 'two'}),
-                                         ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'})])
+                                         ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'}),
+                                         ('demo', {'VINTERP': 'yes'})])
 def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(project, top, settings):
     r = build(project, top=top, **settings)
     assert r.returncode != 0
@@ -209,3 +211,17 @@ def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings
     assert (out / f'{top}{suffix}.fs').read_bytes() == b'new packed bitstream'
     assert (out / 'demo.fs').read_bytes() == (b'new packed bitstream' if top == 'demo' and not suffix
                                               else b'old successful bitstream')
+
+
+@pytest.mark.parametrize('settings, suffix, define', [({}, '', False), ({'VINTERP': '0'}, '', False),
+                                                      ({'VINTERP': '1'}, '_vinterp', True)])
+def test_vinterp_is_a_define_and_a_variant(project, settings, suffix, define):
+    r = build(project, **settings)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ('-DVINTERP=1' in (project / 'gateware/build/yosys.cmd').read_text()) == define
+    out = project / 'gateware/build'
+    record = json.loads((out / f'demo{suffix}.build.json').read_text())
+    assert record['options']['vinterp'] == ('1' if define else '0')
+    assert (out / f'demo{suffix}.fs').read_bytes() == b'new packed bitstream'
+    if suffix:
+        assert (out / 'demo.fs').read_bytes() == b'old successful bitstream'

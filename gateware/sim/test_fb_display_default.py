@@ -26,7 +26,7 @@ def display_trace(tmp_path, v_active, display_source=None):
     if not compiler or not runtime:
         pytest.skip('Icarus Verilog is not installed')
 
-    sources = [GW / 'rtl' / 'cdc_sync.v', GW / 'rtl' / 'ycbcr2rgb.v']
+    sources = [GW / 'rtl' / 'cdc_sync.v', GW / 'rtl' / 'ycbcr2rgb.v', GW / 'rtl' / 'vblend.v']
     display = display_source or GW / 'rtl' / 'fb_display.v'
     bench = HERE / 'tb_fb_display_default.v'
     subprocess.run([

@@ -70,7 +70,7 @@ prove cdc_level level_props 40 "" "$cdc" "$here/level_props.v" || status=1
 FLOW="chformal -lower;" prove cdc_toggle_tx toggle_tx_props 40 "" "$cdc" "$here/toggle_tx_props.v" || status=1
 # line buffer slots: genlock_timing's own (separately proven) assertions are assumptions here
 lb_flow="chformal -lower; chformal -assert -assert2assume a:src=*genlock_timing.v*;"
-lb_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/linebuf_props.v")
+lb_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/../rtl/vblend.v" "$here/linebuf_props.v")
 FLOW="$lb_flow" prove fb_linebuf_slots linebuf_props 20 "" "${lb_src[@]}" "$here/../rtl/fb_display.v" || status=1
 # negative controls, without the induction strengthening so that the counterexample comes from the
 # property itself: the toggle edge taken straight from the other domain (no synchroniser stage) delivers

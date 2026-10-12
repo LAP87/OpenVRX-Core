@@ -78,7 +78,7 @@ def run_sim(name, src, alter=None, margins=True, **params):
     p = dict(N_LINES=len(src), V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC, **RT)
     p.update(params)
     rtl = [GW / 'rtl' / n for n in ('async_fifo.v', 'sdram_burst.v', 'field_phase.v', 'fb_sdram.v', 'dual_clock_ram.v',
-                                    'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'fb_backend.v')]
+                                    'genlock_timing.v', 'ycbcr2rgb.v', 'cdc_sync.v', 'fb_display.v', 'vblend.v', 'fb_backend.v')]
     for fname, pairs in (alter or {}).items():
         text = (GW / 'rtl' / fname).read_text()
         for old, new in ([pairs] if isinstance(pairs[0], str) else pairs):
@@ -888,6 +888,119 @@ def test_margin_checks_catch_late_arrival(case):
             run_sim('tb_fb_margin_late_fl', IL_SRC, alter={'fb_display.v': late_sync('fl', 2048)}, RT_EN=0)
         else:
             run_sim('tb_fb_margin_late_lw', LL_SRC, alter={'fb_display.v': late_sync('lw', 256)}, LL=1, **LL_V)
+
+
+def vinterp_frames(name):
+    """pix.txt of a run with VINTERP or LOGPX: per complete output frame, besides pix_frames' fields,
+    b={y: (second line, weight)}, shown_b={y: port B word 52 fields}, words={y: (word A, word B) for
+    window pixel 136}, out={y: (Y, Cb, Cr) put out for that pixel}."""
+    def word(x):
+        try:
+            return int(x, 16)
+        except ValueError:
+            return None
+
+    def num(x):
+        return int(x) if x.isdigit() else -1       # X/Z as printed by the simulator
+    frames = []
+    for r in [ln.split() for ln in (HERE / 'build' / name / 'pix.txt').read_text().splitlines() if ln]:
+        if r[0] == 'V':
+            frames.append(dict(pc=int(r[1]), lines=int(r[2]), video=int(r[3]), low=None, src={}, b={},
+                               shown={}, shown_b={}, words={}, out={}))
+        elif not frames:
+            continue
+        elif r[0] == 'B':
+            frames[-1]['low'] = int(r[1])
+        elif r[0] == 'Y':
+            frames[-1]['src'][int(r[1])] = int(r[2])
+        elif r[0] == 'I':
+            frames[-1]['b'][int(r[1])] = (num(r[2]), num(r[3]))
+        elif r[0] in ('X', 'X2'):
+            frames[-1]['shown' if r[0] == 'X' else 'shown_b'][int(r[1])] = tuple(num(v) for v in r[2:])
+        elif r[0] == 'W':
+            frames[-1]['words'][int(r[1])] = (word(r[2]), word(r[3]))
+        elif r[0] == 'O':
+            frames[-1]['out'][int(r[1])] = tuple(num(v) for v in r[2:])
+    return [f for f in frames if len(f['src']) == V_ACTIVE]
+
+
+def ycc(word, even=True):
+    """(Y, Cb, Cr) of a line-buffer word {Y1, Cr, Y0, Cb} for an even or odd source pixel."""
+    return (word >> 8 & 255) if even else (word >> 24), word & 255, word >> 16 & 255
+
+
+def check_vinterp(name, frames):
+    """Every output line of every frame with video: second line and weight as fb_ref.src_lines, port B
+    holds word 52 of what the store read for the second line, the words of window pixel 136 are
+    word 51 of both lines, and the YCbCr put out is their blend. Returns (lines checked, weights
+    seen, lines where the two words differ)."""
+    by_time = {round(fr.cyc * T_S / T_P): fr for fr in frames}
+    checked, weights, differ = 0, set(), 0
+    for pf in vinterp_frames(name):
+        if not pf['video']:
+            continue
+        fr = [f for pc, f in by_time.items() if abs(pc - (pf['pc'] - H_TOTAL)) < 40][0]
+        for y in range(V_ACTIVE):
+            s0, s1, w = fb.src_lines(y, pf['lines'], V_ACTIVE, pf['low'])
+            assert pf['src'][y] == s0, f'output line {y}: first line {pf["src"][y]}, model {s0}'
+            assert pf['b'][y] == (s1, w), f'output line {y}: second line and weight {pf["b"][y]}, model {(s1, w)}'
+            assert s1 in fr.want, f'line {s1} was never asked for'
+            got_a, got_b = fr.got[fr.want.index(s0)], fr.got[fr.want.index(s1)]
+            want_b = BLACK_FIELDS if got_b == 'blank' else (*got_b, 52)
+            assert pf['shown_b'][y] == want_b, f'output line {y}: port B shows {pf["shown_b"][y]}, the store read {got_b}'
+            wa, wb = pf['words'][y]
+            for got, wd in ((got_a, wa), (got_b, wb)):
+                assert wd == (fb.BLACK_WORD if got == 'blank' else got[0] << 19 | got[1] << 9 | 51), (y, got, wd)
+            want = tuple(fb.vblend(a, b, w) for a, b in zip(ycc(wa), ycc(wb)))
+            assert pf['out'][y] == want, f'output line {y}: YCbCr {pf["out"][y]}, blend of {ycc(wa)} and {ycc(wb)} by {w}/8 is {want}'
+            checked += 1
+            weights.add(w)
+            differ += wa != wb
+    return checked, weights, differ
+
+
+def test_vinterp_blends_two_source_lines():
+    """VINTERP = 1 (buffer mode): each output line shows the blend of the two source lines around its
+    position, weighted in eighths as fb_ref.src_lines says, the second line prefetched like the
+    first; the first line, the frame decisions and what the store reads are as without it."""
+    sd, pix = run_sim('tb_fb_vinterp', IL_SRC, RT_EN=0, VINTERP=1)
+    frames, st = replay(sd, IL_SRC, RT_EN=0)
+    assert check_display(frames, pix_frames(pix)) >= 3 * V_ACTIVE
+    checked, weights, differ = check_vinterp('tb_fb_vinterp', frames)
+    assert checked >= 3 * V_ACTIVE
+    assert len(weights - {0, 8}) >= 3 and differ >= checked // 2, (weights, differ)
+
+
+def test_vinterp_off_puts_out_the_first_line():
+    """VINTERP = 0 (the default) with the same pixel log: the YCbCr put out is the first line's word,
+    unblended (this also pins the log's pipeline alignment that test_vinterp_blends_two_source_lines
+    relies on)."""
+    sd, pix = run_sim('tb_fb_vinterp_off', IL_SRC, RT_EN=0, LOGPX=1)
+    frames, st = replay(sd, IL_SRC, RT_EN=0)
+    assert check_display(frames, pix_frames(pix)) >= 3 * V_ACTIVE
+    n = 0
+    for pf in vinterp_frames('tb_fb_vinterp_off'):
+        if pf['video']:
+            for y in range(V_ACTIVE):
+                assert pf['out'][y] == ycc(pf['words'][y][0]), y
+                n += 1
+    assert n >= 3 * V_ACTIVE
+
+
+@pytest.mark.parametrize('fault, alter', [
+    ('no_weight', {'fb_display.v': ("            w_cur     <= w_next;", "            w_cur     <= 4'd0;")}),
+    ('no_second_fetch', {'fb_display.v': ("if (VINTERP != 0 && !ll && src_hi + 1 < lines && src_hi + 1 > req_hi) begin",
+                                          "if (1'b0) begin")}),
+    ('swapped_weight', {'vblend.v': ('a * wa + b * w', 'a * w + b * wa')}),
+])
+def test_vinterp_check_is_tested(fault, alter):
+    """Negative controls: the weight left at 0, no prefetch of the second line (the first is then
+    stale too, and the margin check of run_sim already fails), the weights swapped in vblend.v."""
+    name = f'tb_fb_vinterp_{fault}'
+    with pytest.raises(AssertionError):
+        sd, pix = run_sim(name, IL_SRC, alter=alter, RT_EN=0, VINTERP=1)
+        frames, st = replay(sd, IL_SRC, RT_EN=0)
+        check_vinterp(name, frames)
 
 
 def test_mode_switch_checks_catch_faults():

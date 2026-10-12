@@ -20,6 +20,8 @@ module tb_fb;
     parameter V_TOTAL = 40, V_ACTIVE = 36, V_FP = 1, V_SYNC = 1;
     parameter BOB = 1, RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270, LL_EQ = 1;
     parameter JUMP_AFTER = 3, HOLD = 32;
+    parameter VINTERP = 0;                    // fb_display.v: blend two source lines (BUF)
+    parameter LOGPX = 0;                      // 1: log the words and YCbCr of one pixel per line (as VINTERP does)
     parameter real T_S = 15.4, T_P = 13.4;
     parameter real TAIL = 2000000.0;          // ns to run after the last line
 
@@ -74,7 +76,7 @@ module tb_fb;
     wire de, hsync, vsync, have_video, sdram_ready;
     fb_backend #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .V_FP(V_FP), .V_SYNC(V_SYNC), .SDRAM_FREQ(5_000_000),
                  .BOB(BOB), .RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT),
-                 .LL_EQ(LL_EQ), .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD)) dut (
+                 .LL_EQ(LL_EQ), .JUMP_AFTER(JUMP_AFTER), .HOLD(HOLD), .VINTERP(VINTERP)) dut (
         .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(pix_clk), .rst_async(rst), .ll_mode(ll_mode_r),
         .f_empty(f_empty), .f_data(f_data), .f_pop(f_pop),
         .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe), .SDRAM_nRAS(nras),
@@ -146,6 +148,17 @@ module tb_fb;
             // the word read for source pixel 104/105 (x = 300 is window pixel 140, source pixel 105)
             if (dut.x == 302 && dut.y < V_ACTIVE)
                 $fwrite(fp, "X %0d %0d %0d %0d\n", dut.y, dut.lb_rdata[30:19], dut.lb_rdata[18:9], dut.lb_rdata[8:0]);
+            // VINTERP: the second line and the weight of the output line; for window pixel 136 (x = 296,
+            // source pixel 102, an even one: Y0 = bits 15:8) the two words read and the YCbCr put out, which
+            // is registered 6 clocks after x (yo is sampled here before the edge that would replace it)
+            if (VINTERP != 0 && dut.x == 300 && dut.y < V_ACTIVE)
+                $fwrite(fp, "I %0d %0d %0d\n", dut.y, dut.disp.src_b_cur, dut.disp.w_cur);
+            if (VINTERP != 0 && dut.x == 302 && dut.y < V_ACTIVE)
+                $fwrite(fp, "X2 %0d %0d %0d %0d\n", dut.y, dut.lb_rdata_b[30:19], dut.lb_rdata_b[18:9], dut.lb_rdata_b[8:0]);
+            if ((VINTERP != 0 || LOGPX != 0) && dut.x == 298 && dut.y < V_ACTIVE)
+                $fwrite(fp, "W %0d %08x %08x\n", dut.y, dut.lb_rdata, dut.lb_rdata_b);
+            if ((VINTERP != 0 || LOGPX != 0) && dut.x == 302 && dut.y < V_ACTIVE)
+                $fwrite(fp, "O %0d %0d %0d %0d\n", dut.y, yo, cbo, cro);
         end
     end
 

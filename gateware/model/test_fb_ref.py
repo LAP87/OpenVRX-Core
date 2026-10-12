@@ -43,6 +43,32 @@ def interlaced(n, jitter=0, seed=1):
     return out
 
 
+@pytest.mark.parametrize('lines, v', [(240, 720), (243, 720), (288, 720), (240, 1080), (12, 36)])
+def test_two_line_mapping(lines, v):
+    """VINTERP: the first line is the nearest-line mapping's, the second the next one (or the same at
+    the bottom), the weight in eighths is the rounded position between them, 0 above the first line."""
+    for low in (False, True):
+        for j in range(v):
+            s0, s1, w = fb.src_lines(j, lines, v, low)
+            assert s0 == fb.src_line(j, lines, v, low) and s1 == min(s0 + 1, lines - 1) and 0 <= w <= 8
+            u = ((2 * j + 1) * 2 * lines - (3 if low else 1) * v) / (4 * v)
+            if u < 0:
+                assert (s0, w) == (0, 0)
+            elif s0 < lines - 1:
+                assert abs(w / 8 - (u - s0)) <= 1 / 16 + 1e-9, (j, u, s0, w)
+
+
+def test_two_line_weights_240_into_720():
+    """240 -> 720: the position within the source line repeats every three output lines, in twelfths
+    11, 3, 7 in the upper field and 1, 5, 9 in the lower (research/UTGANG_OCH_LATENS_2026-10-05.md,
+    section 4), so the weights in eighths are 7, 2, 5 and 1, 3, 6."""
+    up = [fb.src_lines(j, 240, 720)[2] for j in range(3, 9)]
+    low = [fb.src_lines(j, 240, 720, low=True)[2] for j in range(3, 9)]
+    assert up == [7, 2, 5, 7, 2, 5]
+    assert low == [3, 6, 1, 3, 6, 1]
+    assert [fb.vblend(16, 235, w) for w in (0, 4, 8)] == [16, 125, 235]
+
+
 def test_field_phase_interlaced():
     got = phases(interlaced(12))
     assert [low for low, _, _ in got[3:]] == [k % 2 == 1 for k in range(3, 12)], 'the field after the longer gap is the lower one'

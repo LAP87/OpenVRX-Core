@@ -25,6 +25,9 @@
 // source line lower. Missing lines keep an initialized slot's old contents;
 // a slot with no complete line since reset is black.
 `default_nettype none
+`ifndef VINTERP
+`define VINTERP 0
+`endif
 module fb_backend #(
     parameter V_TOTAL = 750, V_ACTIVE = 720,
     parameter H_ACTIVE = 1280, H_FP = 110, H_SYNC = 40, H_BP = 220,
@@ -34,6 +37,7 @@ module fb_backend #(
     parameter H_WIN0 = 160, H_WIN = 960, H_HALF = 0,
     parameter H_FP_ALT = 440,               // 720p50 front porch, low-latency mode with PAL input
     parameter BOB = 1,                      // fb_display.v
+    parameter VINTERP = `VINTERP,           // fb_display.v: 1 blends two source lines in BUF (build.sh VINTERP=1)
     parameter RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270,    // fb_sdram.v
     parameter LL_EQ = 1,                    // low-latency mode: delay early fields for frames of equal length
     parameter JUMP_AFTER = 3, HOLD = 32     // genlock_timing.v
@@ -224,6 +228,16 @@ module fb_backend #(
     dual_clock_ram #(.DEPTH(8192), .AW(13), .W(32)) linebuf (
         .wclk(sd_clk), .we(lbw_we), .waddr(lbw_addr), .wdata(lbw_data),
         .rclk(pix_clk), .raddr(lb_raddr), .rdata(lb_rdata));
+    // VINTERP: a copy of the four BUF slots for the second line of each output line
+    wire [10:0] lb_raddr_b;
+    wire [31:0] lb_rdata_b;
+    generate if (VINTERP != 0) begin : vi_ram
+        dual_clock_ram #(.DEPTH(2048), .AW(11), .W(32)) linebuf_b (
+            .wclk(sd_clk), .we(lb_we && !ll_s), .waddr(lb_waddr), .wdata(lb_wdata),
+            .rclk(pix_clk), .raddr(lb_raddr_b), .rdata(lb_rdata_b));
+    end else begin : no_vi_ram
+        assign lb_rdata_b = 32'd0;
+    end endgenerate
 
     // These per-slot bits only move 0->1 between global resets, so each can
     // cross independently. Sample slot/mode beside the RAM address: the
@@ -273,12 +287,13 @@ module fb_backend #(
                 .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs), .frame_start(t_fs), .triggered(t_tr));
     assign tx = x;
     assign ty = y;
-    fb_display #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .H_WIN0(H_WIN0), .H_WIN(H_WIN), .H_HALF(H_HALF), .BOB(BOB)) disp (
+    fb_display #(.V_TOTAL(V_TOTAL), .V_ACTIVE(V_ACTIVE), .H_WIN0(H_WIN0), .H_WIN(H_WIN), .H_HALF(H_HALF), .BOB(BOB),
+                 .VINTERP(VINTERP)) disp (
         .clk(pix_clk), .rst(prst), .x(x), .y(y), .de(t_de), .hsync(t_hs), .vsync(t_vs),
         .pub_toggle(s_pub_toggle), .pub_lines(pub_lines), .frame_low(frame_low),
         .fetch_toggle(p_fetch_toggle), .fetch_line(p_fetch_line), .fetch_slot(p_fetch_slot), .fetch_first(p_fetch_first),
         .ll(ll_p), .ll_lines(ll_lines), .ll_alive(ll_alive), .ll_triggered(t_tr), .ll_low(s_ll_low),
-        .lb_raddr(lb_raddr), .lb_rdata(lb_rdisplay),
+        .lb_raddr(lb_raddr), .lb_rdata(lb_rdisplay), .lb_raddr_b(lb_raddr_b), .lb_rdata_b(lb_rdata_b),
         .r(r), .g(g), .b(b), .yo(yo), .cbo(cbo), .cro(cro), .de_o(de), .hs_o(hsync), .vs_o(vsync), .have_video(have_video));
 endmodule
 `default_nettype wire
