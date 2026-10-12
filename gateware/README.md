@@ -6,9 +6,22 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 ## Status 2026-10-12
 
-Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; historiska C1- och C3-resultat står separat efter tabellen.
+### Nuläge, `main` 47b66e5
 
-### Aktuell TV/VCR-meny, källa `c3fda21`
+Hela sviten: **695 test gröna** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 13 minuter), ingen delad byggkatalog. Inget är kört på hårdvara.
+
+| Topp | Byggd ur | Seed | Siffror |
+|---|---|---:|---|
+| M0, M2, M2s, M4, M6 | `0da655d` (byggindata lika med 47b66e5) | 0 (M6: 2) | "Störningskampanjen C3 avslutad" nedan |
+| M2a | `dc307bc` | 0 | "I/O-register i I/O-cellerna" nedan |
+| M3; M6 seed 0–3 | `94a2b32` | 0; 0–3 | "Klockroutningen, 2026-10-12" nedan |
+| M1, M1s | `62a69be` | 0 | milstolpetabellen |
+
+Alla klockor över kravet 75 MHz efter routning; HDMI-paren i M2, M2s, M4 och M6 packas som i M0. Ändrat 2026-10-12: parallellkörare och byggkatalogsrevision ("Hela sviten parallellt"), ingen BUFG-flagga på dekodrarnas SCLK, I/O-register i I/O-cellerna för SDRAM-topparna, C3-kampanjen avslutad med en rättning i `fb_sdram.v`, marginalkontroller för de formella bevisens öppna punkter 4 och 5.
+
+Milstolpetabellens M4- och M6-siffror nedan är den historiska byggstatusen från 2026-10-08, med indata som matchade `7cc4eda`; historiska C1-, C2- och C3-resultat står separat efter tabellen.
+
+### TV/VCR-menyn, källa `c3fda21` (C2)
 
 M6 kan begära TV eller VCR för båda dekodrarna via filterfältet i menyn. Styrenheten håller ett pågående skrivvärde fast, registrerar det faktiskt kvitterade värdet per dekoder och försöker igen efter parad pollning vid NACK. OLED, OSD och USB-logg visar det begärda menyvalet; loggen är 62 byte inklusive CRLF och `snowlog.py` bevarar de äldre radformaten.
 

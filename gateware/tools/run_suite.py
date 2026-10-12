@@ -44,7 +44,8 @@ REPO = GW.parent
 PATHS = ['tests/latency', 'mixer', 'gateware/model', 'gateware/sim', 'gateware/tools']
 PER_TEST = ('gateware/sim/', 'gateware/tools/')
 SOURCES = ['gateware/rtl', 'gateware/sim', 'gateware/model', 'gateware/tools', 'gateware/top',
-           'gateware/boards', 'gateware/formal', 'gateware/vectors', 'gateware/build.sh', 'mixer', 'tests']
+           'gateware/boards', 'gateware/formal', 'gateware/vectors', 'gateware/build.sh',
+           'gateware/BRINGUP.md', 'mixer', 'tests']   # BRINGUP.md: sim/test_probe.py reads its example
 SKIP_DIRS = {'build', '__pycache__', '.pytest_cache'}
 
 
