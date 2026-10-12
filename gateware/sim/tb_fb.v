@@ -178,5 +178,9 @@ module tb_fb;
         $fclose(fs); $fclose(fp);
         $finish;
     end
+    // margins the formal proofs leave open (formal/README.md, items 4 and 5), see margin_checks.vh
+`define MC_BE dut
+`include "margin_checks.vh"
+`undef MC_BE
 endmodule
 `default_nettype wire
