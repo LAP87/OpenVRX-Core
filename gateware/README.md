@@ -497,8 +497,8 @@ från tidigare kontrollversioner.
 `model/fuzz_recovery.py::append_camera_fields(scenario, fields=4)` returnerar en ny
 kameraström med rena fält efter originalet. Originalbytes, styrtider och byteklockor
 behålls; fortsättningen synkroniserar kanalernas ankomstfas efter blankning och
-följer interlaced/progressiv F-konvention. `generate()` och kampanjkommandona
-använder fortfarande originalstimulus. Recovery är ett eget kontrakt som behöver
+följer interlaced/progressiv F-konvention. `generate()` och kampanjkommandonas standardvärde
+använder originalstimulus. Recovery är ett eget kontrakt som behöver
 nytt rundnamn och ny evidens före kampanjstart.
 
 Fokuserad modell-/resume-verifiering gav **68 pass på 23,65 s**, varav 25 nya
@@ -508,3 +508,28 @@ kamerakonventionerna. A/B-bytes matchar de tre tidigare accepterade native-prove
 av samma oracle. Kampanjens verkliga källmanifest tar med verktyget och avvisar
 ett manifest från den gamla källan utan att ändra evidensen. Detta är helper-
 och modelltester, ingen ny helsvit, FPGA-routning eller hårdvarumätning.
+
+
+## Opt-in recovery i kampanjköraren, 2026-10-12
+
+`sim/fuzz_campaign.py` tar `--recovery-fields N` för `run` och `narrow`.
+Standardvärdet är 0; ett positivt heltal lägger rena fält efter originalet genom
+modellverktyget ovan. Manifestets schema 2 binder antalet och typen av
+fortsättning tillsammans med källor och övriga inställningar. Ändrat antal eller
+källa kräver ett nytt rundnamn. Budgetuppskattningen tar med de tillagda fälten,
+och recovery-körningar behåller sina råfiler även vid PASS.
+
+**75 fokuserade tester passerade på 43,43 s.** Native-prover genom den verkliga
+worker-/seed-vägen på fryst `7754112` gav 360 rader på 215,8 s för skalat frö 1345
+(densitet 2,5, tio originalfält och fyra recovery-fält), och 6 480 rader på 1 954,0 s
+för frö 1601 med full PAL-geometri (densitet 1, åtta originalfält och fyra
+recovery-fält, tvingad `pal`/`mode_switch`). Kamera-/CTL-, mixer-,
+minnes- och bildspåren är byte-identiska med tidigare accepterade motsvarande
+prover. Kompilering, vvp och drain passerar utan fynd, known, edges eller notes.
+Root verifierade 160 källhashar och 24 råfiler, återläste modeller/invarianter och
+avvisade fel bildord/källrad i nybilden i båda fallen. Kraven på 144/720 rader,
+3000 s timeout, checkerpredikat och RTL är oförändrade.
+
+Detta accepterar dessa två opt-in-prover och parameter-/resume-kontrollerna.
+Det är ingen ny 260-frökampanj, helsvit eller FPGA-routning; gamlaFAIL-kvitton
+och C2:s tidigare källa med 604 pass och dess byggen bevaras. Ingen FPGA-hårdvara är verifierad.

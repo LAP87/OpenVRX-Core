@@ -1176,10 +1176,16 @@ def sort_known(sc, logs, fd):
 
 # ---------------------------------------------------------------- one seed
 def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=None, force=(), geometry='scaled',
-             density=1.0, gate_probe=0):
+             density=1.0, gate_probe=0, recovery_fields=0):
     """Generate, simulate and check one seed. Returns the result as a dict."""
     t0 = time.time()
+    if type(recovery_fields) is not int or recovery_fields < 0:
+        raise ValueError('recovery_fields must be a nonnegative integer')
     sc = fz.generate(seed, classes, n_fields=n_fields, force=force, geometry=geometry, density=density)
+    recovery = None
+    if recovery_fields:
+        from fuzz_recovery import append_camera_fields
+        sc, recovery = append_camera_fields(sc, fields=recovery_fields)
     use_geometry(geometry)
     work = work or HERE / 'build' / 'fuzz' / f'seed{seed}'
     fd = Findings()
@@ -1202,7 +1208,7 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
         sort_known(sc, logs, fd)
         if checked < (2 if geometry == 'scaled' else 1) * V_ACTIVE:
             fd.add('bench', 'few_lines', 0, f'only {checked} output lines checked')
-    if not keep and gate_probe == 0 and not fd.items and work.exists():
+    if not keep and not recovery_fields and gate_probe == 0 and not fd.items and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     res = dict(seed=seed, classes=sc.classes_used(), enabled=None if classes is None else sorted(classes),
                std=sc.std, ll0=sc.ll0, geometry=geometry, density=density, n_fields=n_fields,
@@ -1210,6 +1216,8 @@ def run_seed(seed, classes=None, work=None, alter=None, keep=False, n_fields=Non
                known=fd.known[:4],
                groups=fd.groups(), first=fd.first(), findings=fd.items[:12], edges=fd.edges[:4],
                notes=fd.notes[:4], checked=checked, seconds=round(time.time() - t0, 1), used=sc.used)
+    if recovery_fields:
+        res.update(recovery_fields=recovery_fields, recovery=recovery)
     return res
 
 

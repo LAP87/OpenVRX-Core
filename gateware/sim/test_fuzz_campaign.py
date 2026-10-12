@@ -171,7 +171,7 @@ def test_full_geometry_budget_uses_its_own_default_fields(campaign):
     assert fc.run_many([(1, 1, None)], path, 1, fc.EST_FULL - 1, 'round', geometry='full', fields=4) == 1
     assert not calls
     assert fc.run_many([(1, 1, None)], path, 1, fc.EST_FULL + 1, 'round', geometry='full', fields=4) == 0
-    assert calls[0][-1] == 4
+    assert calls[0][6] == 4
 
 
 @pytest.mark.parametrize('opts', [dict(density=float('nan')), dict(density=float('inf')),
@@ -208,4 +208,62 @@ def test_narrow_propagates_nondefault_settings(campaign, monkeypatch):
     assert seen['run'][0] == [('all', 17, ['pal', 'mode_switch']), ('-mode_switch', 17, ['pal'])]
     assert seen['run'][1].name == 'full-pal-17-v2.jsonl'
     assert seen['run'][4] == 'full-pal-17-v2'
-    assert seen['run'][5:] == (['pal'], 'full', 2.5, 8)
+    assert seen['run'][5:] == (['pal'], 'full', 2.5, 8, 0)
+
+
+@pytest.mark.parametrize('count', [-1, True, False, 1.5, None])
+def test_invalid_recovery_count_creates_no_evidence(campaign, count):
+    path, calls, _ = campaign
+    with pytest.raises(ValueError, match='nonnegative integer'):
+        run(path, recovery_fields=count)
+    assert not calls and not path.exists() and not path.with_suffix('.contract.json').exists()
+
+
+def test_recovery_count_is_bound_to_resume_and_worker(campaign):
+    path, calls, _ = campaign
+    assert run(path, recovery_fields=4) == 0
+    assert calls[0][6:] == (fc.t.fz.N_FIELDS, 4)
+    record = fc.results(path)[0]
+    contract = json.loads(path.with_suffix('.contract.json').read_text())['contract']
+    assert record['recovery_fields'] == contract['recovery_fields'] == 4
+    assert contract['recovery_kind'] == 'synchronized-clean-fields'
+    before = saved(path)
+    for count in (0, 2, 5):
+        with pytest.raises(ValueError, match='new round name'):
+            run(path, seeds=(1, 2), recovery_fields=count)
+        assert saved(path) == before and len(calls) == 1
+    assert run(path, seeds=(1, 2), recovery_fields=4) == 0
+    assert len(calls) == 2
+
+
+def test_budget_includes_recovery_fields(campaign):
+    path, calls, _ = campaign
+    estimate = fc.EST * (fc.t.fz.N_FIELDS + 4) / fc.t.fz.N_FIELDS
+    assert fc.run_many([(1,1,None)], path,1,estimate-1,'round',recovery_fields=4) == 1
+    assert not calls
+    assert fc.run_many([(1,1,None)], path,1,estimate+1,'round',recovery_fields=4) == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('count', [0,4])
+def test_actual_worker_passes_recovery_and_keeps_selected_raw(monkeypatch, tmp_path, count):
+    seen = {}
+    def seed(seed, classes, **kwargs):
+        seen.update(seed=seed, classes=classes, **kwargs)
+        return {'result':'fixture'}
+    monkeypatch.setattr(fc.t,'run_seed',seed)
+    assert fc._one((1601,None,str(tmp_path),('pal','mode_switch'),'full',1.0,8,count)) == {'result':'fixture'}
+    assert seen['recovery_fields'] == count and seen['keep'] == bool(count)
+    assert seen['geometry']=='full' and seen['n_fields']==8
+
+
+@pytest.mark.parametrize('command', ['run','narrow'])
+def test_cli_propagates_recovery_fields(campaign, monkeypatch, command):
+    seen = []
+    monkeypatch.setattr(fc,'run_many',lambda *args: seen.append(args))
+    monkeypatch.setattr(fc.t.fz,'generate',lambda *a,**kw: type('Scenario',(),{'classes_used':lambda s:[]})())
+    argv = ['fuzz_campaign.py',command,'sample' if command=='run' else '1601']
+    if command=='run':argv += ['1601']
+    monkeypatch.setattr(sys,'argv',argv+['--recovery-fields','4','--geometry','full','--fields','8','--force','pal'])
+    fc.main()
+    assert seen[0][6:] == ('full',1.0,8,4)

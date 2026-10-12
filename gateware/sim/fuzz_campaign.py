@@ -73,15 +73,18 @@ def classes_value(classes):
     return value
 
 
-def contract_for(jobs_list, force, geometry, density, fields):
+def contract_for(jobs_list, force, geometry, density, fields, recovery_fields=0):
     if geometry not in ('scaled', 'full'):
         raise ValueError('geometry must be scaled or full')
     if not math.isfinite(density) or density < 0:
         raise ValueError('density must be finite and nonnegative')
     if fields is not None and (not isinstance(fields, int) or fields < 1):
         raise ValueError('fields must be a positive integer')
+    if type(recovery_fields) is not int or recovery_fields < 0:
+        raise ValueError('recovery_fields must be a nonnegative integer')
     class_sets = sorted({json.dumps(classes_value(c)) for _, _, c in jobs_list})
-    return dict(schema=1, geometry=geometry, density=float(density),
+    return dict(schema=2, geometry=geometry, density=float(density),
+                recovery_fields=recovery_fields, recovery_kind='synchronized-clean-fields' if recovery_fields else None,
                 fields=fields if fields is not None else (t.fz.N_FIELDS if geometry == 'scaled' else t.fz.N_FIELDS_FULL),
                 class_sets=[json.loads(c) for c in class_sets], force=classes_value(force),
                 source=source_snapshot())
@@ -140,16 +143,17 @@ def results(path):
 
 
 def _one(args):
-    seed, classes, work, force, geometry, density, fields = args
+    seed, classes, work, force, geometry, density, fields, recovery_fields = args
     try:
         return t.run_seed(seed, classes, work=Path(work), force=force, geometry=geometry, density=density,
-                          n_fields=fields)
+                          n_fields=fields, recovery_fields=recovery_fields, keep=bool(recovery_fields))
     except Exception as err:      # a crash in the checks is a result too
         return dict(seed=seed, result='crash', groups=['bench/crash'], first=dict(block='bench', kind='crash', t=0,
                     detail=repr(err)[:500]), classes=[], enabled=None if classes is None else sorted(classes))
 
 
-def run_many(jobs_list, out_path, jobs, budget, tag, force=(), geometry='scaled', density=1.0, fields=None):
+def run_many(jobs_list, out_path, jobs, budget, tag, force=(), geometry='scaled', density=1.0, fields=None,
+             recovery_fields=0):
     """Resume only a round with identical settings, inputs and per-key seed definitions."""
     if jobs < 1 or not math.isfinite(budget) or budget < 0:
         raise ValueError('jobs must be positive and budget finite and nonnegative')
@@ -159,7 +163,7 @@ def run_many(jobs_list, out_path, jobs, budget, tag, force=(), geometry='scaled'
         raise ValueError('duplicate job keys')
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', str(k)) for k, _, _ in jobs_list):
         raise ValueError('invalid job key')
-    contract = contract_for(jobs_list, force, geometry, density, fields)
+    contract = contract_for(jobs_list, force, geometry, density, fields, recovery_fields)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with round_lock(out_path):
@@ -172,7 +176,8 @@ def _run_pending(jobs_list, out_path, done, jobs, budget, tag, contract):
     geometry, density, fields = (contract[k] for k in ('geometry', 'density', 'fields'))
     force = contract['force']
     default_fields = t.fz.N_FIELDS if geometry == 'scaled' else t.fz.N_FIELDS_FULL
-    est = (EST if geometry == 'scaled' else EST_FULL) * fields / default_fields
+    recovery_fields = contract['recovery_fields']
+    est = (EST if geometry == 'scaled' else EST_FULL) * (fields + recovery_fields) / default_fields
     t0 = time.monotonic()
     n = 0
     with cf.ProcessPoolExecutor(max_workers=jobs) as ex:
@@ -183,7 +188,7 @@ def _run_pending(jobs_list, out_path, done, jobs, budget, tag, contract):
                     raise ValueError('sources changed during the round; use a new round name')
                 key, seed, classes = todo.pop(0)
                 work = HERE / 'build' / 'fuzz' / tag / f'{key}'
-                running[ex.submit(_one, (seed, classes, str(work), tuple(force), geometry, density, fields))] = (key, seed, classes)
+                running[ex.submit(_one, (seed, classes, str(work), tuple(force), geometry, density, fields, recovery_fields))] = (key, seed, classes)
             if not running:
                 break
             fin, _ = cf.wait(list(running), return_when=cf.FIRST_COMPLETED)
@@ -195,7 +200,8 @@ def _run_pending(jobs_list, out_path, done, jobs, budget, tag, contract):
                 res['key'] = key
                 res['contract_sha256'] = digest(contract)
                 res['job'] = dict(seed=seed, classes=classes_value(classes))
-                res.update(geometry=geometry, density=density, n_fields=fields, force=force)
+                res.update(geometry=geometry, density=density, n_fields=fields, force=force,
+                           recovery_fields=recovery_fields)
                 with open(out_path, 'a') as fh:
                     fh.write(json.dumps(res) + '\n')
                 n += 1
@@ -245,6 +251,8 @@ def main():
     ap.add_argument('--geometry', choices=('scaled', 'full'), default='scaled')
     ap.add_argument('--density', type=float, default=1.0)
     ap.add_argument('--fields', type=int)
+    ap.add_argument('--recovery-fields', type=int, default=0,
+                    help='append clean synchronized fields while preserving the generated prefix')
     ap.add_argument('--round', dest='round_name', help='a new evidence name for narrow after changing inputs')
     a = ap.parse_args()
     out = HERE / 'build' / 'fuzz'
@@ -253,14 +261,14 @@ def main():
         classes = a.classes.split(',') if a.classes else None
         jl = [(s, s, classes) for s in t.parse_seeds(a.seeds)]
         force = [c for c in a.force.split(',') if c]
-        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what, force, a.geometry, a.density, a.fields)
+        run_many(jl, out / f'{a.what}.jsonl', a.jobs, a.budget, a.what, force, a.geometry, a.density, a.fields, a.recovery_fields)
     elif a.cmd == 'summary':
         summary(out / f'{a.what}.jsonl')
     else:
         seed = int(a.what)
         tag = a.round_name or f'narrow-{seed}'
         path = out / f'{tag}.jsonl'
-        contract_for([(seed, seed, None)], a.force.split(',') if a.force else (), a.geometry, a.density, a.fields)
+        contract_for([(seed, seed, None)], a.force.split(',') if a.force else (), a.geometry, a.density, a.fields, a.recovery_fields)
         classes = a.classes.split(',') if a.classes else None
         force = a.force.split(',') if a.force else ()
         base = t.fz.generate(seed, classes, force=force, geometry=a.geometry, density=a.density, n_fields=a.fields)
@@ -268,7 +276,7 @@ def main():
         keep = (set(a.keep.split(',')) - {''}) | set(force)
         allowed = set(t.fz.CLASSES if classes is None else classes)
         jl = [('all', seed, classes)] + [(f'-{c}', seed, sorted(allowed - {c})) for c in used if c not in keep]
-        run_many(jl, path, a.jobs, a.budget, tag, force, a.geometry, a.density, a.fields)
+        run_many(jl, path, a.jobs, a.budget, tag, force, a.geometry, a.density, a.fields, a.recovery_fields)
         rs = {r['key']: r for r in results(path)}
         ref = rs.get('all')
         if ref:
