@@ -14,7 +14,9 @@
 // The configuration pins 52-56 are deliberately not used.
 IO_LOC  "tvpa_sclk" 77;
 IO_PORT "tvpa_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-CLOCK_LOC "tvpa_sclk" BUFG;
+// No CLOCK_LOC BUFG: the pin is a dedicated clock input (GCLKT) and reaches the global network
+// directly. With the flag, three BUFGs (both SCLKs and the 27 MHz clock) competed for global wires
+// and some placements left clocks.clk_27 without a route (gateware/README.md, "Bygget av M6").
 IO_LOC  "tvpa_d[0]" 27;
 IO_PORT "tvpa_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "tvpa_d[1]" 28;
@@ -33,7 +35,7 @@ IO_LOC  "tvpa_d[7]" 74;
 IO_PORT "tvpa_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "tvpb_sclk" 80;
 IO_PORT "tvpb_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
-CLOCK_LOC "tvpb_sclk" BUFG;
+// No CLOCK_LOC BUFG either, see tvpa_sclk.
 IO_LOC  "tvpb_d[0]" 76;
 IO_PORT "tvpb_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC  "tvpb_d[1]" 42;

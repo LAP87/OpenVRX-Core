@@ -469,7 +469,29 @@ Historisk seedtabell från bygget ur `a5b934f` (`SEED=n gateware/build.sh m6_puc
 
 Alla fyra seeds routade i den historiska körningen med 12 600 LUT och 25 BSRAM. Vid den körningen krävdes 54 MHz för 27 MHz-domänen och 75 MHz för övriga. Bygget ur `330cc9a` (med mixerns regel för dubbeldåliga rader och låsflaggan i loggen) gav seed 2 med 123 MHz i 27 MHz-domänen. Dessa värden är seedhistorik, inte C1-mätvärden.
 
-- **Seed.** Den historiska tabellen ovan gäller `a5b934f`; den ska inte användas för att förutsäga varje seed på senare källor. På C1-källan `3aed0b7` misslyckades seed 2 under global routning med `Can't route the clocks.clk_27 net`, medan seed 3 routade vid 75 MHz. Orsaken till skillnaden är inte utredd. `boards/m6_puck_proto.seed` är fortfarande 2; för C1-bygget måste kommandot ange `SEED=3 FREQ_MHZ=75`. `build.sh` tar `SEED=<n>` och rapporterar klockroutningsfel.
+- **Seed.** Den historiska tabellen ovan gäller `a5b934f`; den ska inte användas för att förutsäga varje seed på senare källor. På C1-källan `3aed0b7` misslyckades seed 2 under global routning med `Can't route the clocks.clk_27 net`, medan seed 3 routade vid 75 MHz. Orsaken står nedan och är åtgärdad 2026-10-12. `boards/m6_puck_proto.seed` är fortfarande 2. `build.sh` tar `SEED=<n>` och rapporterar klockroutningsfel.
+
+### Klockroutningen, 2026-10-12
+
+**Orsak.** Nätet som föll är kortets 27 MHz-klocka (stift 4), som i nextpnr heter `clocks.clk_27` och matar båda PLL:erna och 27 MHz-domänen. Det får alltid en BUFG. Till 2026-10-12 hade även dekodrarnas SCLK (`tvpa_sclk`, `tvpb_sclk`) `CLOCK_LOC ... BUFG` i M3, M4 och M6, alltså tre BUFG-celler. nextpnr 0.11.1 routar buffrade nät före alla andra klockor, dekoderklockorna först, och bara över det dedikerade globala nätet. Det finns ingen reservväg: når ett buffrat nät ingen mottagare stoppar bygget. Vilken BUFG-plats varje cell får väljer placeraren, och det beror på seed. På C1-källan med seed 2 fick kortklockan X0Y27/BUFG0 och dekoder A X28Y0/BUFG1; från X0Y27/CLK0 nådde ingen mottagare (PLL-ingångarna, 27 MHz-logiken) via globala ledningar som dekoderklockorna inte redan tagit. Byggen som routade hade andra kombinationer. Att det är dekoderklockornas ledningar är härlett ur nextpnr:s ordning och ur försöket nedan, inte utläst ur routningen.
+
+**Åtgärd.** SCLK-stiften är dedikerade klockingångar (stift 77 GCLKT_1, stift 80 GCLKT_0) och når det globala nätet utan buffert. Utan BUFG-flaggan routar nextpnr dem som klockkällor, med segmentroutning som reserv i stället för fel. Flaggan är borttagen i `boards/m3_probe.cst`, `m4_dual_mix.cst` och `m6_puck_proto.cst`. Negativ kontroll: C1-nätlistan med seed 2 faller i den globala routningen med flaggan kvar och routar alla klocknät utan den; dekoderklockorna går då "using global resources only". Att i stället ta bort kortklockans flagga hjälper inte, eftersom nextpnr lägger in bufferten för det nätet ändå.
+
+**Byggt** ur Core `94a2b32` (alla klockor krav 75 MHz, siffror efter routning, inga `ERROR` i loggarna). Kortklockans BUFG hamnar nu på X0Y27/BUFG0 med seed 0, 1 och 3, platsen som föll förut, och routar:
+
+| Topp | Seed | LUT4 | BSRAM | Maxfrekvens efter routning (MHz) |
+|---|---:|---:|---:|---|
+| `m6_puck_proto` | 0 | 12 804 | 25 | `mix.b_clk` 129,05; `mix.a_clk` 151,79; `clocks.clk_27` 116,33; `sd_clk` 110,60; `clk_pixel` 124,86 |
+| `m6_puck_proto` | 1 | 12 804 | 25 | `mix.b_clk` 132,12; `mix.a_clk` 149,75; `clocks.clk_27` 133,92; `sd_clk` 96,14; `clk_pixel` 119,62 |
+| `m6_puck_proto` | 2 | 12 804 | 25 | `mix.b_clk` 122,87; `mix.a_clk` 144,26; `clocks.clk_27` 125,68; `sd_clk` 110,00; `clk_pixel` 131,49 |
+| `m6_puck_proto` | 3 | 12 804 | 25 | `mix.b_clk` 118,06; `mix.a_clk` 124,13; `clocks.clk_27` 133,87; `sd_clk` 100,54; `clk_pixel` 132,28 |
+| `m4_dual_mix` | 0 | 8 302 | 25 | `mix.b_clk` 157,58; `mix.a_clk` 142,21; `clocks.clk_27` 232,88; `sd_clk` 89,69; `clk_pixel` 106,77 |
+| `m3_probe` | 0 | 2 561 | 0 | `pb.clk` 179,63; `pa.clk` 147,36; `conv.clk` 196,66 |
+| `m0_testpattern` | 0 | 794 | 0 | `clocks.clk_27` 359,84; `clk_pixel` 149,37 (oförändrad, referens för HDMI-paren) |
+
+`tools/tmds_fuses.py`: alla fyra HDMI-par i M4 (seed 0) och M6 (seed 3) som i M0. På `main` före ändringen (`5314ed1`) routade M6 också med seed 0–3; felet syntes alltså inte på den källan, men risken fanns kvar.
+
+Iakttagelse: med seed 1 och 3 (och seed 3 före ändringen) når `sd_clk_shift`, SDRAM-klockan ut till stiftet, inte stiftet över dedikerad routning och går via vanliga ledningar. Det ger inget fel, men fördröjningen till SDRAM-klockstiftet beror då på placeringen; det är vad minnestestet `m2a_memtest` mäter på kortet.
 - **Klockkrav.** `boards/m6_puck_proto.sdc` saknas i C1, så `clocks.clk_27` har samma 75 MHz-krav som övriga klockor. C1 seed 3 klarar det efter routning; seed 2 saknar färdig routing och därmed saknas slutligt timingresultat. `build.sh` läser fortfarande en `boards/<top>.sdc` om en sådan finns. C2:s senare seed-2-krav återstår separat.
 
 ## Verifiering 2026-10-08
