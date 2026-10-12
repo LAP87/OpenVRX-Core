@@ -688,7 +688,8 @@ def check_omitted_field_boundary_scenario(paired, omitted_fields):
             (visible_field & 1, n) for n in range(31)]
         assert all(r.active_count == 1440 - LATE for r in final[:21]), final[:21]
 
-    m = check('tb_mixer_omitted_field_boundary', a, b,
+    # one build directory per scenario: the parametrised tests may run in separate processes at once
+    m = check(f'tb_mixer_omitted_field_boundary_{"paired" if paired else "lone"}{omitted_fields}', a, b,
               params={'START_B': START_A + offset, 'T_B': T_A},
               ev_kw={'start_a': START_A, 'start_b': START_A + offset,
                      't_a': T_A, 't_b': T_A})

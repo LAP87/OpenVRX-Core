@@ -18,6 +18,10 @@ bindings, 7 formal proofs and 14 actual negative-control counterexamples.
 Acceptance receipt SHA-256:
 `c783407e79a31e9a09f3bc82f76debff1160aebee80091c25368d261d1c09bfc`.
 
+2026-10-12, Fable: on main 2dca245 the suite collects 651 tests; run one process per
+simulation test, ten at a time, all 651 pass (18 min). Two parametrised mixer tests shared a
+build directory and raced in that runner; they now build apart. Nothing has run on hardware.
+
 M6 has a TV/VCR filter menu for both decoders. An in-flight I2C write retains
 its value and SDA lane; NACK retries follow paired polling. The OLED, OSD and
 62-byte UART row show the requested menu mode, rather than a register readback.
