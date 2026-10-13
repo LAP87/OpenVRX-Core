@@ -4,24 +4,25 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-12
+## Status 2026-10-13
 
-### Nuläge, `main` med SCAN och sparade inställningar i M6 (från `0958a52`)
+### Nuläge, `main` `2b67dea`
 
-Hela sviten: **757 test gröna** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 17 minuter), ingen delad byggkatalog. Inget är kört på hårdvara.
+Hela sviten: **757 test gröna på `2b67dea`** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången; tre omgångar med `--resume`, de formella bevisen ensamma i sista), ingen delad byggkatalog. Samma 757 gick igenom på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Efter `bf05ac0` har bara Markdown ändrats (`BRINGUP.md`, `sim/FUZZ_2026-10-07.md`, den här filen), så byggindata för alla toppar är desamma som i `bf05ac0`. Inget är kört på hårdvara.
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
-| M6 | `0958a52` (byggindata lika med `main`), `gowin_pack --mspi_as_gpio` | 2 | "Sparade inställningar" under M6; utan dem ur `9023ab1` under "RSSI" |
-| M4 | `f78fe82`; mixern har sedan fått `ext_weak`, som M4 knyter till 0, inte ombyggd | 0 | "Den varierande raden" under `LOW` |
-| M0; M4, M6 med `HDMI=1` | `4ad5a68` | 0 (M6: 2) | "DVI eller HDMI" under M0 |
-| M4, M6 med `VINTERP=1` | `fc267a8` | 0 (M6: 2) | "Interpolation i höjdled" under bildvägen |
+| M0, M4, M6 (standardval) | `bf05ac0`, byggda av Codex och rootaccepterade 2026-10-13; M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 8 245 / 15 505 LUT4; lägsta maxfrekvens 154,58 / 98,95 / 104,58 MHz; M6:s 27 MHz-domän 132,28 MHz |
+| M6 | `0958a52` (Opus; samma byggindata som `bf05ac0`, samma LUT4 och 27 MHz-siffra) | 2 | "Sparade inställningar" under M6; utan dem ur `9023ab1` under "RSSI" |
+| M4 | `f78fe82` (före `ext_weak`) | 0 | "Den varierande raden" under `LOW` |
+| M0; M4, M6 med `HDMI=1` | `4ad5a68` (M4 före `ext_weak`, M6 utan RSSI, SCAN och flash) | 0 (M6: 2) | "DVI eller HDMI" under M0 |
+| M4, M6 med `VINTERP=1` | `fc267a8` (samma) | 0 (M6: 2) | "Interpolation i höjdled" under bildvägen |
 | M2, M2s | `0da655d` | 0 | "Störningskampanjen C3 avslutad" nedan |
 | M2a | `dc307bc` | 0 | "I/O-register i I/O-cellerna" nedan |
 | M3; M6 seed 0–3 | `94a2b32` | 0; 0–3 | "Klockroutningen, 2026-10-12" nedan |
 | M1, M1s | `62a69be` | 0 | milstolpetabellen |
 
-Alla klockor över kravet 75 MHz efter routning; HDMI-paren i M2, M2s, M4 och M6 packas som i M0. Ändrat 2026-10-12: parallellkörare och byggkatalogsrevision ("Hela sviten parallellt"), ingen BUFG-flagga på dekodrarnas SCLK, I/O-register i I/O-cellerna för SDRAM-topparna, C3-kampanjen avslutad med en rättning i `fb_sdram.v`, marginalkontroller för de formella bevisens öppna punkter 4 och 5.
+Alla klockor över kravet 75 MHz efter routning; HDMI-paren i M2, M2s, M4 och M6 packas som i M0. Rootaccepterat av Codex: sviten och M0/M4/M6 med standardval på `bf05ac0`, Codex egna optionsbyggen (`HDMI=1`, `VINTERP=1` och båda) på `46a1e4f`. Byggena av M2, M2s, M2a, M3, M1 och M1s är gjorda av Opus och har ingen rootacceptans i navets STATUS. Inget optionsbygge är gjort på källa med RSSI, SCAN och flashlagret. Ändrat 2026-10-12: parallellkörare och byggkatalogsrevision ("Hela sviten parallellt"), ingen BUFG-flagga på dekodrarnas SCLK, I/O-register i I/O-cellerna för SDRAM-topparna, C3-kampanjen avslutad med en rättning i `fb_sdram.v`, marginalkontroller för de formella bevisens öppna punkter 4 och 5.
 
 Milstolpetabellen nedan har samma byggen. Avsnitten om C2, C1 och C3 efter den är kvitton från sina datum; det de anger som återstående (260-frökampanjen, M6 med seed 2) är gjort 2026-10-12.
 
@@ -70,7 +71,7 @@ Alla fyra HDMI-par matchar M0:s IOB-fuses. Vid denna B-acceptans återstod ny sl
 | **M5 alt. C — Moneagle → 1080p60 BT.1120 → LT8618SX** (ingår inte, se M5-avsnittet) | `top/m5c_moneagle_1080p.v` | byggd 2026-10-04 ur källor som inte ingår här; går inte att bygga ur det här repot (3 565 LUT 17 %, 16 BSRAM; pixel 206 MHz mot 148,5) | BT.1120-strömmen avkodad som av en mottagare över en hel bild; LT8618SX-sekvensen mot sidindelad I2C-modell |
 | **M6 — puckprototyp steg 1** (M4 + RX5808-styrning + OLED-meny + OSD i videon + mätlogg) | `top/m6_puck_proto.v` | ✔ `build/m6_puck_proto.fs` (12 736 LUT 61 %, 25 BSRAM; SDRAM 101,06 MHz, pixel 129,90 MHz, 27 MHz-domän 123,02 MHz; seed 2, se "Bygget av M6") | Meny, SPI, OLED, snö-mätare, brusmått, OSD och UART-logg mot modeller (`sim/test_puck_ui.py`, `sim/test_snow_stats.py`, `sim/test_noise_stats.py`); toppmodulens stift som i M4 (`sim/test_top_pins.py`); M4-delen som ovan |
 
-**Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax ovan kommer från nextpnrs slutrapport efter routning, med kravet 75 MHz för alla klockor. M0, M4 och M6 är byggda ur `4ad5a68`, M2 och M2s ur `0da655d`, M2a ur `dc307bc`, M3 ur `94a2b32` (alla 2026-10-12; se "Nuläge"); M1 och M1s 2026-10-06 ur `62a69be`. HDMI-paren i M2, M2s, M4 och M6 har samma IOB-fuses som M0.
+**Inget är provat på riktig hårdvara.** LUT, BSRAM och klockornas Fmax ovan kommer från nextpnrs slutrapport efter routning, med kravet 75 MHz för alla klockor. Tabellens siffror för M0, M4 och M6 är från byggena ur `4ad5a68`; aktuella byggen ur `bf05ac0` står under "Nuläge". M2 och M2s är byggda ur `0da655d`, M2a ur `dc307bc`, M3 ur `94a2b32` (alla 2026-10-12); M1 och M1s 2026-10-06 ur `62a69be`. HDMI-paren i M2, M2s, M4 och M6 har samma IOB-fuses som M0.
 
 ### Historiska C1-byggen (`3aed0b7`, 2026-10-09)
 
