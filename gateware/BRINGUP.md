@@ -73,7 +73,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
 | M2a | `m2a_memtest` | bara Tang + USB | en ren läspunkt `rs=5` (avsnitt 2.1) |
 | M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
-| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet `FILT` växlar TV/VCR, mätloggen kommer över USB (2.2) |
+| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet `FILT` växlar TV/VCR, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott (2.3) |
 
 ```bash
 gateware/build.sh m3_probe
@@ -103,7 +103,7 @@ Menyns sista fält före sidvalet är `FILT`: `TV` eller `VCR` för båda dekodr
 
 Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **85 byte** inklusive CR LF (62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V`, före tappflaggan och de två låstecknen; sist kommer RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`). Utan ADS1115 på kortet står RSSI som `-----` och `??`.
 
-M6 sparar band, kanal, lägen, filter och RSSI-kalibrering i kortets flash 3 s efter en ändring och läser dem vid start. Efter en omstart ska alltså senast valda kanal stå kvar. Gör den inte det, eller står den på F4 efter att flashen programmerats om över USB, har inställningarna inte sparats eller raderats; README under M6 ("Sparade inställningar") säger vad som inte är kontrollerat. `SCAN` i menyn (OK till sjunde fältet på huvudsidan, NEXT) stegar alla kanaler och stannar på den där en dekoder låser med minst brus. Det är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i README under M6.
+Filtertecknet är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i tabellen i 2.3 och i README under M6.
 
 ```bash
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label tv --seconds 30 --out filt.csv
@@ -112,6 +112,80 @@ python gateware/tools/snowlog.py --summary filt.csv
 ```
 
 `snowlog.py` läser också de äldre raderna på 60, 57 och 43 byte från tidigare bitströmmar; deras filterkolumn blir tom.
+
+### 2.3 M6: SCAN, CAL och sparade inställningar
+
+Allt här är simulerat (`sim/test_chan_scan.py`, `sim/test_rssi_adc.py`, `sim/test_flash_store.py`, `sim/test_puck_ui.py`); inget är provat på kortet. **Första hårdvaruprovet är de sparade inställningarna med bara Tang-kortet** (navets `docs/MATPROTOKOLL.md`, blad 19): M6 i flash och en HDMI-skärm eller OLED:en, inga dekodrar. `SCAN` (blad 18) kräver mottagare, dekodrar och en sändare; `CAL` (blad 17) dessutom rev A-kortets ADS1115.
+
+**Menyn.** OK flyttar markeringen `>` ett fält, NEXT ändrar det markerade fältet.
+
+| Funktion | Var | Gör så här | Vad som händer |
+|---|---|---|---|
+| `FILT` | huvudsidan, femte fältet | OK tills `>` står före `FILT`, NEXT växlar `TV`/`VCR` | avsnitt 2.2 |
+| `SCAN` | huvudsidan, sjunde fältet | OK tills `>` står före `SCAN`, NEXT startar | Rad 2 visar `BUSY` och rad 1 kanalen som provas, 100–160 ms per kanal, 5–8 s för alla 48. Sedan står den kanal där en dekoder låste med lägst brus. Låste ingen står startkanalen kvar och rad 2 visar `NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen |
+| `CAL` | RSSI-sidan (sidfältet: huvud → mätare → RSSI), sjunde fältet | OK tills `>` står före `CAL`, NEXT slår på; flytta sändaren nära och långt bort, eller stäng av den; NEXT stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan avslutar kalibreringen |
+
+**Loggraden, 85 byte** (115200 8N1, ungefär 15 rader per sekund):
+
+```
+S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003 -W
+```
+
+| Fält | I exemplet | Betydelse |
+|---|---|---|
+| snö A, B | `012345 002345` | medel-HF-energi per rad över 1 024 rader; `------` när inga rader kommer från mottagaren |
+| brus A, B | `000017 000000` | lumasampel utanför 16–235 i de senaste 1 024 raderna |
+| A, B, blandning | `040 034 025` | procent av de senaste 1 024 mixerbesluten |
+| kanal, frekvens | `F4 5800` | inställd kanal |
+| mixläge | `MIX` | `MIX`, `A` eller `B` |
+| filter | `T` | `T` (TV) eller `V` (VCR), menyvalet |
+| tappflagga | `-` | `!` om mixern sedan start har tappat en rad för att radplatserna var fulla |
+| lås A, B | `--` | `L` hel pollrunda med "lost lock" (88h bit 4), `-` hela rundor utan, `?` ingen hel runda |
+| RSSI A, B | `12000 04567` | ADS1115-kod, `-----` utan avläsning |
+| kalibrerat A, B | `075 003` | 0–100, `---` okalibrerat |
+| tillstånd A, B | `-W` | `W` svag (mixern undviker den), `L` låg, `-` ingetdera, `?` ingen avläsning |
+
+Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En rad skickas efter varje fönster om 1 024 mixerbeslut, så utan video från någon dekoder kommer ingen logg.
+
+**Att se att en inställning sparats och lästs.** Loggen har ingen särskild startrad, men redan den första raden efter start visar det som lästs: flashen läses inom cirka 10 ms efter konfigurationen, före första loggraden och före första kanalskrivningen (0,5 s). Utan sparad post startar M6 på `F4 5800`, `MIX`, `BUF`, `TV`, RSSI okalibrerad.
+
+1. Programmera M6 i flash (`openFPGALoader -b tangnano20k -f gateware/build/m6_puck_proto.fs`). `build.sh` packar M6 med `--mspi_as_gpio`, och manifestet ska säga `mspi` 1; utan det når M6 inte flashen.
+2. Byt kanal, till exempel till `A1 5865`, och filtret till `VCR`. Rör sedan ingen knapp på minst 3 s: en post skrivs när inställningarna har legat stilla i 3 s, inte vid varje knapptryck.
+3. Bryt strömmen (dra ur USB) och slå på. OSD:n visas 5 s efter start; den, OLED:n och första loggraden ska visa `A1 5865` och `V`.
+4. Samma för RSSI-kalibreringen: efter `CAL` av och 3 s, starta om; RSSI-sidan ska visa `OK` och värden, och loggens kalibrerade fält ska vara tal.
+5. Posterna kan läsas direkt ur flashen (8380416 = 7FE000h):
+
+```bash
+openFPGALoader -b tangnano20k --dump-flash -o 8380416 --file-size 8192 settings.bin
+xxd settings.bin | head
+```
+
+Varje post är 16 byte: `A5`, löpnummer (två byte), tio byte inställningar, `FF FF`, CRC-8. Antalet poster är antalet sparanden sedan sektorn raderades.
+
+Det som inte syns: `flash_store.v` sätter en felflagga när en skrivning inte läses tillbaka lika, men M6 visar den ingenstans. Ett skrivfel märks bara som att inställningen saknas efter omstart, eller i läsningen ovan.
+
+**Att radera inställningarna utan att röra bitströmmen.** Skriv 8 KB med FFh över de två sektorerna 7FE000h och 7FF000h:
+
+```bash
+python3 -c "import sys; sys.stdout.buffer.write(b'\xff' * 8192)" > ff8k.bin
+openFPGALoader -b tangnano20k -f -o 8380416 ff8k.bin
+openFPGALoader -b tangnano20k --dump-flash -o 8380416 --file-size 8192 check.bin
+python3 -c "print(set(open('check.bin', 'rb').read()) == {255})"
+```
+
+Sista raden ska skriva `True`. Efter nästa start står M6 på standardvärdena. Enligt openFPGALoaders källkod (`src/gowin.cpp`: rå fil till GW2AR:s externa flash på en adress; `src/spiFlash.cpp`: `erase_and_prog` raderar bara det område som skrivs, avrundat uppåt till 4 KB, eller 64 KB, alltså 7F0000h–7FFFFFh, om programmet inte känner flashens sektorradering) rör det inte bitströmmen, som slutar under cirka E0000h. Av samma skäl ska programmering av bitströmmen med `-f` lämna inställningarna kvar. Källkoden är läst 2026-10-13; inget av detta är provat på kortet (blad 19 kontrollerar det).
+
+**Tom eller skadad flash.**
+
+| Läge | Vad M6 gör |
+|---|---|
+| Tom (allt FFh: nytt kort eller raderat som ovan) | Ingen post laddas, standardvärdena gäller. Första sparandet raderar 7FE000h och skriver post 0 där |
+| Nyaste posten trasig (fel CRC eller utan `A5`), till exempel efter ett strömavbrott mitt i en skrivning | Posten hoppas över och den näst nyaste giltiga laddas: inställningen före den sista ändringen |
+| Ingen giltig post alls (skräp i båda sektorerna) | Som tom: standardvärden, och första sparandet raderar 7FE000h först |
+| Sektorn full (256 poster) | Nästa post skrivs först i den andra sektorn, som raderas innan; den fulla sektorns nyaste post finns kvar under raderingen |
+| Löpnumret passerar FFFFh | Nyast avgörs i serienummerordning, så räknarens varv stör inte |
+
+Tom flash, trasig nyaste post, full sektor och löpnumret förbi FFFFh är simulerade mot `model/flash_store_ref.py` med en flashmodell (`sim/test_flash_store.py`), med hela flashavbilden jämförd byte för byte. Skräp i båda sektorerna är inte simulerat; raden är läst ur `flash_store.v`.
 
 ## 3. Vad M3-proben ska visa
 
