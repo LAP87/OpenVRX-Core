@@ -7,7 +7,9 @@ disagree on it). The decision is the integer form of mixer/line_mixer.py `mix()`
     switch  when |ea - eb| * 256 >  SWITCH_Q8 * max(ea, eb)   towards the cleaner one
 with BLEND_Q8 = 38 (0.1484 ~ 0.15) and SWITCH_Q8 = 64 (0.25 exactly), plus a
 check the prototype does not have: a bad line (undecodable timing code, wrong
-length, decoder unlocked) loses against a good one. A line with fewer than 360
+length, decoder unlocked) loses against a good one, and of two good lines one from
+a weak receiver (ext_weak, RSSI warning) loses against one from a receiver that is
+not weak (no blend; that receiver becomes current). A line with fewer than 360
 whole words is not stored at all (see push).
 
 Lone lines. A line whose partner has not arrived T_PAIR after it is resolved
@@ -88,7 +90,7 @@ def is_bad(rec, len_ntsc=1716, len_pal=1728, tol=2):
     return rec.xy_bad != 0 or not (abs(length - len_ntsc) <= tol or abs(length - len_pal) <= tol)
 
 
-def decide_pair(ea, eb, cur, bad_a=False, bad_b=False, blend_q8=38, switch_q8=64):
+def decide_pair(ea, eb, cur, bad_a=False, bad_b=False, blend_q8=38, switch_q8=64, weak_a=False, weak_b=False):
     """(use, new_cur) for a paired line; cur 0 = A, 1 = B."""
     if bad_a and not bad_b:
         return USE_B, 1
@@ -96,6 +98,10 @@ def decide_pair(ea, eb, cur, bad_a=False, bad_b=False, blend_q8=38, switch_q8=64
         return USE_A, 0
     if bad_a and bad_b:
         return (USE_B if cur else USE_A), cur
+    if weak_a and not weak_b:
+        return USE_B, 1
+    if weak_b and not weak_a:
+        return USE_A, 0
     m, d = max(ea, eb), abs(ea - eb)
     if m == 0 or d * 256 < blend_q8 * m:
         return USE_BLEND, cur
@@ -123,11 +129,11 @@ def blend_words(wa, wb):
 
 
 class _Line:
-    __slots__ = ('rec', 't', 'bad', 'fc', 'peer_sick', 'self_well')
+    __slots__ = ('rec', 't', 'bad', 'fc', 'peer_sick', 'self_well', 'weak')
 
-    def __init__(self, rec, t, bad, fc, peer_sick, self_well):
+    def __init__(self, rec, t, bad, fc, peer_sick, self_well, weak=False):
         self.rec, self.t, self.bad, self.fc = rec, t, bad, fc
-        self.peer_sick, self.self_well = peer_sick, self_well
+        self.peer_sick, self.self_well, self.weak = peer_sick, self_well, weak
 
 
 class Mixer:
@@ -136,15 +142,19 @@ class Mixer:
     idx, data)].
 
     ext_bad: per channel either a bool (held for the whole run) or a function t_ns -> bool
-    (decoder status "no lock", sampled when a line arrives). keep_words=False skips `out`.
+    (decoder status "no lock", sampled when a line arrives).
+    ext_weak: the same form (RSSI warning, rssi_adc.v): a weak channel's arriving lines count
+    as bad for its health (sick, self_well) and lose a pair against a good line of a channel
+    that is not weak; the lines themselves are not bad (shown alone, never left out for it). keep_words=False skips `out`.
     omit_bad=False writes lines bad on both receivers like any other (the rule before 2026-10-08).
     `omitted` has one entry per decision: True where a line was left out by that rule.
     """
 
     def __init__(self, t_pair=T_PAIR_CYCLES * 15.4, n_step=8, n_dead=40, ext_bad=(False, False),
-                 keep_words=True, omit_bad=True, **kw):
+                 keep_words=True, omit_bad=True, ext_weak=(False, False), **kw):
         self.t_pair, self.n_step, self.n_dead = t_pair, n_step, n_dead
         self.ext_bad, self.keep_words, self.omit_bad = ext_bad, keep_words, omit_bad
+        self.ext_weak = ext_weak
         self.kw = kw
         self.q = (deque(), deque())
         self.hist = ([], [])          # bad flags of the last 8 arrived lines
@@ -174,8 +184,8 @@ class Mixer:
         self.sick_before = [False, False]
 
     # ---- per-channel bookkeeping at arrival
-    def _ext(self, ch, t):
-        e = self.ext_bad[ch]
+    def _ext(self, ch, t, which=None):
+        e = (which or self.ext_bad)[ch]
         return bool(e(t)) if callable(e) else bool(e)
 
     def _sick(self, ch):
@@ -195,8 +205,9 @@ class Mixer:
         bad = is_bad(rec, **self.kw) or self._ext(ch, t) or not complete
         peer_sick = self.sick_before[1 - ch] if self.pushed[1 - ch] == t else self._sick(1 - ch)
         self.sick_before[ch], self.pushed[ch] = self._sick(ch), t
+        weak = self._ext(ch, t, self.ext_weak)
         h = self.hist[ch]
-        h.append(bad)
+        h.append(bad or weak)                                 # weak RSSI counts against health
         del h[:-8]
         p = self.prev[ch]
         if p is not None and (rec.line_in_field <= p[1] or rec.field != p[0]):
@@ -209,7 +220,7 @@ class Mixer:
             return
         if not complete:
             return
-        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], peer_sick, self._well(ch)))
+        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], peer_sick, self._well(ch), weak))
         self._pairs()
 
     def finish(self, t=float('inf')):
@@ -298,7 +309,8 @@ class Mixer:
 
     def _pair(self):
         a, b = self.q[0][0], self.q[1][0]
-        use, self.cur = decide_pair(a.rec.hf_energy, b.rec.hf_energy, self.cur, a.bad, b.bad)
+        use, self.cur = decide_pair(a.rec.hf_energy, b.rec.hf_energy, self.cur, a.bad, b.bad,
+                                    weak_a=a.weak, weak_b=b.weak)
         own, other = (a, b)[self.cur], 1 - self.cur
         # a current channel with no line in this output field (the other one carried it) is judged
         # on the partner's field counter: both lines carry the same number

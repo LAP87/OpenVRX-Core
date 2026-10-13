@@ -6,14 +6,17 @@
     python gateware/tools/snowlog.py --summary emi.csv
 On Windows the port is COM5 and the like (set up with the `mode` command; not tried on a real port yet).
 
-Line format from the FPGA (puck_ui.v):  S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD T/V o ll
+Line format from the FPGA (puck_ui.v):
+    S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD T/V o ll rrrrr sssss paa pbb ww
 snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), noise A, noise B
 (luma samples outside 16..235 in the last 1024 lines), % of mixer decisions from A / B /
 blended, band+channel, MHz, mode, filter (T=TV, V=VCR), "!" once the mixer has dropped a line since reset
 (else "-"), and per decoder A, B since the previous line: "L" a poll round read the
-"lost lock" bit (88h bit 4), "-" it did not, "?" no whole poll round. Lines from older
-bitstreams (no lost-lock field, no noise values, possibly no "!"/"-") are read too; the
-missing columns stay empty. The Tang Nano 20K's BL616 shows up as two ttyUSB
+"lost lock" bit (88h bit 4), "-" it did not, "?" no whole poll round; then RSSI A and B
+(raw ADS1115 codes, ----- = no reading), calibrated % A and B (--- = not calibrated) and per
+receiver W (weak: the mixer avoids it), L (low, not weak), - or ? (no reading). Lines from
+older bitstreams (no RSSI, no lost-lock field, no noise values, possibly no "!"/"-") are read
+too; the missing columns stay empty. The Tang Nano 20K's BL616 shows up as two ttyUSB
 ports; the UART is usually the second one.
 
 Only compare runs with the same camera scene: the snow value also depends on the
@@ -31,12 +34,31 @@ import time
 from collections import defaultdict
 
 FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
-          'mhz', 'mode', 'filter', 'dropped', 'lost_a', 'lost_b']
+          'mhz', 'mode', 'filter', 'dropped', 'lost_a', 'lost_b',
+          'rssi_a', 'rssi_b', 'rssi_pct_a', 'rssi_pct_b', 'rssi_state_a', 'rssi_state_b']
+
+
+def parse_rssi(tail):
+    """The five RSSI tokens of a line (raw A, raw B, % A, % B, states), or None if damaged."""
+    ra, rb, pa, pb, st = tail
+    raw_ok = lambda s: s == '-----' or (len(s) == 5 and s.isdigit())  # noqa: E731
+    pct_ok = lambda s: s == '---' or (len(s) == 3 and s.isdigit() and int(s) <= 100)  # noqa: E731
+    if not (raw_ok(ra) and raw_ok(rb) and pct_ok(pa) and pct_ok(pb)) or len(st) != 2 or any(c not in 'WL-?' for c in st):
+        return None
+    num = lambda s: None if s.startswith('-') else int(s)  # noqa: E731
+    return {'rssi_a': num(ra), 'rssi_b': num(rb), 'rssi_pct_a': num(pa), 'rssi_pct_b': num(pb),
+            'rssi_state_a': None if st[0] == '?' else st[0], 'rssi_state_b': None if st[1] == '?' else st[1]}
 
 
 def parse(line):
     """A log line as a dict, or None for anything else (also a line damaged on the way)."""
     p = line.split()
+    rssi = None
+    if len(p) == 19:                                   # with the RSSI fields (2026-10-13)
+        rssi = parse_rssi(p[14:])
+        if rssi is None:
+            return None
+        p = p[:14]
     lost = None
     filter_value = None
     noise = None
@@ -91,7 +113,7 @@ def parse(line):
     flag = lambda f, i: None if f is None or f[i] == '?' else int(f[i] == 'L')  # noqa: E731
     drop_token = p[10] if new_filter else p[9] if len(p) == 10 else None
     try:
-        return {'snow_a': num(p[1]), 'snow_b': num(p[2]),
+        rec = {'snow_a': num(p[1]), 'snow_b': num(p[2]),
                 'noise_a': num(noise[0]) if noise else None, 'noise_b': num(noise[1]) if noise else None,
                 'use_a': int(p[3]), 'use_b': int(p[4]), 'use_mix': int(p[5]), 'channel': p[6], 'mhz': int(p[7]),
                 'mode': p[8], 'filter': filter_value,
@@ -99,6 +121,9 @@ def parse(line):
                 'lost_a': flag(lost, 0), 'lost_b': flag(lost, 1)}
     except ValueError:
         return None
+    if rssi is not None:
+        rec.update(rssi)
+    return rec
 
 
 def open_serial(path):

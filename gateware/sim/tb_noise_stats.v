@@ -35,7 +35,7 @@ module tb_noise_stats;
     wire [19:0] noise_a, noise_b;
     wire        nta, ntb;
     mixer2 dut (.a_clk(a_clk), .a_d(a_d), .b_clk(b_clk), .b_d(b_d), .sys_clk(sys_clk), .rst_async(rst),
-                .ext_bad_a(1'b0), .ext_bad_b(1'b0),
+                .ext_bad_a(1'b0), .ext_bad_b(1'b0), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
                 .out_empty(out_empty), .out_data(out_data), .out_pop(!out_empty),
                 .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),

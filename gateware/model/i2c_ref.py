@@ -12,7 +12,8 @@ Rules of the master (i2c_master.v):
   after the first byte that is not acknowledged; a single-byte write sends all its
   bytes. wreq pulses once for each data byte that has a successor, when that byte
   starts on the bus, so not for bytes skipped after a NACK.
-- read: S, dev+W, reg, Sr, dev+R, data with NACK from the master, P.
+- read: S, dev+W, reg, Sr, dev+R, data with NACK from the master, P. With two bytes per read
+  (READ_BYTES = 2) the master ACKs the first and NACKs the second; the value is MSB first.
 Rules of the slave (i2c_slave_model.v): register pointer set by the register byte and
 advanced after every byte written or read (unless auto_inc is off); the data byte
 with index nack_data is not acknowledged and not stored, nor is anything after it
@@ -63,15 +64,21 @@ def write(slave, dev, reg, data, nack_data=-1):
     return ev + ['P'], nack, wreq
 
 
-def read(slave, dev, reg):
-    """(bus events, nack, data) of one register read."""
+def read(slave, dev, reg, n=1):
+    """(bus events, nack, data) of one register read of n bytes (data MSB first)."""
     me = dev == slave.addr
     a = 0 if me else 1
+    data = []
     if me:
         slave.ptr = reg
-        value = slave.regs[slave.ptr]
-        slave._advance()
+        for _ in range(n):
+            data.append(slave.regs[slave.ptr])
+            slave._advance()
     else:
-        value = 0xFF                         # nobody drives SDA
-    ev = ['S', ('B', dev << 1, a), ('B', reg, a), 'S', ('B', dev << 1 | 1, a), ('B', value, 1), 'P']
+        data = [0xFF] * n                    # nobody drives SDA
+    ev = ['S', ('B', dev << 1, a), ('B', reg, a), 'S', ('B', dev << 1 | 1, a)]
+    ev += [('B', b, 1 if k == n - 1 else 0) for k, b in enumerate(data)] + ['P']
+    value = 0
+    for b in data:
+        value = value << 8 | b
     return ev, not me, value

@@ -10,6 +10,8 @@ module tb_mixer;
     parameter real START_A = 2000.0, START_B = 5300.0;
     // decoder status "no lock": high from *_ON to *_OFF (ns). ON < 0: never. OFF <= ON: until the end.
     parameter real EXTA_ON = -1.0, EXTA_OFF = -1.0, EXTB_ON = -1.0, EXTB_OFF = -1.0;
+    // weak RSSI (ext_weak, health only), the same way
+    parameter real WEAKA_ON = -1.0, WEAKA_OFF = -1.0, WEAKB_ON = -1.0, WEAKB_OFF = -1.0;
     parameter POP_DIV = 1;                    // the output is read every POP_DIV-th cycle (back-pressure)
     parameter real TAIL = 300000.0;           // ns to run after both streams end
 
@@ -40,6 +42,16 @@ module tb_mixer;
         if (EXTB_OFF > EXTB_ON) begin #(EXTB_OFF - EXTB_ON) ext_b = 0; end
     end
 
+    reg weak_a = 0, weak_b = 0;
+    initial if (WEAKA_ON >= 0.0) begin
+        #(WEAKA_ON) weak_a = 1;
+        if (WEAKA_OFF > WEAKA_ON) begin #(WEAKA_OFF - WEAKA_ON) weak_a = 0; end
+    end
+    initial if (WEAKB_ON >= 0.0) begin
+        #(WEAKB_ON) weak_b = 1;
+        if (WEAKB_OFF > WEAKB_ON) begin #(WEAKB_OFF - WEAKB_ON) weak_b = 0; end
+    end
+
     integer pc = 0;
     always @(posedge sys_clk) pc <= (pc >= POP_DIV - 1) ? 0 : pc + 1;
 
@@ -50,7 +62,7 @@ module tb_mixer;
     wire        out_pop = !out_empty && pc == 0;
     mixer2 #(.T_PAIR(T_PAIR), .N_STEP(N_STEP), .N_DEAD(N_DEAD)) dut (
                 .a_clk(a_clk), .a_d(a_d), .b_clk(b_clk), .b_d(b_d), .sys_clk(sys_clk), .rst_async(rst),
-                .ext_bad_a(ext_a), .ext_bad_b(ext_b),
+                .ext_bad_a(ext_a), .ext_bad_b(ext_b), .ext_weak_a(weak_a), .ext_weak_b(weak_b),
                 .out_empty(out_empty), .out_data(out_data), .out_pop(out_pop),
                 .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),

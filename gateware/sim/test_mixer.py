@@ -195,6 +195,9 @@ def check(name, a, b, params=None, ev_kw=None, alter=None, **model_kw):
     ext = model_kw.pop('ext', None)
     if ext:
         model_kw['ext_bad'] = ext(ev)
+    weak = model_kw.pop('weak', None)
+    if weak:
+        model_kw['ext_weak'] = weak(ev)
     m = model(ev, **model_kw)
     dec, curs, out, end = run_sim(a, b, HERE / 'build' / name, params, alter)
     assert end is not None, 'simulation did not finish'
@@ -750,6 +753,44 @@ def test_unlocked_decoder_in_step_loses():
     m = check('tb_mixer_extb', a, b, {'EXTB_ON': 0}, ext=lambda ev: (False, True))
     assert all(u == ref.USE_A and p == 0b11 for u, p, *_ in m.trace), {(u, p) for u, p, *_ in m.trace}
     complete(m.trace, 2)
+
+
+def test_weak_rssi_moves_the_mixer_before_the_picture_breaks_up():
+    """A (current) has the cleaner picture and B the noisier one; every line of both is good. From
+    the middle of field 0 to the middle of field 1, A's RSSI is weak while B's is not (rssi_adc.v
+    warns; M6 drives ext_weak_a). From the first pair after the warning the mixer shows B and
+    makes it current, although A's lines are cleaner, and nothing is left out: A's lines are not
+    bad. When the warning ends the cleaner A wins again. Negative control: the same streams
+    without the warning stay on A throughout."""
+    a = Stream(1).field(0, amp=0).field(1, amp=0).field(2, amp=0).done()
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).done()
+    on = RST_NS + START_A + ((VBI + 12) * LINE + 858) * T_A
+    off = on + FIELD * T_A
+    m = check('tb_mixer_weak', a, b, {'WEAKA_ON': on, 'WEAKA_OFF': off}, weak=lambda ev: (window(ev, on, off), False))
+    uses = [u for u, *_ in m.trace]
+    assert set(uses[:12]) == {ref.USE_A} and set(uses[12:LINES + 12]) == {ref.USE_B}, 'B during the warning'
+    assert set(uses[LINES + 12:]) == {ref.USE_A}, 'the cleaner A again when the warning ends'
+    assert not any(m.omitted), 'weak lines are not bad lines: nothing is left out'
+    assert m.curs[11] == 0 and m.curs[12] == 1 and m.cur == 0
+    complete(m.trace, 3)
+    m0 = check('tb_mixer_weak_none', a, b, {})
+    assert set(u for u, *_ in m0.trace) == {ref.USE_A} and cur_changes(m0) == 0
+
+
+def test_weak_rssi_negative_control():
+    """Negative controls: a copy of line_mixer.v without the weak rule stays on the cleaner A (the
+    model takes B), and a copy of mix_chan.v that never marks a line weak does the same. Each
+    disagrees with the model."""
+    a = Stream(1).field(0, amp=0).field(1, amp=0).field(2, amp=0).done()
+    b = Stream(2).field(0, amp=25).field(1, amp=25).field(2, amp=25).done()
+    on = RST_NS + START_A + ((VBI + 12) * LINE + 858) * T_A
+    off = on + FIELD * T_A
+    for name, alter in (('rule', {'line_mixer.v': ("        else if (weaka && !weakb)      begin p_use = 2'b10; p_cur = 1'b1; end",
+                                                   "        else if (1'b0)                 begin p_use = 2'b10; p_cur = 1'b1; end")}),
+                        ('flag', {'mix_chan.v': ("            m_weak[wslot]  <= weak_s[1];", "            m_weak[wslot]  <= 1'b0;")})):
+        with pytest.raises(AssertionError, match='decision'):
+            check(f'tb_mixer_weak_no_{name}', a, b, {'WEAKA_ON': on, 'WEAKA_OFF': off},
+                  weak=lambda ev: (window(ev, on, off), False), alter=alter)
 
 
 def test_decoder_loses_lock_and_recovers():

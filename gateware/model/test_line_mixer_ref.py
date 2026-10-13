@@ -50,6 +50,12 @@ def test_bad_line_loses():
     assert ref.decide_pair(10, 99999, 1, bad_a=False, bad_b=True) == (ref.USE_A, 0)
     assert ref.decide_pair(10, 99999, 0, bad_a=True, bad_b=False) == (ref.USE_B, 1)
     assert ref.decide_pair(10, 99999, 1, bad_a=True, bad_b=True) == (ref.USE_B, 1)
+    # weak RSSI: between two good lines the weak receiver loses, whatever the snow says; a bad line still loses
+    assert ref.decide_pair(10, 99999, 0, weak_a=True) == (ref.USE_B, 1)
+    assert ref.decide_pair(99999, 10, 1, weak_b=True) == (ref.USE_A, 0)
+    assert ref.decide_pair(10, 10, 0, weak_a=True) == (ref.USE_B, 1), 'no blend with a weak receiver'
+    assert ref.decide_pair(10, 10, 0, weak_a=True, weak_b=True) == (ref.USE_BLEND, 0), 'both weak: as before'
+    assert ref.decide_pair(10, 99999, 0, bad_b=True, weak_a=True) == (ref.USE_A, 0), 'weak but good beats bad'
 
 
 # ---- the whole mixer on synthetic line sequences

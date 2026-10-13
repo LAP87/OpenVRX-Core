@@ -15,6 +15,7 @@ module mixer2 #(
     input  wire        sys_clk,
     input  wire        rst_async,
     input  wire        ext_bad_a, ext_bad_b,  // any domain: decoder status says no lock
+    input  wire        ext_weak_a, ext_weak_b,  // any domain: weak RSSI, counts against health only (mix_chan.v)
 
     output wire        out_empty,
     output wire [51:0] out_data,
@@ -67,7 +68,7 @@ module mixer2 #(
         .rclk(sys_clk), .rrst(srst), .rd_en(fb_pop), .rd_data(fb_data), .empty(fb_empty), .rd_level(fb_rl));
 
     localparam AGE_W = $clog2(8 * T_PAIR);
-    wire        pop_a, pop_b, ha_f, hb_f, ha_bad, hb_bad, ov_a, ov_b;
+    wire        pop_a, pop_b, ha_f, hb_f, ha_bad, hb_bad, ha_weak, hb_weak, ov_a, ov_b;
     wire        sick_a, sick_b, arr_a, arr_b;
     wire        ha_psick, hb_psick, ha_swell, hb_swell, ha_near, hb_near;
     wire [8:0]  rd_idx;
@@ -78,18 +79,18 @@ module mixer2 #(
     wire [1:0]  ha_fc, hb_fc;
     wire [AGE_W-1:0] ha_age, hb_age, last_a, last_b;
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_a (
-        .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_a), .in_empty(fa_empty), .in_data(fa_data), .in_pop(fa_pop),
+        .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_a), .ext_weak(ext_weak_a), .in_empty(fa_empty), .in_data(fa_data), .in_pop(fa_pop),
         .pop_line(pop_a), .rd_idx(rd_idx), .rd_data(rd_a),
         .peer_sick(sick_b), .peer_arrived(arr_b), .peer_last_age(last_b),
         .sick(sick_a), .arrived(arr_a), .last_age(last_a), .count(cnt_a),
-        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .head_fc(ha_fc), .head_age(ha_age),
+        .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .head_weak(ha_weak), .head_fc(ha_fc), .head_age(ha_age),
         .head_peer_sick(ha_psick), .head_self_well(ha_swell), .head_near(ha_near), .alive(alive_a), .overflow(ov_a));
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_b (
-        .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
+        .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .ext_weak(ext_weak_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
         .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b),
         .peer_sick(sick_a), .peer_arrived(arr_a), .peer_last_age(last_a),
         .sick(sick_b), .arrived(arr_b), .last_age(last_b), .count(cnt_b),
-        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .head_fc(hb_fc), .head_age(hb_age),
+        .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .head_weak(hb_weak), .head_fc(hb_fc), .head_age(hb_age),
         .head_peer_sick(hb_psick), .head_self_well(hb_swell), .head_near(hb_near), .alive(alive_b), .overflow(ov_b));
     assign overflow = ov_a | ov_b;
 
@@ -100,7 +101,7 @@ module mixer2 #(
     line_mixer #(.BLEND_Q8(BLEND_Q8), .SWITCH_Q8(SWITCH_Q8), .T_PAIR(T_PAIR), .N_STEP(N_STEP), .N_DEAD(N_DEAD), .AGE_W(AGE_W)) mix (
         .clk(sys_clk), .rst(srst), .pop_a(pop_a), .pop_b(pop_b), .rd_idx(rd_idx), .rd_a(rd_a), .rd_b(rd_b),
         .cnt_a(cnt_a), .cnt_b(cnt_b), .fa(ha_f), .fb(hb_f), .la(ha_l), .lb(hb_l), .hfa(ha_hf), .hfb(hb_hf),
-        .bada(ha_bad), .badb(hb_bad), .fca(ha_fc), .fcb(hb_fc), .age_a(ha_age), .age_b(hb_age),
+        .bada(ha_bad), .badb(hb_bad), .weaka(ha_weak), .weakb(hb_weak), .fca(ha_fc), .fcb(hb_fc), .age_a(ha_age), .age_b(hb_age),
         .near_a(ha_near), .near_b(hb_near), .psick_a(ha_psick), .psick_b(hb_psick), .swell_a(ha_swell), .swell_b(hb_swell),
         .o_we(o_we), .o_data(o_data), .o_room(o_wl < 6'd28),
         .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop), .dec_field(dec_field), .dec_line(dec_line),

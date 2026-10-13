@@ -78,7 +78,7 @@ module tb_chain;
     wire [9:0]  dec_line;
     mixer2 #(.T_PAIR(T_PAIR), .N_STEP(N_STEP), .N_DEAD(N_DEAD)) mix (
         .a_clk(a_clk), .a_d(a_d), .b_clk(b_clk), .b_d(b_d), .sys_clk(sd_clk), .rst_async(rst),
-        .ext_bad_a(ext_a), .ext_bad_b(ext_b),
+        .ext_bad_a(ext_a), .ext_bad_b(ext_b), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
         .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
         .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
         .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),

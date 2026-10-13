@@ -11,6 +11,7 @@
 module tb_i2c_master;
     parameter AUTO_INC = 1;               // 0: negative control, a slave that does not auto-increment
     parameter STRETCH_MAX = 200;          // clocks the master waits for SCL before it gives up
+    parameter READ_BYTES = 1;             // 2: every read takes two bytes
     localparam DIV = 4;
 
     reg clk = 0, rst = 1;
@@ -20,11 +21,11 @@ module tb_i2c_master;
     reg  [6:0] dev = 0;
     reg  [7:0] addr = 0, wdata = 0, wextra = 0;
     wire       wreq, busy, done, nack, stuck, scl_low, m_sda_low, s_sda_low;
-    wire [7:0] rdata;
+    wire [8*READ_BYTES-1:0] rdata;
     reg        hold = 0;                  // a slave holds SCL low
     wire scl = (scl_low | hold) ? 1'b0 : 1'b1;
     wire sda = (m_sda_low | s_sda_low) ? 1'b0 : 1'b1;
-    i2c_master #(.DIV(DIV), .STRETCH_MAX(STRETCH_MAX)) dut (.clk(clk), .rst(rst), .start(start), .rw(rw),
+    i2c_master #(.DIV(DIV), .STRETCH_MAX(STRETCH_MAX), .READ_BYTES(READ_BYTES)) dut (.clk(clk), .rst(rst), .start(start), .rw(rw),
         .dev(dev), .addr(addr), .wdata(wdata), .wextra(wextra), .wreq(wreq), .busy(busy), .done(done), .nack(nack),
         .stuck(stuck), .rdata(rdata),
         .scl_low(scl_low), .sda_low(m_sda_low), .scl_in(scl), .sda_in(sda));
@@ -74,7 +75,7 @@ module tb_i2c_master;
             @(posedge clk); start <= 1'b0;
             @(posedge done);
             @(posedge clk);
-            $display("RD %02x", rdata);
+            $display("RD %0x", rdata);
             $display("DONE %0d 0 %0d", nack, stuck);
             repeat (20) @(posedge clk);
         end

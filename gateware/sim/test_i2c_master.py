@@ -10,6 +10,9 @@ the register pointer wraps); a slave holding SCL low shorter than STRETCH_MAX (n
 changes), and for good (the master gives up after STRETCH_MAX clocks with nack and stuck,
 having released both lines, and the next transactions work).
 
+The same script with READ_BYTES = 2 (two-byte reads, ADS1115 conversion register): the
+master ACKs the first byte and NACKs the second, and rdata is both bytes, MSB first.
+
 Negative controls: a slave whose register pointer does not advance, a copy of i2c_master.v
 that ignores a NACK in a multi-byte write, and one that never gives up on a held SCL must
 each disagree with the model.
@@ -33,6 +36,8 @@ STRETCH_MAX = 200                     # tb_i2c_master.v
 MUTANTS = {
     'master_ignores_nack': ("if (op_multi && nack) tk <= 3'd4;", "if (1'b0) tk <= 3'd4;"),
     'master_never_gives_up': ("if (stretch && st_n == STRETCH_MAX - 1) begin", "if (1'b0) begin"),
+    'master_nacks_every_read_byte': ("if (bitn == 8 && tok == T_READ && READ_BYTES > 1 && tk == 3'd5) sda_low <= 1'b1;",
+                                     "if (1'b0) sda_low <= 1'b1;"),
 }
 
 
@@ -58,7 +63,7 @@ SCRIPT = [
 ]
 
 
-def model(auto_inc=True):
+def model(auto_inc=True, read_bytes=1):
     s = i2c_ref.Slave(0x5C, auto_inc)
     out = []
     for name, trs in SCRIPT:
@@ -68,7 +73,7 @@ def model(auto_inc=True):
                 ev, nack, wreq = i2c_ref.write(s, t[1], t[2], t[3], t[4])
                 res.append((ev, int(nack), wreq, None, 0))
             elif t[0] == 'r':
-                ev, nack, value = i2c_ref.read(s, t[1], t[2])
+                ev, nack, value = i2c_ref.read(s, t[1], t[2], read_bytes)
                 res.append((ev, int(nack), 0, value, 0))
             else:
                 # held during the device address: START, no whole byte, no STOP; nothing stored
@@ -77,12 +82,12 @@ def model(auto_inc=True):
     return out, s.writes
 
 
-def run(auto_inc=1, mutant=None):
+def run(auto_inc=1, mutant=None, read_bytes=1):
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_i2c_master_{auto_inc}_{mutant or "rtl"}'
+    work = HERE / 'build' / f'tb_i2c_master_{auto_inc}_{mutant or "rtl"}_{read_bytes}'
     work.mkdir(parents=True, exist_ok=True)
     src = (GW / 'rtl' / 'i2c_master.v').read_text()
     if mutant:
@@ -92,6 +97,7 @@ def run(auto_inc=1, mutant=None):
     (work / 'i2c_master.v').write_text(src)
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_i2c_master',
                     f'-Ptb_i2c_master.AUTO_INC={auto_inc}', f'-Ptb_i2c_master.STRETCH_MAX={STRETCH_MAX}',
+                    f'-Ptb_i2c_master.READ_BYTES={read_bytes}',
                     str(work / 'i2c_master.v'), str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_i2c_master.v')],
                    cwd=work, env=env, check=True)
     log = subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True,
@@ -168,3 +174,23 @@ def test_i2c_master_negative_control(case):
     else:
         assert dict(got)['stuck'] == [('HUNG',)], dict(got)['stuck']
         assert dict(got)['stretch'] == dict(want)['stretch'], 'a short stretch does not depend on the time-out'
+
+
+def test_i2c_master_two_byte_reads_match_model():
+    """READ_BYTES = 2: every read in the script takes two bytes, the first ACKed by the master."""
+    got, writes, _ = run(read_bytes=2)
+    want, want_writes = model(read_bytes=2)
+    assert got == want and writes == want_writes
+    by = dict(want)
+    assert by['read'][0][3] >> 8 == 0xA5, 'MSB first: register 10h, then 11h'
+    ev = by['read'][0][0]
+    assert [e[2] for e in ev if isinstance(e, tuple)][-2:] == [0, 1], 'ACK on the first byte, NACK on the last'
+
+
+def test_i2c_master_two_byte_read_negative_control():
+    """A master that NACKs every read byte ends the read after one byte: the slave stops sending,
+    so the second byte reads FFh and the bus differs from the model."""
+    got, _, _ = run(mutant='master_nacks_every_read_byte', read_bytes=2)
+    want, _ = model(read_bytes=2)
+    assert dict(got)['read'] != dict(want)['read']
+    assert dict(got)['one'] == dict(want)['one'], 'writes do not depend on the read ACK'

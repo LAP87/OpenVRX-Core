@@ -61,6 +61,22 @@ def test_parse():
     assert indistinguishable is not None and indistinguishable['filter'] is None
 
 
+def test_parse_rssi():
+    """Lines with the RSSI fields (puck_ui.v, 85 bytes): raw codes, calibrated %, states."""
+    base = 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T - --'
+    r = snowlog.parse(base + ' 12000 04567 075 003 -W')
+    assert (r['rssi_a'], r['rssi_b'], r['rssi_pct_a'], r['rssi_pct_b'], r['rssi_state_a'], r['rssi_state_b']) == (
+        12000, 4567, 75, 3, '-', 'W')
+    assert (r['filter'], r['lost_a'], r['snow_a']) == ('T', 0, 12345)
+    r = snowlog.parse(base + ' ----- 04567 --- 003 ?L')
+    assert (r['rssi_a'], r['rssi_pct_a'], r['rssi_state_a'], r['rssi_state_b']) == (None, None, None, 'L')
+    for damaged in (' 1200 04567 075 003 -W', ' 12000 04567 075 003 -X', ' 12000 04567 175 003 -W',
+                    ' 12000 04567 075 003 W', ' 12000 0456? 075 003 -W'):
+        assert snowlog.parse(base + damaged) is None, damaged
+    assert snowlog.parse('S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003') is None
+    assert set(snowlog.FIELDS) >= set(r), 'every parsed key has a CSV column'
+
+
 def fake_port(monkeypatch, data):
     monkeypatch.setattr(snowlog, 'open_serial', lambda path: 99)
     monkeypatch.setattr(snowlog.os, 'read', lambda fd, n: data.pop(0) if data else b'')

@@ -6,6 +6,11 @@
 // A line counts as bad when a timing code could not be decoded or its length
 // (EAV to EAV) is not NTSC or PAL within LEN_TOL bytes, or while ext_bad is
 // set (e.g. the decoder reports no horizontal/vertical lock).
+// While ext_weak is set (M6: rssi_adc.v warns that this receiver's RSSI is low and the
+// other's is not) every arriving line is `weak`: it counts as bad for this channel's health
+// (`sick`, `self_well`), and line_mixer.v prefers the other receiver's good line in a pair,
+// but the line itself is not bad: it is shown when it is the better or the only copy and is
+// never left out for it. The mixer then leaves this receiver before its picture breaks up.
 //
 // A line is complete when its words 0..359 arrived in order since the last
 // marker (a late SAV or a short active part gives fewer). An incomplete line is
@@ -35,6 +40,7 @@ module mix_chan #(
     input  wire        clk,
     input  wire        rst,
     input  wire        ext_bad,           // async, slow (decoder status)
+    input  wire        ext_weak,          // async, slow (RSSI warning): health only
     input  wire        in_empty,
     input  wire [52:0] in_data,
     output wire        in_pop,
@@ -55,6 +61,7 @@ module mix_chan #(
     output wire [9:0]  head_line,
     output wire [19:0] head_hf,
     output wire        head_bad,
+    output wire        head_weak,
     output wire [1:0]  head_fc,
     output wire [AGE_W-1:0] head_age,
     output wire        head_peer_sick,
@@ -78,8 +85,8 @@ module mix_chan #(
     function in_tol(input [11:0] v, input [11:0] nominal);
         in_tol = (v + LEN_TOL >= nominal) && (v <= nominal + LEN_TOL);
     endfunction
-    reg [1:0] ext_s;
-    always @(posedge clk) ext_s <= {ext_s[0], ext_bad};
+    reg [1:0] ext_s, weak_s;
+    always @(posedge clk) begin ext_s <= {ext_s[0], ext_bad}; weak_s <= {weak_s[0], ext_weak}; end
 
     // completeness: word indices 0, 1, .. 359 in order since the last marker
     reg  [8:0] w_next;                   // index the next word must carry
@@ -101,6 +108,7 @@ module mix_chan #(
     reg [9:0]           m_line  [0:3];
     reg [19:0]          m_hf    [0:3];
     reg                 m_bad   [0:3];
+    reg                 m_weak  [0:3];
     reg [1:0]           m_fc    [0:3];
     reg                 m_psick [0:3];
     reg                 m_swell [0:3];
@@ -110,6 +118,7 @@ module mix_chan #(
     assign head_line      = m_line[rslot];
     assign head_hf        = m_hf[rslot];
     assign head_bad       = m_bad[rslot];
+    assign head_weak      = m_weak[rslot];
     assign head_fc        = m_fc[rslot];
     assign head_age       = m_age[rslot];
     assign head_peer_sick = m_psick[rslot];
@@ -128,7 +137,7 @@ module mix_chan #(
     wire [1:0]  fc_n      = fc + {1'b0, new_field};
     reg  [7:0]  hist;                    // bad flags of the last 8 lines, newest in bit 0
     reg  [3:0]  hcnt;                    // lines seen, saturates at 8
-    wire [7:0]  hist_n    = {hist[6:0], bad_in};
+    wire [7:0]  hist_n    = {hist[6:0], bad_in | weak_s[1]};   // health: bad, or weak (ext_weak)
     wire        hfull_n   = (hcnt >= 4'd7);
     wire        well_n    = hfull_n && (hist_n == 8'h00);
     wire        sick_n    = hfull_n && (hist_n == 8'hFF);
@@ -162,6 +171,7 @@ module mix_chan #(
             m_line[wslot]  <= m_ln;
             m_hf[wslot]    <= in_data[40:21];
             m_bad[wslot]   <= bad_in;
+            m_weak[wslot]  <= weak_s[1];
             m_fc[wslot]    <= fc_n;
             m_psick[wslot] <= peer_sick;
             m_swell[wslot] <= well_n;
