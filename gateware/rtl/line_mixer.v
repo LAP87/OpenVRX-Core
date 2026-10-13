@@ -6,6 +6,8 @@
 // whose line has less high-frequency energy (snow), switch only when the other
 // is clearly better (hysteresis), average both when they are about equally
 // clean. A bad line (sync codes, length, decoder unlocked) loses against a good one.
+// Of two good lines, one from a weak receiver (RSSI warning, mix_chan.v ext_weak) loses
+// against one from a receiver that is not weak: no blend, and that receiver becomes current.
 //
 // Lone lines: a head whose partner has not arrived after T_PAIR cycles is
 // resolved alone, oldest first. It is shown if it comes from the current
@@ -57,6 +59,7 @@ module line_mixer #(
     input  wire [9:0]  la, lb,
     input  wire [19:0] hfa, hfb,
     input  wire        bada, badb,
+    input  wire        weaka, weakb,      // head line arrived while its receiver's RSSI warned
     input  wire [1:0]  fca, fcb,          // per-channel field counters of the head lines
     input  wire [AGE_W-1:0] age_a, age_b, // cycles since the head line was stored (saturating)
     input  wire        near_a, near_b,    // head line: a line of the other channel arrived within T_PAIR of it
@@ -130,6 +133,8 @@ module line_mixer #(
         if (bada && !badb)             begin p_use = 2'b10; p_cur = 1'b1; end
         else if (badb && !bada)        begin p_use = 2'b01; p_cur = 1'b0; end
         else if (bada && badb)         p_use = cur ? 2'b10 : 2'b01;
+        else if (weaka && !weakb)      begin p_use = 2'b10; p_cur = 1'b1; end
+        else if (weakb && !weaka)      begin p_use = 2'b01; p_cur = 1'b0; end
         else if (blend)                p_use = 2'b11;
         else if (cur == 1'b0 && to_b)  begin p_use = 2'b10; p_cur = 1'b1; end
         else if (cur == 1'b1 && to_a)  begin p_use = 2'b01; p_cur = 1'b0; end

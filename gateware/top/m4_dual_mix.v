@@ -84,7 +84,7 @@ module m4_dual_mix #(
     wire nolock_a = st_valid[0] && !(st0[1] && st0[2]);
     wire nolock_b = st_valid[1] && !(st1[1] && st1[2]);
     mixer2 mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
-                .ext_bad_a(nolock_a), .ext_bad_b(nolock_b),
+                .ext_bad_a(nolock_a), .ext_bad_b(nolock_b), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
                 .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
                 .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),
