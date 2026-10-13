@@ -11,7 +11,8 @@
 // Shared bus: before each transfer `hold_other` is raised; the transfer starts
 // once `other_active` (the other master is mid-transaction) has been low for two
 // clocks, and hold is dropped for a few clocks after each byte so the other
-// master gets its turn. Both masters must run on the same clock.
+// master gets its turn. Both masters must run on the same clock. `active` lets a third
+// master (rssi_adc.v in M6) wait for this one.
 `default_nettype none
 module ssd1306_text #(
     parameter CLK_HZ = 27_000_000,
@@ -29,7 +30,8 @@ module ssd1306_text #(
     output reg  [4:0] text_col,
     input  wire [6:0] text_char,
     output reg        frame_done,         // pulse after each full refresh
-    output reg        nack_error          // sticky: display did not acknowledge
+    output reg        nack_error,         // sticky: display did not acknowledge
+    output wire       active              // a transfer is starting or running (other masters wait)
 );
     `include "font5x7.vh"
     localparam MS = CLK_HZ / 1000;
@@ -64,6 +66,8 @@ module ssd1306_text #(
         .wextra(8'd0), .wreq(),                                   // single-byte writes only
         .busy(busy), .done(done), .nack(nack), .rdata(rdata),
         .scl_low(scl_low), .sda_low(sda_low), .scl_in(scl_in), .sda_in(sda_in));
+
+    assign active = start | busy;
 
     localparam S_POWER = 3'd0, S_NEXT = 3'd1, S_FONT = 3'd2, S_REQ = 3'd3, S_GO = 3'd4, S_WAIT = 3'd5, S_GAP = 3'd6;
     reg [2:0]  st;

@@ -96,7 +96,7 @@ module i2c_slave_model #(
             end
         end else if (bitc == 9) begin                       // ACK slot over
             bitc = 0; sda_low = 0;
-            if (reading && phase > 1) send = master_ack;
+            if (reading && phase > 1) send = master_ack && me;   // only the addressed target goes on sending
             if (reading) phase = 2;
             if (reading && send) begin
                 sh = regs[ix];

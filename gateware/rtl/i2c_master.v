@@ -3,6 +3,8 @@
 //   write with wextra = n > 0: S, dev+W, reg, data 0, data 1 .. data n, P
 //          (the slave's register pointer auto-increments)
 //   read:  S, dev+W, reg, Sr, dev+R, data (NACK), P
+//   read with READ_BYTES = 2: S, dev+W, reg, Sr, dev+R, data 0 (ACK), data 1 (NACK), P;
+//          rdata = {data 0, data 1} (ADS1115 conversion register, MSB first)
 // Open drain: *_low = 1 pulls the line low, 0 releases it (top level does the
 // tristate). Waits while a slave stretches SCL. ~100 kHz with DIV = clk/400k.
 //
@@ -23,7 +25,8 @@
 module i2c_master #(
     parameter DIV = 68,                   // clock cycles per quarter bit (27 MHz / 68 / 4 = 99 kHz)
     parameter LEN_W = 8,                  // width of wextra: up to 2^LEN_W data bytes per write
-    parameter STRETCH_MAX = 270_000       // 10 ms at 27 MHz
+    parameter STRETCH_MAX = 270_000,      // 10 ms at 27 MHz
+    parameter READ_BYTES = 1              // 1 or 2 data bytes per read; the master ACKs all but the last
 ) (
     input  wire       clk,
     input  wire       rst,
@@ -38,7 +41,7 @@ module i2c_master #(
     output reg        done,               // pulse at the end of a transaction
     output reg        nack,               // with done: some byte was not acknowledged
     output reg        stuck,              // with done: SCL was held low longer than STRETCH_MAX
-    output reg  [7:0] rdata,
+    output reg  [8*READ_BYTES-1:0] rdata,
     output reg        scl_low,
     output reg        sda_low,
     input  wire       scl_in,
@@ -71,6 +74,7 @@ module i2c_master #(
             3'd3: tok = T_RSTART;
             3'd4: begin tok = T_BYTE; tok_byte = {op_dev, 1'b1}; end
             3'd5: tok = T_READ;
+            3'd6: if (READ_BYTES > 1) tok = T_READ; else begin tok = T_STOP; tok_last = 1'b1; end
             default: begin tok = T_STOP; tok_last = 1'b1; end
         endcase
     end
@@ -128,8 +132,10 @@ module i2c_master #(
                     2'd0: begin
                         if (bitn == 0) sh <= tok_byte;
                         if (bitn == 0 && is_data && rem != {LEN_W{1'b0}}) wreq <= 1'b1;
-                        // ACK slot and read bits: release SDA (the master NACKs its single read byte)
-                        if (bitn == 8 || tok == T_READ) sda_low <= 1'b0;
+                        // ACK slot and read bits: release SDA (the master NACKs its last read byte),
+                        // except the ACK slot of a read byte that has a successor: ACK it
+                        if (bitn == 8 && tok == T_READ && READ_BYTES > 1 && tk == 3'd5) sda_low <= 1'b1;
+                        else if (bitn == 8 || tok == T_READ) sda_low <= 1'b0;
                         else sda_low <= ~((bitn == 0) ? tok_byte[7] : sh[7]);
                     end
                     2'd1: scl_low <= 1'b0;
@@ -137,7 +143,7 @@ module i2c_master #(
                         if (bitn == 8) begin
                             if (tok == T_BYTE && sda_s[1]) nack <= 1'b1;
                         end else begin
-                            if (tok == T_READ) rdata <= {rdata[6:0], sda_s[1]};
+                            if (tok == T_READ) rdata <= {rdata[8*READ_BYTES-2:0], sda_s[1]};
                             sh <= {sh[6:0], 1'b0};
                         end
                     end
