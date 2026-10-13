@@ -140,27 +140,45 @@ def test_puck_ui():
     assert res['filter_pulses'] == '2' and res['filter_width_errors'] == '0'
     assert res['final_filter_vcr'] == '0'
 
-    s3 = screen_before(ev, 'MARK_END')
+    s3 = screen_before(ev, 'relock')
     assert s3 == ['>METER   A6  5765    ', 'A  12345 ########    ', 'B   2345 ######      ',
                   ' USE A 40 B 34 M 25  '], s3
+    # RSSI page: raw codes, calibrated %, LOW/WEAK flags, CAL field
+    s_rssi = screen_before(ev, 'rssi')
+    assert s_rssi == ['>RSSI    A6  5765    ', 'A 12000  75          ', 'B  4567   3  LOW WEAK',
+                      ' CAL OFF  A OK  B OK '], s_rssi
+    s_sel = screen_before(ev, 'cal_selected')
+    assert s_sel[0] == ' RSSI    A6  5765    ' and s_sel[3] == '>CAL OFF  A OK  B OK ', s_sel
+    assert screen_before(ev, 'cal_on')[3] == '>CAL ON   A OK  B OK '
+    assert re.search(r'MARK rssi page=(\d) cal=(\d)', log).groups() == ('2', '0')
+    assert re.search(r'MARK cal_selected field=(\d)', log)[1] == '6'
+    assert re.search(r'MARK cal_on cal=(\d)', log)[1] == '1'
+    assert re.search(r'MARK cal_off cal=(\d)', log)[1] == '0'
+    assert re.search(r'MARK wrapped field=(\d) cal=(\d)', log).groups() == ('0', '1')
+    assert re.search(r'MARK left page=(\d) cal=(\d)', log).groups() == ('0', '0'), 'leaving the page ends CAL'
+    assert screen_before(ev, 'MARK_END')[0] == ' BAND A   CH 6  5765 '
 
     # UART log: fixed-width lines, the last one reflects the final state
     text = ''.join(chr(int(h, 16)) for h in re.findall(r'^U (\w\w)$', log, re.M))
     lines = [l for l in text.split('\r\n') if l]
-    assert lines and all(len(l) == 60 for l in lines), lines[:3]
+    assert lines and all(len(l) == 83 for l in lines), lines[:3]
+    assert all(l[60:] == ' 12000 04567 075 003 -W' for l in lines), lines[:3]
     assert all(l[50:53] in ('MIX', 'A  ', 'B  ') and l[53] == ' ' and l[54] in 'TV'
                and l[55] == ' ' and l[56] in '-!' and l[57] == ' '
                and len(l[58:60]) == 2 and all(c in '-L?' for c in l[58:60]) for l in lines), lines[:3]
     assert any(l[54] == 'T' for l in lines) and any(l[54] == 'V' for l in lines), lines[:5]
-    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T - --' in lines, lines[:5]
+    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003 -W' in lines, lines[:5]
     # the mixer dropped a line; decoder B has had no whole poll round since "unlock" (its stale bit 4 is ignored)
-    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   T ! -?', lines[-3:]
+    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   T ! -? 12000 04567 075 003 -W', lines[-3:]
     # decoder A read 88h bit 4 ("lost lock") in one poll round: exactly one line says so
-    lost = [l for l in lines if l[-2] == 'L']
-    assert len(lost) == 1 and lost[0].endswith(' L-'), [l[-4:] for l in lines]
-    assert all(l[-1] in '-?' for l in lines)
+    lost = [l for l in lines if l[58] == 'L']
+    assert len(lost) == 1 and lost[0][57:60] == ' L-', [l[56:60] for l in lines]
+    assert all(l[59] in '-?' for l in lines)
     # OSD: shown after reset, hidden after OSD_MS, back on a button press, held on the meter page
     osd = [(int(t), int(v)) for t, v in re.findall(r'^OSD (\d+) (\d)$', log, re.M)]
     vals = [v for _, v in osd]
     assert vals[:2] == [1, 0] or vals[:3] == [0, 1, 0], osd[:4]
-    assert vals[-1] == 1
+    # held on the meter page (no button between unlock and relock), hidden again on the main page at the end
+    before = [v for tt, v in osd if tt <= t_unlock]
+    assert before[-1] == 1 and not [tt for tt, _ in osd if t_unlock < tt <= t_relock], osd
+    assert vals[-1] == 0

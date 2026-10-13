@@ -1,7 +1,9 @@
 // Puck prototype UI: two buttons, 4 x 21 character OLED text, RX5808 tuning.
 //
 //   OK   (short press) -> select the next field: band, channel, mode, latency, filter, page
-//   NEXT (short press) -> step the selected field (filter: TV/VCR; page: main <-> meter)
+//                         (and CAL on the RSSI page)
+//   NEXT (short press) -> step the selected field (filter: TV/VCR; page: main -> meter -> RSSI;
+//                         CAL: calibration on/off)
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
 // register from vtx_channels.vh. The first write comes 0.5 s after reset, and
@@ -24,6 +26,15 @@
 //   A  12345 #######          mean line HF energy (snow) of receiver A over 1024 lines,
 //   B   2345 ####             bar = log2 (one block per doubling); "  ----" = no lines
 //    USE A 40 B 35 M 25       % of the last 1024 mixer decisions: A, B, blend
+//
+// RSSI page (rssi_adc.v; values of the last round, "-----" without a reading):
+//   >RSSI    F4  5800
+//   A 12345  45               raw code, calibrated % ("---" uncalibrated), LOW (below the
+//   B  4567   3  LOW WEAK     threshold N rounds in a row) and WEAK (the mixer avoids it);
+//                             the font has no % sign
+//   >CAL OFF  A OK  B --      calibration: NEXT turns it on, move the transmitter far and
+//                             near (or tune away and back), NEXT again; OK = range accepted.
+//                             Leaving the page ends a calibration.
 `default_nettype none
 module puck_ui #(
     parameter CLK_HZ = 27_000_000,
@@ -55,6 +66,11 @@ module puck_ui #(
     // noise meter (noise_stats.v, same domain and handshake): luma samples outside 16..235 per 1024 lines
     input  wire [19:0] noise_a, noise_b,
     input  wire        noise_toggle_a, noise_toggle_b,
+    // RSSI (rssi_adc.v, this clock domain, stable between its `done` pulses)
+    input  wire [15:0] rssi_a, rssi_b,
+    input  wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn,
+    input  wire [6:0]  rssi_pct_a, rssi_pct_b,
+    output reg         rssi_cal,          // calibration mode (level), CAL field on the RSSI page
     // mixer control
     output wire [1:0]  force_bad,         // [0] mark A bad, [1] mark B bad
     // RX5808
@@ -76,8 +92,8 @@ module puck_ui #(
     output reg  [2:0]  band,
     output reg  [2:0]  ch,
     output reg  [1:0]  mode,              // 0 MIX, 1 A, 2 B
-    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 page
-    output reg         page,              // 0 main, 1 meter
+    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 page, 6 CAL
+    output reg  [1:0]  page,              // 0 main, 1 meter, 2 RSSI
     output reg         low_lat,           // 1 = low-latency video (no field buffer)
     output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
     output reg         filter_changed     // one-clock pulse only for NEXT on the filter field
@@ -138,18 +154,20 @@ module puck_ui #(
 
     always @(posedge clk) begin
         filter_changed <= 1'b0;
-        if (ev_ok) field <= (field == 3'd5) ? 3'd0 : field + 1'b1;
+        if (ev_ok) field <= (field == ((page == 2'd2) ? 3'd6 : 3'd5)) ? 3'd0 : field + 1'b1;
         if (ev_next) case (field)
             3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
             3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
             3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
             3'd3: low_lat <= ~low_lat;
             3'd4: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
-            3'd5: page <= ~page;
+            3'd5: page <= (page == 2'd2) ? 2'd0 : page + 1'b1;
+            3'd6: rssi_cal <= ~rssi_cal;
             default: page <= page;
         endcase
+        if (page != 2'd2) rssi_cal <= 1'b0;                // leaving the RSSI page ends a calibration
         if (rst) begin
-            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 1'b0;
+            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 2'd0; rssi_cal <= 1'b0;
             low_lat <= DEF_LOW_LAT[0];
             filter_vcr <= 1'b0; filter_changed <= 1'b0;
         end
@@ -199,16 +217,19 @@ module puck_ui #(
         begin t = {7'd0, c} * 18'd100; pct = t[16:10]; end
     endfunction
 
-    reg  [2:0]  conv_i;
+    reg  [3:0]  conv_i;
     reg         conv_start;
     wire        conv_busy, conv_done;
     wire [23:0] conv_bcd;
     reg  [23:0] bcd_a, bcd_b, bcd_na, bcd_nb;
-    reg  [11:0] bcd_ua, bcd_ub, bcd_um;
+    reg  [11:0] bcd_ua, bcd_ub, bcd_um, bcd_pa, bcd_pb;
+    reg  [23:0] bcd_ra, bcd_rb;
     reg  [19:0] conv_in;
     always @* case (conv_i)
-        3'd0: conv_in = va; 3'd1: conv_in = vb; 3'd2: conv_in = pct(ua); 3'd3: conv_in = pct(ub);
-        3'd4: conv_in = pct(um); 3'd5: conv_in = na; default: conv_in = nb;
+        4'd0: conv_in = va; 4'd1: conv_in = vb; 4'd2: conv_in = pct(ua); 4'd3: conv_in = pct(ub);
+        4'd4: conv_in = pct(um); 4'd5: conv_in = na; 4'd6: conv_in = nb;
+        4'd7: conv_in = {4'd0, rssi_a}; 4'd8: conv_in = {4'd0, rssi_b};
+        4'd9: conv_in = {13'd0, rssi_pct_a}; default: conv_in = {13'd0, rssi_pct_b};
     endcase
     bin2bcd #(.W(20), .D(6)) conv (.clk(clk), .start(conv_start), .bin(conv_in), .busy(conv_busy),
                                    .done(conv_done), .bcd(conv_bcd));
@@ -217,14 +238,17 @@ module puck_ui #(
         if (!conv_busy && !conv_start && !conv_done) conv_start <= 1'b1;
         if (conv_done) begin
             case (conv_i)
-                3'd0: bcd_a <= conv_bcd; 3'd1: bcd_b <= conv_bcd; 3'd2: bcd_ua <= conv_bcd[11:0];
-                3'd3: bcd_ub <= conv_bcd[11:0]; 3'd4: bcd_um <= conv_bcd[11:0];
-                3'd5: bcd_na <= conv_bcd; default: bcd_nb <= conv_bcd;
+                4'd0: bcd_a <= conv_bcd; 4'd1: bcd_b <= conv_bcd; 4'd2: bcd_ua <= conv_bcd[11:0];
+                4'd3: bcd_ub <= conv_bcd[11:0]; 4'd4: bcd_um <= conv_bcd[11:0];
+                4'd5: bcd_na <= conv_bcd; 4'd6: bcd_nb <= conv_bcd;
+                4'd7: bcd_ra <= conv_bcd; 4'd8: bcd_rb <= conv_bcd;
+                4'd9: bcd_pa <= conv_bcd[11:0]; default: bcd_pb <= conv_bcd[11:0];
             endcase
-            conv_i <= (conv_i == 3'd6) ? 3'd0 : conv_i + 1'b1;
+            conv_i <= (conv_i == 4'd10) ? 4'd0 : conv_i + 1'b1;
         end
         if (rst) begin
             conv_i <= 0; bcd_a <= 0; bcd_b <= 0; bcd_ua <= 0; bcd_ub <= 0; bcd_um <= 0; bcd_na <= 0; bcd_nb <= 0;
+            bcd_ra <= 0; bcd_rb <= 0; bcd_pa <= 0; bcd_pb <= 0;
         end
     end
     // log2 bar: one block per doubling above 32 (msb index - 5), at most 12 blocks
@@ -262,6 +286,20 @@ module puck_ui #(
         end
     endfunction
 
+    // 5 digits with leading blanks; "-----" without a reading
+    function [39:0] num5(input [23:0] b, input none);
+        integer i;
+        reg lead;
+        begin
+            lead = 1'b1;
+            for (i = 4; i >= 0; i = i - 1) begin
+                if (b[4*i +: 4] != 0 || i == 0) lead = 1'b0;
+                num5[i * 8 +: 8] = lead ? " " : 8'h30 + b[4*i +: 4];
+            end
+            if (none) num5 = "-----";
+        end
+    endfunction
+
     // ---- text
     function [7:0] dig(input [3:0] d); dig = 8'h30 + d; endfunction
     wire [3:0] f_th = fbcd[15:12], f_h = fbcd[11:8], f_t = fbcd[7:4], f_u = fbcd[3:0];   // see "state"
@@ -291,37 +329,53 @@ module puck_ui #(
     wire [167:0] mrow1 = {"A ", num6(bcd_a, stale_a), " ", bar(stale_a ? 4'd0 : bar_len(va))};
     wire [167:0] mrow2 = {"B ", num6(bcd_b, stale_b), " ", bar(stale_b ? 4'd0 : bar_len(vb))};
     wire [167:0] mrow3 = {" USE A", num3(bcd_ua), " B", num3(bcd_ub), " M", num3(bcd_um), "  "};
+    // RSSI page
+    wire [7:0]   m_cal = (field == 3'd6) ? ">" : " ";
+    wire [167:0] rrow0 = {m_pg, "RSSI    ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
+                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
+    wire [167:0] rrow1 = {"A ", num5(bcd_ra, !rssi_valid[0]), " ", rssi_cal_ok[0] ? num3(bcd_pa) : "---", "  ",
+                          rssi_low[0] ? "LOW " : "    ", rssi_warn[0] ? "WEAK" : "    "};
+    wire [167:0] rrow2 = {"B ", num5(bcd_rb, !rssi_valid[1]), " ", rssi_cal_ok[1] ? num3(bcd_pb) : "---", "  ",
+                          rssi_low[1] ? "LOW " : "    ", rssi_warn[1] ? "WEAK" : "    "};
+    wire [167:0] rrow3 = {m_cal, "CAL ", rssi_cal ? "ON " : "OFF", "  A ", rssi_cal_ok[0] ? "OK" : "--",
+                          "  B ", rssi_cal_ok[1] ? "OK" : "--", " "};
     reg [167:0] row_sel;
     always @* case ({page, text_row})
-        3'd0: row_sel = row0; 3'd1: row_sel = row1; 3'd2: row_sel = row2; 3'd3: row_sel = row3;
-        3'd4: row_sel = mrow0; 3'd5: row_sel = mrow1; 3'd6: row_sel = mrow2; default: row_sel = mrow3;
+        4'd0: row_sel = row0; 4'd1: row_sel = row1; 4'd2: row_sel = row2; 4'd3: row_sel = row3;
+        4'd4: row_sel = mrow0; 4'd5: row_sel = mrow1; 4'd6: row_sel = mrow2; 4'd7: row_sel = mrow3;
+        4'd8: row_sel = rrow0; 4'd9: row_sel = rrow1; 4'd10: row_sel = rrow2; default: row_sel = rrow3;
     endcase
     always @(posedge clk)
         text_char <= (text_col < 5'd21) ? row_sel[(20 - text_col) * 8 +: 7] : 7'h20;
     reg [167:0] osd_sel;
     always @* case ({page, osd_row})
-        3'd0: osd_sel = row0; 3'd1: osd_sel = row1; 3'd2: osd_sel = row2; 3'd3: osd_sel = row3;
-        3'd4: osd_sel = mrow0; 3'd5: osd_sel = mrow1; 3'd6: osd_sel = mrow2; default: osd_sel = mrow3;
+        4'd0: osd_sel = row0; 4'd1: osd_sel = row1; 4'd2: osd_sel = row2; 4'd3: osd_sel = row3;
+        4'd4: osd_sel = mrow0; 4'd5: osd_sel = mrow1; 4'd6: osd_sel = mrow2; 4'd7: osd_sel = mrow3;
+        4'd8: osd_sel = rrow0; 4'd9: osd_sel = rrow1; 4'd10: osd_sel = rrow2; default: osd_sel = rrow3;
     endcase
     always @(posedge clk)
         osd_char <= (osd_col < 5'd21) ? osd_sel[(20 - osd_col) * 8 +: 7] : 7'h20;
 
-    // ---- OSD visibility: OSD_MS after any button event, always on the meter page
+    // ---- OSD visibility: OSD_MS after any button event, always on the meter and RSSI pages
     reg [$clog2(OSD_MS+1)-1:0] osd_ms;
     always @(posedge clk) begin
         if (ev_ok || ev_next) osd_ms <= OSD_MS;
         else if (tick && osd_ms != 0) osd_ms <= osd_ms - 1'b1;
         if (rst) osd_ms <= OSD_MS;                         // show briefly after power-up
     end
-    assign osd_show = (osd_ms != 0) || page;
+    assign osd_show = (osd_ms != 0) || (page != 2'd0);
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V o ll\r\n" (62 bytes incl. CRLF)
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V o ll rrrrr sssss pa_ pb_ ww\r\n"
+    //   (85 bytes incl. CRLF; 62 before the RSSI fields of 2026-10-13)
     //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
     //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B), filter (T/V),
     //   o = "!" once the mixer has dropped a line because its line slots were full, else "-",
     //   ll = decoder A, decoder B since the previous line: "L" a whole poll round read 88h bit 4
-    //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset)
+    //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset),
+    //   RSSI A, RSSI B (raw ADC codes of the last round, "-----" without a reading), calibrated % A,
+    //   B ("---" uncalibrated), and per receiver "W" weak (the mixer avoids it), "L" low but not
+    //   weak (the other one is low too, or not calibrated), "-" neither, "?" no reading
     reg [1:0] ll_round, ll_lost;                           // since the previous log line
     wire      log_take;                                    // the line is copied this clock
     function [7:0] ll_char(input round, input lost);
@@ -342,17 +396,31 @@ module puck_ui #(
     function [23:0] z3(input [11:0] b);
         z3 = {8'h30 + b[11:8], 8'h30 + b[7:4], 8'h30 + b[3:0]};
     endfunction
+    function [39:0] z5(input [23:0] b, input none);
+        integer i;
+        begin
+            for (i = 0; i < 5; i = i + 1) z5[i * 8 +: 8] = 8'h30 + b[4*i +: 4];
+            if (none) z5 = "-----";
+        end
+    endfunction
+    function [7:0] rs_char(input valid, input low, input warn);
+        rs_char = !valid ? "?" : warn ? "W" : low ? "L" : "-";
+    endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 62;
+    localparam LOG_LEN = 85;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
                              dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ",
                              filter_vcr ? "V" : "T", " ", ovf_s[1] ? "!" : "-", " ",
-                             ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), 16'h0D0A};
+                             ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), " ",
+                             z5(bcd_ra, !rssi_valid[0]), " ", z5(bcd_rb, !rssi_valid[1]), " ",
+                             rssi_cal_ok[0] ? z3(bcd_pa) : "---", " ", rssi_cal_ok[1] ? z3(bcd_pb) : "---", " ",
+                             rs_char(rssi_valid[0], rssi_low[0], rssi_warn[0]),
+                             rs_char(rssi_valid[1], rssi_low[1], rssi_warn[1]), 16'h0D0A};
     reg  [8:0] log_wait;
-    reg  [5:0] log_i;
+    reg  [6:0] log_i;
     reg        log_active, u_send;
     reg  [LOG_LEN*8-1:0] log_buf;
     wire       u_busy;

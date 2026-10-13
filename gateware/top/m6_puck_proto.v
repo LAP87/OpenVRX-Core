@@ -4,6 +4,11 @@
 // the two onboard buttons (S1 = OK / field, S2 = NEXT / value). S1 is no
 // longer a reset button; reset comes from the PLLs locking at power-up.
 // See puck_ui.v for the screen and design/PUCK_2027_KONCEPT.md for the idea.
+// RSSI: rssi_adc.v reads both receivers' RSSI from the rev A board's ADS1115 (48h) on the
+// same bus once per field; its warning (one receiver low, the other not) makes the mixer
+// prefer the other receiver (mixer2 ext_weak). Without the ADC nothing answers at 48h and
+// nothing changes. Three masters share SCL + SDA_A: rssi_adc goes first (it raises its hold
+// only between OLED bytes), the OLED waits for it and tvp_ctrl, tvp_ctrl waits for both holds.
 //
 // LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
@@ -61,17 +66,30 @@ module m6_puck_proto #(
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-                   .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold),
+                   .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold | rssi_hold),
                    .op_mode_req(filter_changed), .op_mode_vcr(filter_vcr), .active(tvp_active));
-    // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl (one master at a time)
-    wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack;
+    // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl and rssi_adc (one master at a time)
+    wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack, oled_active;
+    wire rssi_scl_low, rssi_sda_low, rssi_hold, rssi_active, rssi_cal, rssi_done;
+    wire [15:0] rssi_a, rssi_b;
+    wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn;
+    wire [6:0]  rssi_pct_a, rssi_pct_b;
+    rssi_adc #(.CLK_HZ(CLK_HZ)) rssi (
+                   .clk(clk), .rst(rst_c[2]), .scl_low(rssi_scl_low), .sda_low(rssi_sda_low),
+                   .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(rssi_hold), .other_hold(oled_hold),
+                   .other_active(tvp_active | oled_active), .active(rssi_active), .cal(rssi_cal),
+                   .load(1'b0), .load_min_a(16'd0), .load_max_a(16'd0), .load_min_b(16'd0), .load_max_b(16'd0),
+                   .raw_a(rssi_a), .raw_b(rssi_b), .valid(rssi_valid), .min_a(), .max_a(), .min_b(), .max_b(),
+                   .cal_ok(rssi_cal_ok), .pct_a(rssi_pct_a), .pct_b(rssi_pct_b), .low(rssi_low), .warn(rssi_warn),
+                   .done(rssi_done));
     wire [1:0] trow, force_bad, sel_n;
     wire [4:0] tcol;
     wire [6:0] tchar;
     wire [2:0] band, ch;
     wire [1:0] mode;
     wire [2:0] field;
-    wire       cur, page, osd_show, low_lat;
+    wire [1:0] page;
+    wire       cur, osd_show, low_lat;
     wire [6:0] osd_char;
     wire [19:0] snow_a, snow_b;
     wire [10:0] use_a, use_b, use_mix;
@@ -80,7 +98,8 @@ module m6_puck_proto #(
     wire        noise_ta, noise_tb;
     ssd1306_text #(.CLK_HZ(CLK_HZ)) oled (
                        .clk(clk), .rst(rst_c[2]), .scl_low(oled_scl_low), .sda_low(oled_sda_low),
-                       .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(oled_hold), .other_active(tvp_active),
+                       .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(oled_hold),
+                       .other_active(tvp_active | rssi_hold | rssi_active), .active(oled_active),
                        .text_row(trow), .text_col(tcol), .text_char(tchar),
                        .frame_done(frame_done),
                        .nack_error(oled_nack));
@@ -92,14 +111,17 @@ module m6_puck_proto #(
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
                 .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb),
+                .rssi_a(rssi_a), .rssi_b(rssi_b), .rssi_valid(rssi_valid), .rssi_cal_ok(rssi_cal_ok),
+                .rssi_low(rssi_low), .rssi_warn(rssi_warn), .rssi_pct_a(rssi_pct_a), .rssi_pct_b(rssi_pct_b),
+                .rssi_cal(rssi_cal),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
                 .filter_vcr(filter_vcr), .filter_changed(filter_changed));
-    assign i2c_scl = (scl_low | oled_scl_low) ? 1'b0 : 1'bz;
-    assign i2c_sda_a = (sda_low[0] | oled_sda_low) ? 1'b0 : 1'bz;
+    assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
+    assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
     assign rx_spi_sel_n = sel_n[0];       // both modules share one SEL line
     wire locked_ok = init_done && dev_err == 2'b00 && st_valid == 2'b11 &&
@@ -116,6 +138,7 @@ module m6_puck_proto #(
     wire nolock_b = st_valid[1] && !(st1[1] && st1[2]);
     mixer2 mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
                 .ext_bad_a(nolock_a | force_bad[0]), .ext_bad_b(nolock_b | force_bad[1]),
+                .ext_weak_a(rssi_warn[0]), .ext_weak_b(rssi_warn[1]),
                 .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
                 .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),

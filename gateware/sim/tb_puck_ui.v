@@ -18,7 +18,8 @@ module tb_puck_ui;
     wire [2:0] field;
     wire filter_vcr, filter_changed;
     wire       low_lat;
-    wire       page;
+    wire [1:0] page;
+    wire       rssi_cal;
     reg  tg = 0;                                  // snow meter windows every 100 ms
     always #100_000_000 tg = ~tg;
     wire osd_show, txd;
@@ -53,6 +54,8 @@ module tb_puck_ui;
               .RX_FIRST_MS(5), .RX_REPEAT_MS(40)) ui (
         .clk(clk), .rst(rst), .btn_ok(btn_ok), .btn_next(btn_next), .view_b(view_b),
         .dec_present(2'b11), .dec_locked(dec_locked), .dec_round(dec_round), .dec_lost(dec_lost),
+        .rssi_a(16'd12000), .rssi_b(16'd4567), .rssi_valid(2'b11), .rssi_cal_ok(2'b11), .rssi_low(2'b10),
+        .rssi_warn(2'b10), .rssi_pct_a(7'd75), .rssi_pct_b(7'd3), .rssi_cal(rssi_cal),
         .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
@@ -190,6 +193,24 @@ module tb_puck_ui;
         dec_locked = 2'b10;                       // B locks: no more repeats (the next was due after 30 ms)
         $display("MARK relock %0d", $time);
         #70_000_000;
+        press(1);                                 // page -> RSSI
+        wait_frames(2);
+        $display("MARK rssi page=%0d cal=%0d", page, rssi_cal);
+        press(0);                                 // field -> CAL (only on the RSSI page)
+        wait_frames(2);
+        $display("MARK cal_selected field=%0d", field);
+        press(1);                                 // calibration on
+        wait_frames(2);
+        $display("MARK cal_on cal=%0d", rssi_cal);
+        press(1);                                 // and off
+        $display("MARK cal_off cal=%0d", rssi_cal);
+        press(1);                                 // on again, then leave the page: it ends
+        press(0);                                 // CAL -> band (the field wraps after CAL)
+        $display("MARK wrapped field=%0d cal=%0d", field, rssi_cal);
+        repeat (5) press(0);                      // -> page
+        press(1);                                 // RSSI -> main
+        wait_frames(2);
+        $display("MARK left page=%0d cal=%0d", page, rssi_cal);
         $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d filter_pulses=%0d filter_width_errors=%0d final_filter_vcr=%0d",
                  collisions, nack_error, spi_idle_bad, filter_pulses, filter_width_errors, filter_vcr);
         $finish;
