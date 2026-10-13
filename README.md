@@ -10,23 +10,27 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-13, main with SCAN and saved settings in M6, from `0958a52`):** 757 tests, all pass, run with
-`gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 17 min);
-no two tests share a build directory. Nothing has run on hardware: "simulated" and
+**Status (2026-10-13, main `2b67dea`):** 757 tests, all pass on `2b67dea`, run with
+`gateware/tools/run_suite.py` (one process per simulation test, ten at a time; three rounds
+with `--resume`); no two tests share a build directory. The same 757 passed on `bf05ac0`
+in Codex's run, root-accepted 2026-10-13 (hub `docs/overnight/2026-10-08/STATUS.md`);
+since `bf05ac0` only Markdown has changed. Nothing has run on hardware: "simulated" and
 "built" below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
-requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `0958a52` are those
-of main.
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `bf05ac0` (and of
+`0958a52`) are those of main. Root-accepted by Codex: M0, M4 and M6 with default options from
+`bf05ac0`, and the `HDMI=1`/`VINTERP=1` builds from `46a1e4f`; the M2, M2s, M2a, M3, M1 and M1s
+builds have no root acceptance.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `4ad5a68` | 0 | reference for the HDMI pairs; also with `HDMI=1` |
+| M0 | `bf05ac0` (Codex) | 0 | reference for the HDMI pairs; with `HDMI=1` from `4ad5a68` |
 | M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `f78fe82` | 0 | the mixer has since gained `ext_weak`, tied to 0 in M4; not rebuilt; with `HDMI=1` from `4ad5a68`; with `VINTERP=1` from `fc267a8` |
-| M6 | `0958a52` | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 15 505 LUT4, board clock 132.3 MHz; with `HDMI=1` from `4ad5a68`; with `VINTERP=1` from `fc267a8`; seeds 0-3 from `94a2b32` |
+| M4 | `bf05ac0` (Codex) | 0 | 8 245 LUT4, lowest clock 98.95 MHz; with `HDMI=1` from `4ad5a68` and `VINTERP=1` from `fc267a8`, both before `ext_weak` |
+| M6 | `bf05ac0` (Codex), `0958a52` (Opus) | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 15 505 LUT4, board clock 132.3 MHz in both; with `HDMI=1` from `4ad5a68` and `VINTERP=1` from `fc267a8`, both without RSSI, SCAN and flash; seeds 0-3 from `94a2b32` |
 
 What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
