@@ -188,3 +188,18 @@ IO_PORT "key_i" IO_TYPE=LVCMOS33;
 // measurement log: FPGA TXD -> onboard BL616 USB-UART (apicula examples/tangnano20k.cst "TXD" 69)
 IO_LOC  "uart_txd" 69;
 IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// onboard SPI flash (XTX XT25F64F, Sipeed schematic 3923): the FPGA's MSPI pins, user I/O after
+// configuration with gowin_pack --mspi_as_gpio (build.sh). Settings live in its last two 4 KB sectors
+// (flash_store.v). HOLD# (pin 63, 4.7 k pull-up on the board) is left alone. WP# (57) is driven high
+// only while writing: held high all the time it disturbed USB programming of the flash in another
+// design on this board.
+IO_LOC  "flash_cs_n" 60;
+IO_PORT "flash_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "flash_clk" 59;
+IO_PORT "flash_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "flash_mosi" 61;
+IO_PORT "flash_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "flash_miso" 62;
+IO_PORT "flash_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "flash_wp_n" 57;
+IO_PORT "flash_wp_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

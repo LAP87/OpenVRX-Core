@@ -50,6 +50,7 @@ elif stage == 'yowasp-nextpnr-himbaechel-gowin':
     if failure != 'no_pnr_output': Path(arg('--write')).write_text('{"fresh": true}')
     if failure == 'routing': sys.exit(3)
 elif stage == 'gowin_pack':
+    (root / 'gateware/build/pack.args').write_text(' '.join(sys.argv[1:]) + ' ')
     if not Path(sys.argv[-1]).is_file(): sys.exit(4)
     if failure != 'no_packed_output':
         data = b'' if failure == 'empty_bitstream' else (b'partial' if failure == 'packing' else b'new packed bitstream')
@@ -71,6 +72,7 @@ def project(tmp_path):
     (root / 'gateware/rtl/fixture.vh').write_text('// included source\n')
     (root / 'gateware/top/demo.v').write_text('module demo; endmodule\n')
     (root / 'gateware/top/m4_dual_mix.v').write_text('module m4_dual_mix; endmodule\n')
+    (root / 'gateware/top/m6_puck_proto.v').write_text('module m6_puck_proto; endmodule\n')
     (root / 'gateware/boards/tangnano20k.cst').write_text('IO_LOC "clk" 4;\n')
     (root / 'gateware/boards/demo.seed').write_text('2\n')
     (root / '.venv/bin/python').symlink_to(sys.executable)
@@ -227,3 +229,15 @@ def test_define_options_are_variants(project, name, settings, suffix, define):
     assert (out / f'demo{suffix}.fs').read_bytes() == b'new packed bitstream'
     if suffix:
         assert (out / 'demo.fs').read_bytes() == b'old successful bitstream'
+
+
+@pytest.mark.parametrize('top, mspi', [('m6_puck_proto', True), ('m4_dual_mix', False), ('demo', False)])
+def test_mspi_pins_as_user_io_for_the_settings_store(project, top, mspi):
+    """M6 keeps its settings in the onboard flash (flash_store.v): gowin_pack gets --mspi_as_gpio for it
+    and for no other top, and the manifest records it."""
+    r = build(project, top=top)
+    assert r.returncode == 0, r.stdout + r.stderr
+    args = (project / 'gateware/build/pack.args').read_text()
+    assert ('--mspi_as_gpio' in args) == mspi, args
+    record = json.loads((project / f'gateware/build/{top}.build.json').read_text())
+    assert record['options']['mspi'] == ('1' if mspi else '0')

@@ -84,6 +84,7 @@ module tb_top_pins;
                 .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led), .uart_txd(txd),
+                .flash_cs_n(), .flash_clk(), .flash_mosi(), .flash_miso(1'b1), .flash_wp_n(),   // erased flash
                 .O_sdram_clk(), .O_sdram_cke(), .O_sdram_cs_n(), .O_sdram_cas_n(), .O_sdram_ras_n(),
                 .O_sdram_wen_n(), .O_sdram_dqm(), .O_sdram_addr(), .O_sdram_ba(), .IO_sdram_dq(dq));
         end

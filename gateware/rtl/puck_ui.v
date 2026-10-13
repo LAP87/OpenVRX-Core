@@ -1,9 +1,14 @@
 // Puck prototype UI: two buttons, 4 x 21 character OLED text, RX5808 tuning.
 //
 //   OK   (short press) -> select the next field: band, channel, mode, latency, filter, page
-//                         (and CAL on the RSSI page)
+//                         (and SCAN on the main page, CAL on the RSSI page)
 //   NEXT (short press) -> step the selected field (filter: TV/VCR; page: main -> meter -> RSSI;
-//                         CAL: calibration on/off)
+//                         SCAN: start a channel scan; CAL: calibration on/off)
+// SCAN (chan_scan.v) steps through all 48 channels and keeps the one where a decoder locks with
+// the lowest noise; any button aborts it on the channel it started from. Row 2 shows BUSY while
+// it runs and NONE after a scan that found no locked channel (until the next button).
+// Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency
+// and filter in place (the filter as a request to the decoders, like NEXT on FILT).
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
 // register from vtx_channels.vh. The first write comes 0.5 s after reset, and
@@ -17,9 +22,9 @@
 // Screen (rows 0-3):
 //   >BAND F   CH 4  5800        (exactly 21 characters per row)
 //    MODE MIX VIEW A  BUF     (BUF / LOW: latency mode)
-//    A LOCK    B NOSIG
+//    A LOCK  B NOSIG SCAN
 //    SE BAND OK  FILT TV     (row 3 also shows VCR and the independent page/filter markers)
-// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, FILT, or row 3 for the page).
+// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, FILT, row 3 for the page, SCAN).
 //
 // Meter page ("snow meter", self-interference / signal check):
 //   >METER   F4  5800
@@ -71,6 +76,12 @@ module puck_ui #(
     input  wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn,
     input  wire [6:0]  rssi_pct_a, rssi_pct_b,
     output reg         rssi_cal,          // calibration mode (level), CAL field on the RSSI page
+    // saved settings (flash_store.v): one clock at start
+    input  wire        set_load,
+    input  wire [2:0]  set_band, set_ch,
+    input  wire [1:0]  set_mode,
+    input  wire        set_low_lat, set_filter,
+    output wire        scan_busy,
     // mixer control
     output wire [1:0]  force_bad,         // [0] mark A bad, [1] mark B bad
     // RX5808
@@ -152,20 +163,42 @@ module puck_ui #(
     wire [7:0]  band_letter = chan[40:33];
     wire [19:0] synth = chan[19:0];
 
+    // ---- channel scan (SCAN on the main page); any button during a scan aborts it
+    wire       scan_tune, scan_done, scan_found;
+    wire [5:0] scan_idx;
+    reg        scan_none;                                  // the last scan found nothing (until a button)
+    reg        new_na, new_nb;                             // a new noise value is in na / nb
+    wire       ui_ok = ev_ok && !scan_busy, ui_next = ev_next && !scan_busy;
+    chan_scan #(.CLK_HZ(CLK_HZ)) scan (
+        .clk(clk), .rst(rst), .start(ui_next && field == 3'd6 && page == 2'd0),
+        .abort(scan_busy && (ev_ok || ev_next)), .cur_idx({band, ch}),
+        .locked({sp1[1] && sl1[1], sp0[1] && sl0[1]}), .new_a(new_na), .new_b(new_nb), .noise_a(na), .noise_b(nb),
+        .busy(scan_busy), .idx(scan_idx), .tune(scan_tune), .done(scan_done), .found(scan_found));
+    always @(posedge clk) begin
+        if (scan_done && !scan_found) scan_none <= 1'b1;
+        else if (ev_ok || ev_next) scan_none <= 1'b0;
+        if (rst) scan_none <= 1'b0;
+    end
+
     always @(posedge clk) begin
         filter_changed <= 1'b0;
-        if (ev_ok) field <= (field == ((page == 2'd2) ? 3'd6 : 3'd5)) ? 3'd0 : field + 1'b1;
-        if (ev_next) case (field)
+        if (ui_ok) field <= (field == ((page == 2'd1) ? 3'd5 : 3'd6)) ? 3'd0 : field + 1'b1;
+        if (ui_next) case (field)
             3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
             3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
             3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
             3'd3: low_lat <= ~low_lat;
             3'd4: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
             3'd5: page <= (page == 2'd2) ? 2'd0 : page + 1'b1;
-            3'd6: rssi_cal <= ~rssi_cal;
+            3'd6: if (page == 2'd2) rssi_cal <= ~rssi_cal;     // on the main page: SCAN (chan_scan above)
             default: page <= page;
         endcase
+        if (scan_tune) {band, ch} <= scan_idx;
         if (page != 2'd2) rssi_cal <= 1'b0;                // leaving the RSSI page ends a calibration
+        if (set_load) begin
+            band <= set_band; ch <= set_ch; mode <= (set_mode == 2'd3) ? 2'd0 : set_mode;
+            low_lat <= set_low_lat; filter_vcr <= set_filter; filter_changed <= 1'b1;
+        end
         if (rst) begin
             band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 2'd0; rssi_cal <= 1'b0;
             low_lat <= DEF_LOW_LAT[0];
@@ -186,7 +219,7 @@ module puck_ui #(
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
     //      (band/ch change on the clock after ev_next, chan one clock later: write_now is delayed one
     //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
-    wire chan_step  = ev_next && (field == 3'd0 || field == 3'd1);
+    wire chan_step  = (ui_next && (field == 3'd0 || field == 3'd1)) || scan_tune;
     reg  chan_step_d;
     always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
@@ -209,6 +242,7 @@ module puck_ui #(
         if (tgu[2] != tgu[1]) begin ua <= use_a; ub <= use_b; um <= use_mix; end
         if (tna[2] != tna[1]) na <= noise_a;
         if (tnb[2] != tnb[1]) nb <= noise_b;
+        new_na <= (tna[2] != tna[1]); new_nb <= (tnb[2] != tnb[1]);
         if (rst) begin age_a <= STALE; age_b <= STALE; va <= 0; vb <= 0; ua <= 0; ub <= 0; um <= 0; na <= 0; nb <= 0; end
     end
     wire stale_a = (age_a == STALE), stale_b = (age_b == STALE);
@@ -316,7 +350,9 @@ module puck_ui #(
     wire [167:0] row0 = {m_sel, "BAND ", band_letter, "  ", m_ch, "CH ", dig({1'b0, ch} + 4'd1), "  ",
                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), " "};
     wire [167:0] row1 = {m_mod, "MODE ", mode_s, " VIEW ", sv[1] ? "B" : "A", " ", m_lat, low_lat ? "LOW" : "BUF"};
-    wire [167:0] row2 = {" A ", dec_s(sp0[1], sl0[1]), "   B ", dec_s(sp1[1], sl1[1]), "   "};
+    wire [7:0]   m_scan = (field == 3'd6) ? ">" : " ";
+    wire [167:0] row2 = {" A ", dec_s(sp0[1], sl0[1]), " B ", dec_s(sp1[1], sl1[1]), m_scan,
+                         scan_busy ? "BUSY" : scan_none ? "NONE" : "SCAN"};
     wire [7:0] m_pg  = (field == 3'd5) ? ">" : " ";
     wire [167:0] row3 = legal ?
         (filter_vcr ? {m_pg, "SE BAND OK ", m_filter, "FILT VCR"} :

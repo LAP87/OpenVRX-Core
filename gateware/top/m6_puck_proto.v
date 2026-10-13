@@ -9,6 +9,8 @@
 // prefer the other receiver (mixer2 ext_weak). Without the ADC nothing answers at 48h and
 // nothing changes. Three masters share SCL + SDA_A: rssi_adc goes first (it raises its hold
 // only between OLED bytes), the OLED waits for it and tvp_ctrl, tvp_ctrl waits for both holds.
+// Saved settings: flash_store.v keeps band, channel, mode, latency, filter and the RSSI calibration
+// in the last two sectors of the onboard SPI flash (pins 57, 59-62) and loads them at start.
 //
 // LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
@@ -41,6 +43,11 @@ module m6_puck_proto #(
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
     output wire        uart_txd,          // measurement log -> onboard BL616 USB-UART (115200 8N1)
+    // the onboard SPI flash after configuration (MSPI pins as user I/O, gowin_pack --mspi_as_gpio):
+    // saved settings in its last two sectors (flash_store.v)
+    output wire        flash_cs_n, flash_clk, flash_mosi,
+    input  wire        flash_miso,
+    output wire        flash_wp_n,        // driven high only while writing, else released
     output wire        O_sdram_clk, O_sdram_cke, O_sdram_cs_n, O_sdram_cas_n, O_sdram_ras_n, O_sdram_wen_n,
     output wire [3:0]  O_sdram_dqm,
     output wire [10:0] O_sdram_addr,
@@ -74,12 +81,24 @@ module m6_puck_proto #(
     wire [15:0] rssi_a, rssi_b;
     wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn;
     wire [6:0]  rssi_pct_a, rssi_pct_b;
+    wire [15:0] rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b;
+    // ---- saved settings: band, channel, mode, latency, filter, RSSI calibration
+    wire [79:0] saved;
+    wire        set_load, flash_ready, flash_err, wp_drive, scan_busy;
+    flash_store #(.CLK_HZ(CLK_HZ)) store (
+                   .clk(clk), .rst(rst_c[2]), .flash_cs_n(flash_cs_n), .flash_clk(flash_clk), .flash_mosi(flash_mosi),
+                   .flash_miso(flash_miso), .flash_wp_drive(wp_drive),
+                   .cur({band, ch, mode, low_lat, filter_vcr, 6'd0, rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b}),
+                   .loaded(saved), .load(set_load), .ready(flash_ready), .err(flash_err), .seq());
+    assign flash_wp_n = wp_drive ? 1'b1 : 1'bz;
     rssi_adc #(.CLK_HZ(CLK_HZ)) rssi (
                    .clk(clk), .rst(rst_c[2]), .scl_low(rssi_scl_low), .sda_low(rssi_sda_low),
                    .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(rssi_hold), .other_hold(oled_hold),
                    .other_active(tvp_active | oled_active), .active(rssi_active), .cal(rssi_cal),
-                   .load(1'b0), .load_min_a(16'd0), .load_max_a(16'd0), .load_min_b(16'd0), .load_max_b(16'd0),
-                   .raw_a(rssi_a), .raw_b(rssi_b), .valid(rssi_valid), .min_a(), .max_a(), .min_b(), .max_b(),
+                   .load(set_load), .load_min_a(saved[63:48]), .load_max_a(saved[47:32]),
+                   .load_min_b(saved[31:16]), .load_max_b(saved[15:0]),
+                   .raw_a(rssi_a), .raw_b(rssi_b), .valid(rssi_valid),
+                   .min_a(rssi_min_a), .max_a(rssi_max_a), .min_b(rssi_min_b), .max_b(rssi_max_b),
                    .cal_ok(rssi_cal_ok), .pct_a(rssi_pct_a), .pct_b(rssi_pct_b), .low(rssi_low), .warn(rssi_warn),
                    .done(rssi_done));
     wire [1:0] trow, force_bad, sel_n;
@@ -114,6 +133,8 @@ module m6_puck_proto #(
                 .rssi_a(rssi_a), .rssi_b(rssi_b), .rssi_valid(rssi_valid), .rssi_cal_ok(rssi_cal_ok),
                 .rssi_low(rssi_low), .rssi_warn(rssi_warn), .rssi_pct_a(rssi_pct_a), .rssi_pct_b(rssi_pct_b),
                 .rssi_cal(rssi_cal),
+                .set_load(set_load), .set_band(saved[79:77]), .set_ch(saved[76:74]), .set_mode(saved[73:72]),
+                .set_low_lat(saved[71]), .set_filter(saved[70]), .scan_busy(scan_busy),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),

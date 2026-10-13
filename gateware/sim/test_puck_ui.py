@@ -26,7 +26,7 @@ def run():
     work = HERE / 'build' / 'tb_puck_ui'
     work.mkdir(parents=True, exist_ok=True)
     src = [GW / 'rtl' / n for n in ('i2c_master.v', 'rx5808_spi.v', 'rx5808_tune.v', 'ssd1306_text.v', 'bin2bcd.v',
-                                    'uart_tx.v', 'puck_ui.v')]
+                                    'uart_tx.v', 'chan_scan.v', 'puck_ui.v')]
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), '-o', 'sim.vvp', '-s', 'tb_puck_ui',
                     *map(str, src), str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_puck_ui.v')],
                    cwd=work, env=env, check=True)
@@ -95,6 +95,9 @@ def test_puck_ui():
     # 40 ms (RX_REPEAT_MS in the testbench): three times in the 130 ms until decoder B locks, then never.
     frames = re.findall(r'SPI (\d+) (\w+) (\d+)', log)
     expect = [('F', 4), ('R', 4), ('L', 4), ('A', 4), ('A', 5), ('A', 6)] + [('A', 6)] * 3
+    t_scan = int(re.search(r'MARK scan_start (\d+)', log)[1])
+    scan_frames = [fr for fr in frames if int(fr[2]) > t_scan]
+    frames = [fr for fr in frames if int(fr[2]) <= t_scan]
     assert len(frames) == len(expect), frames
     table = {(b, c): (f, reg) for b, c, f, reg, _ in vc.table()}
     for (n, bits, _), key in zip(frames, expect):
@@ -110,13 +113,13 @@ def test_puck_ui():
 
     ev = screens(log)
     s0 = screen_before(ev, 'default')
-    assert s0 == ['>BAND F   CH 4  5800 ', ' MODE MIX VIEW A  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK  FILT TV '], s0
+    assert s0 == ['>BAND F   CH 4  5800 ', ' MODE MIX VIEW A  BUF', ' A LOCK  B NOSIG SCAN', ' SE BAND OK  FILT TV '], s0
     s1 = screen_before(ev, 'band_L')
     assert s1[0] == '>BAND L   CH 4  5473 ' and s1[3] == ' !SE BAND  FILT TV   ', s1
     s_oob_vcr = screen_before(ev, 'filter_oob')
     assert s_oob_vcr[3] == ' !SE BAND >FILT VCR  ', s_oob_vcr
     s2 = screen_before(ev, 'final')
-    assert s2 == [' BAND A   CH 6  5765 ', '>MODE A   VIEW B  BUF', ' A LOCK    B NOSIG   ', ' SE BAND OK  FILT VCR'], s2
+    assert s2 == [' BAND A   CH 6  5765 ', '>MODE A   VIEW B  BUF', ' A LOCK  B NOSIG SCAN', ' SE BAND OK  FILT VCR'], s2
     final = re.search(r'MARK final force=(\d+)', log)[1]
     assert final == '10', 'mode A must mark receiver B bad'
     s_lat = screen_before(ev, 'lat')
@@ -136,7 +139,7 @@ def test_puck_ui():
     assert osd_rows[2] == s_filter_vcr[3]
     assert osd_rows[3] == s_filter_tv[3]
     assert osd_rows[4] == s_page[3]
-    assert [int(v) for v in re.findall(r'^FIELD (\d+)$', log, re.M)] == [0, 1, 2, 3, 4, 5, 0]
+    assert [int(v) for v in re.findall(r'^FIELD (\d+)$', log, re.M)] == [0, 1, 2, 3, 4, 5, 6, 0]
     assert res['filter_pulses'] == '2' and res['filter_width_errors'] == '0'
     assert res['final_filter_vcr'] == '0'
 
@@ -156,6 +159,20 @@ def test_puck_ui():
     assert re.search(r'MARK cal_off cal=(\d)', log)[1] == '0'
     assert re.search(r'MARK wrapped field=(\d) cal=(\d)', log).groups() == ('0', '1')
     assert re.search(r'MARK left page=(\d) cal=(\d)', log).groups() == ('0', '0'), 'leaving the page ends CAL'
+    # SCAN: the channels in table order from the first, then back to A6 on the abort
+    rows = vc.table()
+    keys = [(b, c) for b, c, *_ in rows]
+    order = [int(bits, 16) for _, bits, _ in scan_frames]
+    want_bits = [sum(b << i for i, b in enumerate(vc.spi_frame(rows[i][3]))) for i in range(len(rows))]
+    assert 3 <= len(order) - 1 <= 8, len(order)                  # 0.6 s at 100-200 ms per channel
+    assert order[:-1] == want_bits[:len(order) - 1], 'channels 0, 1, 2, ... in table order'
+    assert order[-1] == want_bits[keys.index(('A', 6))], 'the abort retunes the starting channel'
+    assert re.search(r'MARK scan_selected field=(\d)', log)[1] == '6'
+    assert screen_before(ev, 'scan_selected')[2] == ' A NOSIG B LOCK >SCAN'
+    assert re.search(r'MARK scan_busy busy=(\d)', log)[1] == '1'
+    assert screen_before(ev, 'scan_busy')[2] == ' A NOSIG B LOCK >BUSY'
+    m = re.search(r'MARK scan_aborted busy=(\d) band=(\d) ch=(\d) field=(\d)', log).groups()
+    assert m == ('0', '0', '5', '6'), 'A6 again, the button only aborted (the field did not move)'
     assert screen_before(ev, 'MARK_END')[0] == ' BAND A   CH 6  5765 '
 
     # UART log: fixed-width lines, the last one reflects the final state
