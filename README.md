@@ -10,13 +10,13 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-13, main with RSSI in M6, from `9023ab1`):** 739 tests, all pass, run with
-`gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 15 min);
+**Status (2026-10-13, main with SCAN and saved settings in M6, from `0958a52`):** 757 tests, all pass, run with
+`gateware/tools/run_suite.py` (one process per simulation test, ten at a time, 17 min);
 no two tests share a build directory. Nothing has run on hardware: "simulated" and
 "built" below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
-requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `9023ab1` are those
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `0958a52` are those
 of main.
 
 | Top | Built from | Seed | Note |
@@ -26,7 +26,7 @@ of main.
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
 | M4 | `f78fe82` | 0 | the mixer has since gained `ext_weak`, tied to 0 in M4; not rebuilt; with `HDMI=1` from `4ad5a68`; with `VINTERP=1` from `fc267a8` |
-| M6 | `9023ab1` | 2 | with RSSI: 14 233 LUT4, board clock 104.5 MHz; with `HDMI=1` from `4ad5a68`; with `VINTERP=1` from `fc267a8`; seeds 0-3 from `94a2b32` |
+| M6 | `0958a52` | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 15 505 LUT4, board clock 132.3 MHz; with `HDMI=1` from `4ad5a68`; with `VINTERP=1` from `fc267a8`; seeds 0-3 from `94a2b32` |
 
 What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
@@ -56,7 +56,11 @@ M6 also reads both receivers' RSSI from the Puck rev A board's ADS1115 once per 
 (`rssi_adc.v`), with a calibration page in the menu and RSSI in the UART row (85 bytes, was 62).
 A receiver whose calibrated RSSI stays low while the other's does not loses the mixer's
 pairs before its picture breaks up; its lines are never left out for it. Simulated against
-a model of the ADC; thresholds are set on the bench, and calibration is not saved yet.
+a model of the ADC; thresholds are set on the bench. A menu SCAN steps all 48 channels and
+keeps the one where a decoder locks with the least noise (no RSSI needed), and band,
+channel, modes, filter and RSSI calibration are saved in the board's SPI flash and loaded
+at start (a record only after a change has stood still for 3 s; simulated against a flash
+model, not tried on the board).
 Earlier acceptance receipts (C1, C2, C3) are kept in [gateware/README.md](gateware/README.md).
 
 Most of this code was written with heavy AI assistance (Claude) and reviewed
