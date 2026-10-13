@@ -60,6 +60,14 @@ case "$ioreg" in 0|1) ;; *) echo "IOREG must be 0 or 1" >&2; exit 1 ;; esac
 ioreg_opts=()
 if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob); fi
 if [ "$ioreg" != "$ioreg_default" ]; then out_fs="${out_fs%.fs}_ioreg$ioreg.fs"; fi
+# The onboard SPI flash's MSPI pins (57, 59-62) as user I/O after configuration, for the tops that keep
+# settings there (flash_store.v): gowin_pack --mspi_as_gpio. Without it they stay configuration pins.
+case " m6_puck_proto " in
+  *" $top "*) mspi=1 ;;
+  *) mspi=0 ;;
+esac
+pack_opts=()
+if [ "$mspi" = 1 ]; then pack_opts=(--mspi_as_gpio); fi
 # Place-and-route seed (boards/<top>.seed keeps the one a top was built with). "Can't route the <clock> net"
 # came from BUFG cells competing for global wires (README, "Klockroutningen, 2026-10-12"); another seed is a
 # way out, not a fix.
@@ -94,7 +102,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.
@@ -129,7 +137,7 @@ if [ -f "$source_here/boards/$top.sdc" ]; then cp "$source_here/boards/$top.sdc"
     exit 1
   }
 "$bin/python" "$manifest" route "$prefix.pnr.log"
-"$bin/gowin_pack" -c -d GW2A-18C -o "$out_fs" "$prefix.pnr.json"
+"$bin/gowin_pack" -c -d GW2A-18C "${pack_opts[@]}" -o "$out_fs" "$prefix.pnr.json"
 "$bin/python" "$manifest" finish "$here/.." inputs.json "$prefix" "$prefix.build.json"
 # The bitstream is published last, after its logs, hashes and manifest are ready.
 for ext in cst sdc synth.json stat.txt yosys.log pnr.json pnr.log build.json; do

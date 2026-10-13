@@ -19,7 +19,7 @@ module tb_puck_ui;
     wire filter_vcr, filter_changed;
     wire       low_lat;
     wire [1:0] page;
-    wire       rssi_cal;
+    wire       rssi_cal, scan_busy;
     reg  tg = 0;                                  // snow meter windows every 100 ms
     always #100_000_000 tg = ~tg;
     wire osd_show, txd;
@@ -56,6 +56,8 @@ module tb_puck_ui;
         .dec_present(2'b11), .dec_locked(dec_locked), .dec_round(dec_round), .dec_lost(dec_lost),
         .rssi_a(16'd12000), .rssi_b(16'd4567), .rssi_valid(2'b11), .rssi_cal_ok(2'b11), .rssi_low(2'b10),
         .rssi_warn(2'b10), .rssi_pct_a(7'd75), .rssi_pct_b(7'd3), .rssi_cal(rssi_cal),
+        .set_load(1'b0), .set_band(3'd0), .set_ch(3'd0), .set_mode(2'd0), .set_low_lat(1'b0), .set_filter(1'b0),
+        .scan_busy(scan_busy),
         .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
         .snow_toggle_a(tg), .snow_toggle_b(tg), .use_toggle(tg),
@@ -147,7 +149,7 @@ module tb_puck_ui;
         $display("MARK default");
         sample_osd_row(0);
         $display("FIELD %0d", field);
-        repeat (6) begin press(0); $display("FIELD %0d", field); end
+        repeat (7) begin press(0); $display("FIELD %0d", field); end   // ... page, SCAN, band
         press(1); press(1);                       // band F -> R -> L  (L4 5473, outside SE band)
         wait_frames(2);
         $display("MARK band_L force=%b", force_bad);
@@ -156,7 +158,7 @@ module tb_puck_ui;
         wait_frames(2);
         $display("MARK filter_oob");
         sample_osd_row(1);
-        press(0); press(0);                       // filter -> page -> band
+        press(0); press(0); press(0);             // filter -> page -> SCAN -> band
         press(1);                                 // band -> A (A4 5805)
         press(0);                                 // field -> channel
         press(1); press(1);                       // A5, A6 (5765)
@@ -211,10 +213,22 @@ module tb_puck_ui;
         press(1);                                 // RSSI -> main
         wait_frames(2);
         $display("MARK left page=%0d cal=%0d", page, rssi_cal);
+        // SCAN: start it, let it step a few channels, abort it with OK
+        press(0);                                 // page -> SCAN
+        wait_frames(2);
+        $display("MARK scan_selected field=%0d", field);
+        $display("MARK scan_start %0d", $time);
+        press(1);                                 // start
+        #600_000_000;
+        wait_frames(1);
+        $display("MARK scan_busy busy=%0d", scan_busy);
+        press(0);                                 // abort: back to A6
+        wait_frames(2);
+        $display("MARK scan_aborted busy=%0d band=%0d ch=%0d field=%0d", scan_busy, band, ch, field);
         $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d filter_pulses=%0d filter_width_errors=%0d final_filter_vcr=%0d",
                  collisions, nack_error, spi_idle_bad, filter_pulses, filter_width_errors, filter_vcr);
         $finish;
     end
-    initial begin #5_000_000_000 $display("RESULT timeout"); $finish; end
+    initial begin #8_000_000_000 $display("RESULT timeout"); $finish; end
 endmodule
 `default_nettype wire
