@@ -101,7 +101,7 @@ Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar
 
 Menyns sista fält före sidvalet är `FILT`: `TV` eller `VCR` för båda dekodrarna (register 02h, 30h respektive 20h). Efter reset står det på `TV`. Det skrivs till dekodrarna mellan pollrundorna och igen efter en dekoderomstart. Vilket läge som håller låset och bilden bäst är inte avgjort; prova båda med samma kamera och kanal och logga varje läge för sig.
 
-Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **62 byte** inklusive CR LF. Efter mixläget står filtret som `T` eller `V`, före tappflaggan och de två låstecknen. Det är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i README under M6.
+Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **85 byte** inklusive CR LF (62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V`, före tappflaggan och de två låstecknen; sist kommer RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`). Utan ADS1115 på kortet står RSSI som `-----` och `??`. Det är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i README under M6.
 
 ```bash
 python gateware/tools/snowlog.py /dev/ttyUSB1 --label tv --seconds 30 --out filt.csv
