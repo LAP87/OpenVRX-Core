@@ -55,8 +55,10 @@ def source(n_fields, period=P_NTSC, lines=LINES, vbi=VBI, interlaced=False, f_st
     return out
 
 
-def run_sim(name, src, alter=None, **params):
-    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls)."""
+def run_sim(name, src, alter=None, check_open=True, **params):
+    """alter: {rtl file: (text, replacement)} compiles an altered copy (negative controls).
+    check_open: also assert the formal open-point records (no_open_point_violations); a
+    negative control of those records itself runs with it off."""
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     env = dict(os.environ)
     if iverilog_bin.exists():
@@ -86,7 +88,23 @@ def run_sim(name, src, alter=None, **params):
     def num(x):
         return int(x) if x.isdigit() else -1          # x: read from SDRAM that was never written
 
-    return [(r[0], *map(num, r[1:])) for r in sd[:-1]], [(r[0], *map(num, r[1:])) for r in pix]
+    sd = [(r[0], *map(num, r[1:])) for r in sd[:-1]]
+    pix = [(r[0], *map(num, r[1:])) for r in pix]
+    if check_open:
+        no_open_point_violations(sd, pix)
+    return sd, pix
+
+
+# tb_fb.v checks two of the formal proof's open points (gateware/formal/README.md 4 and 5)
+# and writes a record when either is broken; every run must come back without them.
+def no_open_point_violations(sd, pix):
+    """Q: frame_low/ll_low changed within three pixel clocks of the y = 0 read that takes
+    them (formal/README.md point 4). P: the display read a slot while the fetch of its line
+    was still writing the line buffer (point 5)."""
+    late = [r for r in sd if r[0] == 'P' and len(r) == 3]
+    assert not late, f'the display read a line whose fetch was still writing: {late[:4]}'
+    marg = [r for r in pix if r[0] == 'Q']
+    assert not marg, f'frame_low/ll_low reached the y = 0 read without margin: {marg[:4]}'
 
 
 class Frame:
@@ -848,3 +866,56 @@ def test_mode_switch_checks_catch_faults():
     assert bad['xz'], 'an X on r was not seen'
     assert bad['vsync'], 'an extra vsync pulse was not seen'
     assert [b for b in bad['picture'] if b[0] == 'LOW'], f"a wrong tag was not seen: {bad['picture']}"
+
+# ---- the formal proof's open points (gateware/formal/README.md 4 and 5) and their controls
+
+# point 5: the store's read data delayed by one output line (1436 SDRAM clocks): every fetch
+# lands in the line buffer only at or after the display reads its slot
+LATE_FETCH = [
+    ("    wire [7:0] ok_rd = fw_hit ? fw_data : ok_q;",
+     "    wire [7:0] ok_rd = fw_hit ? fw_data : ok_q;\n"
+     "    reg [32:0] rd_pipe [0:1435];\n"
+     "    reg        rdata_valid_d = 1'b0;\n"
+     "    reg [31:0] rdata_d = 32'd0;\n"
+     "    integer k_;\n"
+     "    always @(posedge clk) begin\n"
+     "        rd_pipe[0] <= {rdata, rdata_valid};\n"
+     "        for (k_ = 1; k_ < 1436; k_ = k_ + 1) rd_pipe[k_] <= rd_pipe[k_-1];\n"
+     "        rdata_valid_d <= rd_pipe[1435][0];\n"
+     "        rdata_d <= rd_pipe[1435][32:1];\n"
+     "    end\n"),
+    ("if (rdata_valid && rd_inflight) begin", "if (rdata_valid_d && rd_inflight) begin"),
+    ("lb_data <= rdata;", "lb_data <= rdata_d;"),
+]
+
+
+def test_display_never_reads_a_fetch_that_is_still_writing():
+    """Formal/README.md point 5 as a simulation check: the display reads a requested slot one
+    output line after the request, and tb_fb.v flags (P) a read whose fetch has not written all
+    360 words of the line by then. The clean chain never does: every run above goes through
+    no_open_point_violations. Negative control: with the store's read data delayed by one
+    output line, the fetch is still writing when the display reads, the check sees it and
+    no_open_point_violations fails on the same records."""
+    src = source(18, period=P_SLOW)
+    sd, pix = run_sim('tb_fb_late_fetch_neg', src, RT_EN=0, check_open=False,
+                      alter={'fb_sdram.v': LATE_FETCH})
+    late = [r for r in sd if r[0] == 'P' and len(r) == 3]
+    assert len(late) >= 10, f'the delayed fetch was not caught: {late[:4]}'
+    assert all(r[2] < 360 for r in late), 'a flagged read was of a complete line'
+    with pytest.raises(AssertionError, match='still writing'):
+        no_open_point_violations(sd, pix)
+
+
+def test_margin_check_is_tested():
+    """Negative control for the point-4 check (Q): a level that changes two pixel clocks before
+    the y = 0 read (tb fault 3, observed only - the DUT is not touched) must be flagged. The
+    clean runs of this file pass the same check with Q empty; even fb_display.v reading
+    frame_low and ll_low with no synchroniser at all passes it, so the margin in the real
+    design is structural, not timing luck."""
+    src = source(18, period=P_SLOW)
+    sd, pix = run_sim('tb_fb_margin_ref', src)
+    pf = [f for f in pix_frames(pix) if f['video']]
+    assert len(pf) > 3, 'no frame with video to fault the read of'
+    read_pc = pf[3]['pc']                       # V is printed at x = 1; the read is at x = 0
+    with pytest.raises(AssertionError, match='margin'):
+        run_sim('tb_fb_margin_fault', src, FAULT=8, FAULT_PC=read_pc - 3)

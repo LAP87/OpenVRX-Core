@@ -493,6 +493,10 @@ Alla fyra seeds routade i den historiska körningen med 12 600 LUT och 25 BSRAM.
 
 Iakttagelse: med seed 1 och 3 (och seed 3 före ändringen) når `sd_clk_shift`, SDRAM-klockan ut till stiftet, inte stiftet över dedikerad routning och går via vanliga ledningar. Det ger inget fel, men fördröjningen till SDRAM-klockstiftet beror då på placeringen; det är vad minnestestet `m2a_memtest` mäter på kortet.
 
+## Formella öppna punkter som simuleringskontroller, 2026-10-12
+
+`formal/README.md` punkt 4 (att `frame_low`/`ll_low` hinner fram före `y == 0`-läsningen med minst en klockas marginal) och punkt 5 (att radbufferten är skriven innan displayen läser platsen) är nu simuleringskontroller i `sim/tb_fb.v`, kontrollerade i varje körning av `sim/test_fb.py` (`no_open_point_violations`): en Q-post för en nivå utan marginal, en P-post för en läsning av en hämtning som fortfarande skriver. Negativa kontroller: `test_display_never_reads_a_fetch_that_is_still_writing` (läsdata fördröjd en hel utrad fäller P-posten på varje bild) och `test_margin_check_is_tested` (bänkens fel 3 vänder den observerade nivån två klockor före läsningen och måste ge en Q-post). Punkterna är fortfarande inte formellt bevisade; att den utan synkroniserare muterade `fb_display.v` också håller marginalen visar att den är strukturell (genlockens `line_end`-sampling), inte ett tajningsträff.
+
 ## Störningskampanjen C3 avslutad, 2026-10-12
 
 Alla 260 frön i C3:s kampanj är körda: 257 gröna med originalstimulus, tre (1345, 1434, 1444) gröna först med fyra rena fält efter originalet (`--recovery-fields 4`), inget oförklarat fel. De 60 som återstod gav ett RTL-fel i `fb_sdram.v` (raden skrivaren går in i mitt i räknades som lagrad), rättat i Core `0da655d`. Rundorna, siffrorna och vilka källor de kördes på står i [sim/FUZZ_2026-10-07.md](sim/FUZZ_2026-10-07.md). Hela sviten på grenen: 691 test gröna, ingen delad byggkatalog.

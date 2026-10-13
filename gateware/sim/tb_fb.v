@@ -16,6 +16,8 @@ module tb_fb;
                                               // bit 0: one source word of field FAULT_TAG carries a wrong tag
                                               // bit 1: the observed r has an X for one pixel clock at pixel clock FAULT_PC
                                               // bit 2: the observed vsync gets a spurious extra pulse at pixel clock FAULT_PC2
+                                              // bit 3: the level the margin check observes changes at pixel clock FAULT_PC
+                                              //        (faults the check only, never the DUT)
     parameter FAULT_TAG = 0, FAULT_PC = 0, FAULT_PC2 = 0;
     parameter V_TOTAL = 40, V_ACTIVE = 36, V_FP = 1, V_SYNC = 1;
     parameter BOB = 1, RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270, LL_EQ = 1;
@@ -86,6 +88,21 @@ module tb_fb;
     sdram_model #(.AW(21), .T_PWRUP_PS(15_000_000), .REF_WINDOW(8), .STRICT(1)) mem (
         .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
         .ba(ba), .a(a), .dqm(dqm), .dq(dq));
+
+    // ---- read-before-write check (formal/README.md point 5): the display reads a slot one
+    // output line after requesting its line, so the store has that line's time to fetch it.
+    // The fetch's words are counted here from its request being accepted; the pixel domain
+    // below marks the read of a slot, and if words of that fetch are still being written the
+    // count stands below 360 and the fetch was late (reported to sd.txt as a P line).
+    integer lb_wr_cnt = 0;                    // lb_we words of the fetch in progress
+    reg [1:0] lb_slot = 0;                    // slot the fetch in progress writes
+    always @(posedge sd_clk) if (!rst && dut.fb.resetn) begin
+        if (dut.fb.accept) begin
+            lb_wr_cnt <= 0;
+            lb_slot <= dut.fb.f_slot;
+        end
+        if (dut.fb.lb_we) lb_wr_cnt <= lb_wr_cnt + 1;
+    end
 
     // ---- SDRAM domain log. Order within a cycle: what the display asked and was told,
     // then what the writer did (the model replays the lines in this order).
@@ -166,6 +183,58 @@ module tb_fb;
             bad_line <= 1'b0;
         end
     end
+
+    // ---- margin check (formal/README.md point 4): frame_low (BUF) and ll_low (LOW) are read
+    // at x = 0, y = 0 through a two-stage synchroniser, so the value read is settled only if
+    // the level stopped changing at least three pixel clocks earlier: two for the stages and
+    // one of margin. A change seen in this domain fewer than three clocks before the read is
+    // a violation (a Q line). Fault 3 corrupts only what is observed here, to check the check.
+    reg [2:0] fl_age = 3'd3, lw_age = 3'd3;   // pixel clocks since the level last changed
+    reg       fl_d = 1'bx, lw_d = 1'bx;
+    wire       fl_obs = (FAULT[3] && pc == FAULT_PC) ? ~fl_d : dut.disp.frame_low;
+    wire       lw_obs = (FAULT[3] && pc == FAULT_PC) ? ~lw_d : dut.disp.ll_low;
+    always @(posedge pix_clk) if (!rst) begin
+        // the first sample after reset only initialises the comparison (the levels leave
+        // reset with the DUT and are stable from then on)
+        fl_age <= (fl_d === 1'bx) ? 3'd3 :
+                  (fl_obs !== fl_d) ? 3'd0 : (fl_age == 3'd3 ? 3'd3 : fl_age + 3'd1);
+        lw_age <= (lw_d === 1'bx) ? 3'd3 :
+                  (lw_obs !== lw_d) ? 3'd0 : (lw_age == 3'd3 ? 3'd3 : lw_age + 3'd1);
+        fl_d <= fl_obs;
+        lw_d <= lw_obs;
+        if (dut.x == 0 && dut.y == 0 && fl_d !== 1'bx) begin
+            if (!dut.ll_p && fl_age < 3'd3) $fwrite(fp, "Q frame_low %0d\n", pc);
+            if (dut.ll_p && lw_age < 3'd3) $fwrite(fp, "Q ll_low %0d\n", pc);
+        end
+    end
+
+    // ---- display read of a requested slot (formal/README.md point 5): the line that starts at
+    // x = 0 of an active row reads slot src_cur; its fetch was accepted one line earlier. If
+    // the fetch is still writing when the display reads (the SDRAM-domain counter above), the
+    // display reads a half-written line: a P line with the line number and the word count so
+    // far. The count is sampled in the SDRAM domain on the next clock after the read begins,
+    // which can only report later than the read, never earlier.
+    reg       rd_mark = 0;                    // armed at a line start until the SDRAM domain has sampled
+    reg [9:0] rd_line_q = 0;
+    reg       sd_seen = 0;                    // the SDRAM domain has sampled this read
+    always @(posedge pix_clk) if (!rst && !dut.ll_p) begin
+        if (dut.x == 0 && dut.y < V_ACTIVE && dut.disp.have_video) begin
+            rd_mark <= 1'b1;
+            rd_line_q <= dut.disp.src_cur;
+        end
+        if (rd_mark && dut.x == 3) rd_mark <= 1'b0;         // disarm after the sample window
+    end
+    always @(posedge sd_clk) if (!rst && dut.fb.resetn) begin
+        if (rd_mark && !sd_seen) begin
+            sd_seen <= 1'b1;
+            // the fetch of this line is still running (or has written nothing yet): the
+            // display is reading a slot whose line is not in the buffer in full
+            if (dut.fb.fetching && dut.fb.f_idx < 9'd359 && dut.fb.f_slot == lb_slot
+                && dut.disp.src_cur == rd_line_q)
+                $fwrite(fs, "P %0d %0d\n", rd_line_q, lb_wr_cnt);
+        end else if (!rd_mark) sd_seen <= 1'b0;
+    end
+
 
     initial begin
         $readmemh("lines.hex", src);
