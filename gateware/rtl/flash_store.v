@@ -86,7 +86,7 @@ module flash_store #(
     reg  [7:0]  crc;
     reg  [12:0] pos;                      // byte in the 8 KB scan, or in a record
     reg  [8:0]  slot;                     // record index 0..511 over both sectors
-    reg  [511:0] erased;                  // per slot: all 16 bytes FFh
+    reg         after_best, after_ok;     // the slot after the newest record so far: still to come / erased
     reg         r_ff;
     reg         have;
     reg  [8:0]  best_slot, next_slot;
@@ -120,7 +120,10 @@ module flash_store #(
         case (st)
         S_POWER: begin t <= t + 1; if (t == MS) begin t <= 0; st <= S_SCAN_CMD; k <= 0; flash_cs_n <= 1'b0; end end
         S_SCAN_CMD: if (!x_busy && !x_go) begin                    // 03h + address
-            if (k == 3'd4) begin st <= S_SCAN; pos <= 0; slot <= 0; crc <= 0; r_ff <= 1'b1; x_tx <= 8'h00; x_go <= 1'b1; end
+            if (k == 3'd4) begin
+                st <= S_SCAN; pos <= 0; slot <= 0; crc <= 0; r_ff <= 1'b1; x_tx <= 8'h00; x_go <= 1'b1;
+                after_best <= 1'b0; after_ok <= 1'b0;
+            end
             else begin
                 x_tx <= (k == 0) ? 8'h03 : (k == 1) ? SECTOR0[23:16] : (k == 2) ? SECTOR0[15:8] : SECTOR0[7:0];
                 x_go <= 1'b1; k <= k + 1'b1;
@@ -131,9 +134,10 @@ module flash_store #(
             if (x_rx != 8'hFF) r_ff <= 1'b0;
             if (pos[3:0] != 4'd15) crc <= crc8_byte(crc, x_rx);
             if (pos[3:0] == 4'd15) begin
-                erased[slot] <= r_ff && x_rx == 8'hFF;
+                if (after_best) begin after_ok <= r_ff && x_rx == 8'hFF; after_best <= 1'b0; end
                 if (rec[0] == 8'hA5 && x_rx == crc && (!have || newer({rec[1], rec[2]}, best_seq))) begin
                     have <= 1'b1; best_seq <= {rec[1], rec[2]}; best_slot <= slot;
+                    after_best <= 1'b1; after_ok <= 1'b0;
                     loaded <= {rec[3], rec[4], rec[5], rec[6], rec[7], rec[8], rec[9], rec[10], rec[11], rec[12]};
                 end
                 crc <= 0; r_ff <= 1'b1; slot <= slot + 1'b1;
@@ -146,7 +150,7 @@ module flash_store #(
             if (have) begin
                 load <= 1'b1; saved <= loaded; seq <= best_seq;
                 // append after the newest record if that slot is erased and in the same sector
-                if (best_slot[7:0] != 8'hFF && erased[best_slot + 1'b1]) begin
+                if (best_slot[7:0] != 8'hFF && after_ok) begin
                     next_slot <= best_slot + 1'b1; need_erase <= 1'b0;
                 end else begin next_slot <= {~best_slot[8], 8'd0}; need_erase <= 1'b1; end
             end else begin
