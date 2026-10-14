@@ -19,7 +19,11 @@ alone, oldest first. It is shown
     resolutions), the line is good, and no line of the other channel (whatever
     its number) arrived within T_PAIR of it.
 The current channel changes without a pair when
-  * health: its last 8 lines were all bad and the other channel's all good, or
+  * health: its last 8 lines were all bad and the other channel's all good, where a weak
+    receiver's lines count as bad on both sides (the mixer leaves a weak receiver early), or
+  * rescue: its last 8 lines were all bad (bad lines, not weak ones) and the other channel's
+    last 8 had no bad line, weak or not (a weak receiver still takes over from a broken one;
+    review 2026-10-14, RS-1), or
   * silence: it has delivered nothing for N_STEP lines of the other channel
     if the channels were in step when it went quiet, else for N_DEAD lines
     (N_DEAD is longer than a vertical blanking interval, so two channels that
@@ -129,11 +133,14 @@ def blend_words(wa, wb):
 
 
 class _Line:
-    __slots__ = ('rec', 't', 'bad', 'fc', 'peer_sick', 'self_well', 'weak')
+    __slots__ = ('rec', 't', 'bad', 'fc', 'peer_sick', 'self_well', 'weak', 'peer_dead', 'self_ok')
 
-    def __init__(self, rec, t, bad, fc, peer_sick, self_well, weak=False):
+    def __init__(self, rec, t, bad, fc, peer_sick, self_well, weak=False, peer_dead=None, self_ok=None):
         self.rec, self.t, self.bad, self.fc = rec, t, bad, fc
         self.peer_sick, self.self_well, self.weak = peer_sick, self_well, weak
+        # without weak lines the two are the same as peer_sick and self_well
+        self.peer_dead = peer_sick if peer_dead is None else peer_dead
+        self.self_ok = self_well if self_ok is None else self_ok
 
 
 class Mixer:
@@ -145,7 +152,9 @@ class Mixer:
     (decoder status "no lock", sampled when a line arrives).
     ext_weak: the same form (RSSI warning, rssi_adc.v): a weak channel's arriving lines count
     as bad for its health (sick, self_well) and lose a pair against a good line of a channel
-    that is not weak; the lines themselves are not bad (shown alone, never left out for it). keep_words=False skips `out`.
+    that is not weak; the lines themselves are not bad (shown alone, never left out for it).
+    The rescue rule looks at bad lines only (dead, ok), so a weak channel without bad lines
+    still takes over from one whose last 8 lines were all bad. keep_words=False skips `out`.
     omit_bad=False writes lines bad on both receivers like any other (the rule before 2026-10-08).
     `omitted` has one entry per decision: True where a line was left out by that rule.
     """
@@ -157,7 +166,8 @@ class Mixer:
         self.ext_weak = ext_weak
         self.kw = kw
         self.q = (deque(), deque())
-        self.hist = ([], [])          # bad flags of the last 8 arrived lines
+        self.hist = ([], [])          # bad-or-weak flags of the last 8 arrived lines
+        self.hist_bad = ([], [])      # bad flags alone (the rescue rule)
         self.fc = [0, 0]              # field counter (mod 4): advances when the line number restarts
         self.prev = [None, None]      # (field, line) of the last arrived line
         self.last_arr = [None, None]  # arrival time of the last line
@@ -182,6 +192,7 @@ class Mixer:
         self.adm_new = False          # the last admitted line started an output field
         self.pushed = [None, None]    # time of each channel's last line, and its `sick` before that line
         self.sick_before = [False, False]
+        self.dead_before = [False, False]
 
     # ---- per-channel bookkeeping at arrival
     def _ext(self, ch, t, which=None):
@@ -194,6 +205,12 @@ class Mixer:
     def _well(self, ch):
         return len(self.hist[ch]) == 8 and not any(self.hist[ch])
 
+    def _dead(self, ch):
+        return len(self.hist_bad[ch]) == 8 and all(self.hist_bad[ch])
+
+    def _ok(self, ch):
+        return len(self.hist_bad[ch]) == 8 and not any(self.hist_bad[ch])
+
     def push(self, ch, rec, t):
         """Two lines at the same time (the same clock edge in the RTL): each sees the other's
         health as it was before that edge (mix_chan registers `sick`)."""
@@ -203,12 +220,17 @@ class Mixer:
         # channel's gap fill
         complete = rec.active_count >= 4 * N_WORDS
         bad = is_bad(rec, **self.kw) or self._ext(ch, t) or not complete
-        peer_sick = self.sick_before[1 - ch] if self.pushed[1 - ch] == t else self._sick(1 - ch)
-        self.sick_before[ch], self.pushed[ch] = self._sick(ch), t
+        same = self.pushed[1 - ch] == t
+        peer_sick = self.sick_before[1 - ch] if same else self._sick(1 - ch)
+        peer_dead = self.dead_before[1 - ch] if same else self._dead(1 - ch)
+        self.sick_before[ch], self.dead_before[ch], self.pushed[ch] = self._sick(ch), self._dead(ch), t
         weak = self._ext(ch, t, self.ext_weak)
         h = self.hist[ch]
         h.append(bad or weak)                                 # weak RSSI counts against health
         del h[:-8]
+        hb = self.hist_bad[ch]
+        hb.append(bad)
+        del hb[:-8]
         p = self.prev[ch]
         if p is not None and (rec.line_in_field <= p[1] or rec.field != p[0]):
             self.fc[ch] = (self.fc[ch] + 1) & 3
@@ -220,7 +242,7 @@ class Mixer:
             return
         if not complete:
             return
-        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], peer_sick, self._well(ch), weak))
+        self.q[ch].append(_Line(rec, t, bad, self.fc[ch], peer_sick, self._well(ch), weak, peer_dead, self._ok(ch)))
         self._pairs()
 
     def finish(self, t=float('inf')):
@@ -336,7 +358,7 @@ class Mixer:
             q = min(self.quiet[self.cur] + 1, self.n_dead)
             fast = self.qfast[self.cur] if self.quiet[self.cur] else step
             dead = q >= self.n_dead or (fast and q >= self.n_step)
-            if dead or (e.peer_sick and e.self_well):
+            if dead or (e.peer_sick and e.self_well) or (e.peer_dead and e.self_ok):
                 self.cur = x
         owner = x == self.cur
         # gap fill: the other channel (the current one when this matters) delivered nothing

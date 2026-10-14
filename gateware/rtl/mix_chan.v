@@ -11,6 +11,9 @@
 // (`sick`, `self_well`), and line_mixer.v prefers the other receiver's good line in a pair,
 // but the line itself is not bad: it is shown when it is the better or the only copy and is
 // never left out for it. The mixer then leaves this receiver before its picture breaks up.
+// `dead` and `self_ok` are the same health without the weak flag (bad lines only): with them a
+// weak receiver whose lines are good still takes over from one whose lines are all bad
+// (review 2026-10-14, RS-1: before, two receivers out of step stayed on the broken one).
 //
 // A line is complete when its words 0..359 arrived in order since the last
 // marker (a late SAV or a short active part gives fewer). An incomplete line is
@@ -22,8 +25,10 @@
 //   age        system-clock cycles since the line was stored (saturates)
 //   fc         this channel's field counter (mod 4); it advances when the
 //              line number restarts or the F bit changes
-//   self_well  this channel's last 8 lines, this one included, were all good
-//   peer_sick  the other channel's last 8 lines were all bad when this line arrived
+//   self_well  this channel's last 8 lines, this one included, were all good (and not weak)
+//   peer_sick  the other channel's last 8 lines were all bad (or weak) when this line arrived
+//   self_ok    as self_well, weak lines allowed
+//   peer_dead  as peer_sick, weak lines not counted
 //   near       a line of the other channel arrived less than T_PAIR cycles before or
 //              after this one (whatever its number)
 // Health, field counter and `near` follow every arriving line, also one that is
@@ -49,10 +54,12 @@ module mix_chan #(
     input  wire [8:0]  rd_idx,
     output wire [31:0] rd_data,          // word rd_idx of the head line, 1 cycle after rd_idx
 
-    input  wire        peer_sick,        // the other channel's `sick`, `arrived` and `last_age`
+    input  wire        peer_sick,        // the other channel's `sick`, `dead`, `arrived` and `last_age`
+    input  wire        peer_dead,
     input  wire        peer_arrived,
     input  wire [AGE_W-1:0] peer_last_age,
-    output reg         sick,             // last 8 arrived lines all bad
+    output reg         sick,             // last 8 arrived lines all bad or weak
+    output reg         dead,             // last 8 arrived lines all bad (weak not counted)
     output wire        arrived,          // one cycle per arriving line
     output reg  [AGE_W-1:0] last_age,    // cycles since the last line arrived, minus one (saturates)
 
@@ -66,6 +73,8 @@ module mix_chan #(
     output wire [AGE_W-1:0] head_age,
     output wire        head_peer_sick,
     output wire        head_self_well,
+    output wire        head_peer_dead,
+    output wire        head_self_ok,
     output wire        head_near,
     output reg         alive,            // lines arrived within TIMEOUT (LEDs; the mixer does not use it)
     output reg         overflow          // sticky: a line was dropped because all slots were full
@@ -112,6 +121,8 @@ module mix_chan #(
     reg [1:0]           m_fc    [0:3];
     reg                 m_psick [0:3];
     reg                 m_swell [0:3];
+    reg                 m_pdead [0:3];
+    reg                 m_sok   [0:3];
     reg                 m_near  [0:3];
     reg [AGE_W-1:0]     m_age   [0:3];   // cycles since the line was stored, minus one
     assign head_field     = m_field[rslot];
@@ -123,6 +134,8 @@ module mix_chan #(
     assign head_age       = m_age[rslot];
     assign head_peer_sick = m_psick[rslot];
     assign head_self_well = m_swell[rslot];
+    assign head_peer_dead = m_pdead[rslot];
+    assign head_self_ok   = m_sok[rslot];
     assign head_near      = m_near[rslot];
 
     // per-channel state that follows every arriving line
@@ -141,6 +154,10 @@ module mix_chan #(
     wire        hfull_n   = (hcnt >= 4'd7);
     wire        well_n    = hfull_n && (hist_n == 8'h00);
     wire        sick_n    = hfull_n && (hist_n == 8'hFF);
+    reg  [7:0]  hist_b;                  // bad flags alone (weak not counted), newest in bit 0
+    wire [7:0]  hist_b_n  = {hist_b[6:0], bad_in};
+    wire        ok_n      = hfull_n && (hist_b_n == 8'h00);
+    wire        dead_n    = hfull_n && (hist_b_n == 8'hFF);
 
     // a line that lost words because the ring was full is not stored at all
     reg  skipping;
@@ -161,8 +178,10 @@ module mix_chan #(
             prev_valid <= 1'b1; prev_field <= m_fld; prev_line <= m_ln;
             fc   <= fc_n;
             hist <= hist_n;
+            hist_b <= hist_b_n;
             if (hcnt != 4'd8) hcnt <= hcnt + 1'b1;
             sick <= sick_n;
+            dead <= dead_n;
             if (complete) last_age <= 0;
             if (full || skipping) overflow <= 1'b1;
         end
@@ -175,6 +194,8 @@ module mix_chan #(
             m_fc[wslot]    <= fc_n;
             m_psick[wslot] <= peer_sick;
             m_swell[wslot] <= well_n;
+            m_pdead[wslot] <= peer_dead;
+            m_sok[wslot]   <= ok_n;
             m_near[wslot]  <= peer_arrived || (peer_last_age < T_PAIR - 1);   // ... or before it
             m_age[wslot]   <= 0;
             wslot <= wslot + 1'b1;
@@ -188,8 +209,8 @@ module mix_chan #(
 
         if (rst) begin
             wslot <= 0; rslot <= 0; count <= 0; overflow <= 1'b0; idle <= 0; alive <= 1'b0;
-            skipping <= 1'b0; prev_valid <= 1'b0; fc <= 0; hist <= 0; hcnt <= 0;
-            sick <= 1'b0; last_age <= AGE_MAX;
+            skipping <= 1'b0; prev_valid <= 1'b0; fc <= 0; hist <= 0; hist_b <= 0; hcnt <= 0;
+            sick <= 1'b0; dead <= 1'b0; last_age <= AGE_MAX;
         end
     end
 endmodule

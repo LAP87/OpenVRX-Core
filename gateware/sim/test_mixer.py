@@ -793,6 +793,42 @@ def test_weak_rssi_negative_control():
                   weak=lambda ev: (window(ev, on, off), False), alter=alter)
 
 
+def weak_rescue_streams():
+    """A current after reset, decoder unlocked (every line bad), five and a third lines ahead of B;
+    B good (the streams of test_unlocked_current_channel_out_of_step)."""
+    a = Stream(1).field(0, amp=60).field(1, amp=60).field(2, amp=60).field(3, amp=60).done()
+    a = a[5 * LINE:][:(3 * (VBI + LINES) + 1) * LINE]
+    b = Stream(2).field(0, amp=3).field(1, amp=3).field(2, amp=3).done()
+    return a, b, {'START_A': START_A + LINE_NS / 3}
+
+
+def check_weak_rescue(name, alter=None):
+    a, b, kw = weak_rescue_streams()
+    return check(name, a, b, {'EXTA_ON': 0, 'WEAKB_ON': 0, **kw}, ev_kw={k.lower(): v for k, v in kw.items()},
+                 ext=lambda ev: (True, False), weak=lambda ev: (False, True), alter=alter)
+
+
+def test_weak_receiver_takes_over_from_a_broken_one():
+    """Review 2026-10-14, RS-1. As test_unlocked_current_channel_out_of_step, but B's RSSI is weak the
+    whole run (rssi_adc.v warns for B: A's RSSI is fine, its decoder is not). B's lines are good, so
+    B still takes over at its eighth line and only B is shown from then on. Before the rescue rule
+    the weak flag kept B from ever being `well`, and the mixer showed A's bad lines to the end
+    (69 of A's 72 shown, none of B's)."""
+    m = check_weak_rescue('tb_mixer_weak_rescue')
+    assert all(p != 0b11 for _, p, *_ in m.trace), 'the channels never pair'
+    k = m.curs.index(1)
+    assert sum(1 for _, p, *_ in m.trace[:k + 1] if p == 0b10) == 8, 'B takes over at its eighth line'
+    assert cur_changes(m) == 1
+    assert all(u == (ref.USE_B if p == 0b10 else 0) for u, p, *_ in m.trace[k:]), 'only B after the takeover'
+
+
+def test_weak_rescue_rule_is_checked():
+    """Negative control: a copy of line_mixer.v without the rescue term stays on A to the end, the
+    model takes B."""
+    with pytest.raises(AssertionError, match='decision'):
+        check_weak_rescue('tb_mixer_weak_rescue_none', alter={'line_mixer.v': (' || (x_pdead && x_sok)', '')})
+
+
 def test_decoder_loses_lock_and_recovers():
     """Decoder A (current, the cleaner picture) reports no lock from the middle of field 0
     to the middle of field 1. In between nothing comes from A; afterwards A is used again."""

@@ -69,8 +69,9 @@ module mixer2 #(
 
     localparam AGE_W = $clog2(8 * T_PAIR);
     wire        pop_a, pop_b, ha_f, hb_f, ha_bad, hb_bad, ha_weak, hb_weak, ov_a, ov_b;
-    wire        sick_a, sick_b, arr_a, arr_b;
+    wire        sick_a, sick_b, arr_a, arr_b, dead_a, dead_b;
     wire        ha_psick, hb_psick, ha_swell, hb_swell, ha_near, hb_near;
+    wire        ha_pdead, hb_pdead, ha_sok, hb_sok;
     wire [8:0]  rd_idx;
     wire [31:0] rd_a, rd_b;
     wire [2:0]  cnt_a, cnt_b;
@@ -81,17 +82,19 @@ module mixer2 #(
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_a (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_a), .ext_weak(ext_weak_a), .in_empty(fa_empty), .in_data(fa_data), .in_pop(fa_pop),
         .pop_line(pop_a), .rd_idx(rd_idx), .rd_data(rd_a),
-        .peer_sick(sick_b), .peer_arrived(arr_b), .peer_last_age(last_b),
-        .sick(sick_a), .arrived(arr_a), .last_age(last_a), .count(cnt_a),
+        .peer_sick(sick_b), .peer_dead(dead_b), .peer_arrived(arr_b), .peer_last_age(last_b),
+        .sick(sick_a), .dead(dead_a), .arrived(arr_a), .last_age(last_a), .count(cnt_a),
         .head_field(ha_f), .head_line(ha_l), .head_hf(ha_hf), .head_bad(ha_bad), .head_weak(ha_weak), .head_fc(ha_fc), .head_age(ha_age),
-        .head_peer_sick(ha_psick), .head_self_well(ha_swell), .head_near(ha_near), .alive(alive_a), .overflow(ov_a));
+        .head_peer_sick(ha_psick), .head_self_well(ha_swell), .head_peer_dead(ha_pdead), .head_self_ok(ha_sok),
+        .head_near(ha_near), .alive(alive_a), .overflow(ov_a));
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_b (
         .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .ext_weak(ext_weak_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
         .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b),
-        .peer_sick(sick_a), .peer_arrived(arr_a), .peer_last_age(last_a),
-        .sick(sick_b), .arrived(arr_b), .last_age(last_b), .count(cnt_b),
+        .peer_sick(sick_a), .peer_dead(dead_a), .peer_arrived(arr_a), .peer_last_age(last_a),
+        .sick(sick_b), .dead(dead_b), .arrived(arr_b), .last_age(last_b), .count(cnt_b),
         .head_field(hb_f), .head_line(hb_l), .head_hf(hb_hf), .head_bad(hb_bad), .head_weak(hb_weak), .head_fc(hb_fc), .head_age(hb_age),
-        .head_peer_sick(hb_psick), .head_self_well(hb_swell), .head_near(hb_near), .alive(alive_b), .overflow(ov_b));
+        .head_peer_sick(hb_psick), .head_self_well(hb_swell), .head_peer_dead(hb_pdead), .head_self_ok(hb_sok),
+        .head_near(hb_near), .alive(alive_b), .overflow(ov_b));
     assign overflow = ov_a | ov_b;
 
     wire        o_we;
@@ -103,6 +106,7 @@ module mixer2 #(
         .cnt_a(cnt_a), .cnt_b(cnt_b), .fa(ha_f), .fb(hb_f), .la(ha_l), .lb(hb_l), .hfa(ha_hf), .hfb(hb_hf),
         .bada(ha_bad), .badb(hb_bad), .weaka(ha_weak), .weakb(hb_weak), .fca(ha_fc), .fcb(hb_fc), .age_a(ha_age), .age_b(hb_age),
         .near_a(ha_near), .near_b(hb_near), .psick_a(ha_psick), .psick_b(hb_psick), .swell_a(ha_swell), .swell_b(hb_swell),
+        .pdead_a(ha_pdead), .pdead_b(hb_pdead), .sok_a(ha_sok), .sok_b(hb_sok),
         .o_we(o_we), .o_data(o_data), .o_room(o_wl < 6'd28),
         .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop), .dec_field(dec_field), .dec_line(dec_line),
         .cur(cur));
