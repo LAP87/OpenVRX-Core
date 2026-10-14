@@ -42,6 +42,14 @@ sed 's/^    assign full = .*/    assign full = 1'"'"'b0;/' "$fifo" > never_full.
 must_fail async_fifo_never_full fifo_props 20 "" "$work/never_full.v" "$here/fifo_props.v" || status=1
 sed 's/^    assign empty = .*/    assign empty = 1'"'"'b0;/' "$fifo" > never_empty.v
 must_fail async_fifo_never_empty fifo_props 20 "" "$work/never_empty.v" "$here/fifo_props.v" || status=1
+# RD_REG = 1 (registered read, block RAM; the mixer's input FIFOs): the same properties
+prove async_fifo_rd_reg_depth4 fifo_props 20 "chparam -set RD_REG 1 fifo_props;" "$fifo" "$here/fifo_props.v" || status=1
+prove async_fifo_rd_reg_depth8 fifo_props 30 "chparam -set AW 3 -set RD_REG 1 fifo_props;" "$fifo" "$here/fifo_props.v" || status=1
+# negative control: a register loaded from the current read pointer instead of its next value
+# still shows the popped word after a pop
+sed 's/always @(posedge rclk) rd_q <= mem\[rd_next\];/always @(posedge rclk) rd_q <= mem[rbin[AW-1:0]];/' "$fifo" > rd_reg_late.v
+grep -q 'rd_q <= mem\[rbin\[AW-1:0\]\];' rd_reg_late.v
+must_fail async_fifo_rd_reg_late fifo_props 20 "chparam -set RD_REG 1 fifo_props;" "$work/rd_reg_late.v" "$here/fifo_props.v" || status=1
 FLOW="chformal -lower;" prove genlock_timing genlock_props 130 "" "$here/../rtl/genlock_timing.v" "$here/genlock_props.v" || status=1
 # negative controls: without the wait limit a frame can stall forever while locked; with two back-porch
 # lines skipped a normal frame is shorter than V_TOTAL - 1; without the hold-off two cuts can follow each

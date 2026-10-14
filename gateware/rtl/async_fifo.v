@@ -1,9 +1,19 @@
 // Dual-clock FIFO with Gray-coded pointers (Cummings style), first-word
 // fall-through: rd_data is valid whenever !empty; rd_en pops it.
+//
+// RD_REG = 0 (default): rd_data is an asynchronous read of the word at the read pointer, so the
+// memory can only be LUT RAM (RAM16SDP4 on the GW2A: one CFU, 8 LUT positions, per 16 x 4 bits).
+// RD_REG = 1: every read clock loads the word at the pointer's next value into a register, which
+// lets the memory go into block RAM. rd_data is the same as with RD_REG = 0 on every clock while
+// !empty: the word at the read pointer was written before the first synchroniser stage saw it, and
+// the writer never writes a word the reader has not popped (proven by formal/run.sh for both).
+// mixer2.v uses it for the two input FIFOs (2026-10-14: M6 with HDMI and VINTERP did not place;
+// gateware/README.md, "Bygget av M6").
 `default_nettype none
 module async_fifo #(
     parameter W = 32,
-    parameter AW = 9              // depth 2^AW
+    parameter AW = 9,             // depth 2^AW
+    parameter RD_REG = 0
 ) (
     input  wire         wclk,
     input  wire         wrst,
@@ -48,17 +58,24 @@ module async_fifo #(
     wire [AW:0] rbin_n  = rbin + (rd_en & ~empty);
     wire [AW:0] rgray_n = (rbin_n >> 1) ^ rbin_n;
     assign empty = (rgray == wgray_r2);
-    assign rd_data = mem[rbin[AW-1:0]];
     assign rd_level = g2b(wgray_r2) - rbin;
     always @(posedge rclk) begin
         if (rrst) begin rbin <= 0; rgray <= 0; end
         else begin rbin <= rbin_n; rgray <= rgray_n; end
         {wgray_r2, wgray_r1} <= {wgray_r1, wgray};
     end
+    wire [AW-1:0] rd_next = rrst ? {AW{1'b0}} : rbin_n[AW-1:0];   // rbin after this clock
+    reg  [W-1:0]  rd_q;
+    generate if (RD_REG != 0) begin : rd_reg
+        always @(posedge rclk) rd_q <= mem[rd_next];
+        assign rd_data = rd_q;
+    end else begin : rd_async
+        assign rd_data = mem[rbin[AW-1:0]];
+    end endgenerate
 
 `ifdef FORMAL
-    // Proven by formal/run.sh (formal/fifo_props.v starts all pointers at 0 and drives
-    // both clocks, enables and data freely):
+    // Proven by formal/run.sh for RD_REG = 0 and 1 (formal/fifo_props.v starts all pointers at 0
+    // and drives both clocks, enables and data freely):
     //   occupancy  real pointers never differ by more than the depth: no overflow, no underflow
     //   views      each side's view of the other pointer lags the real one (full/empty are conservative)
     //   gray       Gray pointers match their counters and move one step per own-clock edge
@@ -95,6 +112,9 @@ module async_fifo #(
             assert (f_at[AW-1:0] == f_watch && f_age != 0 && f_age <= DEPTH);
             assert (mem[f_watch] == f_value);
         end
+        // RD_REG = 1: once the first synchroniser stage has seen the word at the read pointer
+        // written, the read register holds it
+        if (RD_REG != 0 && g2b(wgray_r1) != rbin) assert (rd_q == mem[rbin[AW-1:0]]);
     end
 `endif
 endmodule
