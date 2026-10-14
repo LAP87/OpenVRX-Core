@@ -160,7 +160,7 @@ openFPGALoader -b tangnano20k --dump-flash -o 8380416 --file-size 8192 settings.
 xxd settings.bin | head
 ```
 
-Varje post är 16 byte: `A5`, löpnummer (två byte), tio byte inställningar, `FF FF`, CRC-8. Antalet poster är antalet sparanden sedan sektorn raderades.
+Varje post är 16 byte: `A5`, löpnummer (två byte), tio byte inställningar, antalet nollbitar i de 13 byten före (Z), `FF`, CRC-8. Antalet poster är antalet sparanden sedan sektorn raderades. Bitströmmar före 2026-10-14 skrev `FF FF` i stället för Z och `FF`; deras poster godtas inte längre, så M6 startar på standardvärdena första gången efter uppdateringen.
 
 Det som inte syns: `flash_store.v` sätter en felflagga när en skrivning inte läses tillbaka lika, men M6 visar den ingenstans. Ett skrivfel märks bara som att inställningen saknas efter omstart, eller i läsningen ovan.
 
@@ -180,12 +180,14 @@ Sista raden ska skriva `True`. Efter nästa start står M6 på standardvärdena.
 | Läge | Vad M6 gör |
 |---|---|
 | Tom (allt FFh: nytt kort eller raderat som ovan) | Ingen post laddas, standardvärdena gäller. Första sparandet raderar 7FE000h och skriver post 0 där |
-| Nyaste posten trasig (fel CRC eller utan `A5`), till exempel efter ett strömavbrott mitt i en skrivning | Posten hoppas över och den näst nyaste giltiga laddas: inställningen före den sista ändringen |
+| Nyaste posten trasig (fel CRC, fel Z eller utan `A5`), till exempel efter ett strömavbrott mitt i en skrivning | Posten hoppas över och den näst nyaste giltiga laddas: inställningen före den sista ändringen |
+| Strömavbrott mitt i raderingen av en full sektor | Den halvraderade sektorns poster godtas inte (Z fångar varje fel åt ett håll); den nyaste posten i den andra sektorn laddas, och nästa sparande raderar den halvraderade sektorn igen. Före 2026-10-14 kunde en sådan post klara `A5` och CRC och laddas, och nästa sparande raderade då sektorn med den riktiga posten (granskningen 2026-10-14, FL-1) |
+| En post med band eller läge som menyn inte kan ställa (band 6 och 7, läge 3) | Godtas inte |
 | Ingen giltig post alls (skräp i båda sektorerna) | Som tom: standardvärden, och första sparandet raderar 7FE000h först |
 | Sektorn full (256 poster) | Nästa post skrivs först i den andra sektorn, som raderas innan; den fulla sektorns nyaste post finns kvar under raderingen |
 | Löpnumret passerar FFFFh | Nyast avgörs i serienummerordning, så räknarens varv stör inte |
 
-Tom flash, trasig nyaste post, full sektor och löpnumret förbi FFFFh är simulerade mot `model/flash_store_ref.py` med en flashmodell (`sim/test_flash_store.py`), med hela flashavbilden jämförd byte för byte. Skräp i båda sektorerna är inte simulerat; raden är läst ur `flash_store.v`.
+Tom flash, trasig nyaste post, full sektor, avbruten radering (150 halvraderade avbilder, bitarna satta slumpvis: en antagen modell, XTX beskriver inte vad ett avbrott lämnar), band 7 och löpnumret förbi FFFFh är simulerade mot `model/flash_store_ref.py` med en flashmodell (`sim/test_flash_store.py`), med hela flashavbilden jämförd byte för byte. Skräp i båda sektorerna är inte simulerat; raden är läst ur `flash_store.v`.
 
 ## 3. Vad M3-proben ska visa
 
