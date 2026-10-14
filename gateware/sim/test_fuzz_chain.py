@@ -145,10 +145,14 @@ def run_sim(sc, work, alter=None, timeout=3000, stall_drain=False, gate_probe=0)
              V_TOTAL=V_TOTAL, V_ACTIVE=V_ACTIVE, V_FP=V_FP, V_SYNC=V_SYNC,
              DRAIN_STALL_READ=int(stall_drain), GATE_PROBE=int(gate_probe), **RT)
     rtl = [GW / 'rtl' / n for n in RTL]
-    for fname, (old, new) in (alter or {}).items():
+    for fname, pairs in (alter or {}).items():
+        if isinstance(pairs[0], str):          # one (old, new) pair, as the other controls use
+            pairs = [pairs]
         text = (GW / 'rtl' / fname).read_text()
-        assert text.count(old) == 1, f'{fname}: {old!r} not found once'
-        (work / fname).write_text(text.replace(old, new))
+        for old, new in pairs:
+            assert text.count(old) == 1, f'{fname}: {old!r} not found once'
+            text = text.replace(old, new)
+        (work / fname).write_text(text)
         rtl = [work / fname if r.name == fname else r for r in rtl]
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_chain', *[f'-Ptb_chain.{k}={v}' for k, v in p.items()],
                     *map(str, rtl), str(HERE / 'sdram_model.v'), str(HERE / 'tb_chain.v')],
@@ -453,6 +457,11 @@ class StoreFrames(list):
 def check_store(logs, words, org, run, fd):
     """Replay the store's log through fb_ref (a fresh model after each low-latency period);
     every read against the SDRAM content. Returns the frames with what they read."""
+    for ev in logs['sd']:
+        if ev and ev[0] == 'PT':                      # formal/README.md point 5: a display
+            fd.add('store', 'late_fetch', int(ev[2]),  # read of a fetch still writing
+                   f'the display read line {ev[1]} with only {ev[2]} of 360 words written')
+            break
     mem, morg = {}, {}
     st, frames, pending, selected, prev_st = None, StoreFrames(), [], [], None
     active_read = None
@@ -1051,6 +1060,13 @@ def check_invariants(sc, logs, fd):
     pix = logs['pix']
     starts = frame_starts(pix)
     sws = switch_windows(pix, starts)
+    # formal/README.md point 4: a level read at y == 0 without three pixel clocks of
+    # margin (tb_chain.v QM records). Point 5 is the PT record in check_store's log.
+    for ev in pix:
+        if ev[0] == 'QM':
+            fd.add('output', 'level_margin', int(ev[2]) * T_P,
+                   f'frame_low/ll_low changed within three pixel clocks of the y = 0 read at pixel clock {ev[2]}')
+            break
     # 1. X/Z, from the end of the first whole frame on (as test_fb.py)
     first_ok = starts[2] if len(starts) > 2 else 1 << 60
     for ev in pix:
@@ -1280,6 +1296,28 @@ NEGATIVE = {
                      {'fb_display.v': ("if (ll != ll_d) have_video <= 1'b0;",
                                        "if (ll != ll_d) have_video <= have_video;")},
                      'display/switch_video'),
+    # the two formal open-point checks (formal/README.md 4 and 5) must also fire in the chain:
+    # a store whose read data lands a line late is caught by the PT record (point 5), and a
+    # display reading the levels through no synchroniser at all is the QM margin check's
+    # worst case (point 4; the clean chain's margin is structural, so the mutant may pass -
+    # the record itself is negative-controlled in test_fb.py's fault 3)
+    'late_fetch': (0, [],
+                   {'fb_sdram.v': [("    wire [7:0] ok_rd = fw_hit ? fw_data : ok_q;",
+                                   "    wire [7:0] ok_rd = fw_hit ? fw_data : ok_q;\n"
+                                   "    reg [32:0] rd_pipe [0:1435];\n"
+                                   "    reg        rdata_valid_d = 1'b0;\n"
+                                   "    reg [31:0] rdata_d = 32'd0;\n"
+                                   "    integer k_;\n"
+                                   "    always @(posedge clk) begin\n"
+                                   "        rd_pipe[0] <= {rdata, rdata_valid};\n"
+                                   "        for (k_ = 1; k_ < 1436; k_ = k_ + 1) rd_pipe[k_] <= rd_pipe[k_-1];\n"
+                                   "        rdata_valid_d <= rd_pipe[1435][0];\n"
+                                   "        rdata_d <= rd_pipe[1435][32:1];\n"
+                                   "    end\n"),
+                                  ("if (rdata_valid && rd_inflight) begin",
+                                   "if (rdata_valid_d && rd_inflight) begin"),
+                                  ("lb_data <= rdata;", "lb_data <= rdata_d;")]},
+                   'store/late_fetch'),
 }
 
 

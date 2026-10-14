@@ -161,6 +161,27 @@ module tb_chain;
     integer    lb_run_first_cyc, lb_run_last_cyc;
     real       lb_run_first_ns, lb_run_last_ns;
     integer    lb_write_count = 0, lb_run_count = 0;
+    // ---- read-before-write check (formal/README.md point 5, as tb_fb.v): the fetch of a
+    // requested line must have written all its words before the display reads the slot.
+    integer chain_lb_wr_cnt = 0;                // lb_we words of the fetch in progress
+    reg [1:0] chain_lb_slot = 0;                // slot the fetch in progress writes
+    reg       chain_rd_mark = 0, chain_sd_seen = 0;
+    reg [9:0] chain_rd_line_q = 0;
+    always @(posedge sd_clk) if (!rst && be.fb.resetn) begin
+        if (be.fb.accept) begin
+            chain_lb_wr_cnt <= 0;
+            chain_lb_slot <= be.fb.f_slot;
+        end
+        if (be.fb.lb_we) chain_lb_wr_cnt <= chain_lb_wr_cnt + 1;
+    end
+    always @(posedge sd_clk) if (!rst && be.fb.resetn) begin
+        if (chain_rd_mark && !chain_sd_seen) begin
+            chain_sd_seen <= 1'b1;
+            if (be.fb.fetching && be.fb.f_idx < 9'd359 && be.fb.f_slot == chain_lb_slot
+                && be.disp.src_cur == chain_rd_line_q)
+                $fwrite(fs, "PT %0d %0d\n", chain_rd_line_q, chain_lb_wr_cnt);
+        end else if (!chain_rd_mark) chain_sd_seen <= 1'b0;
+    end
     always @(posedge sd_clk) if (!rst) begin
         lls_d <= be.ll_s;
         if (lls_d != be.ll_s) $fwrite(fs, "L %0d %0d\n", cyc, be.ll_s);
@@ -261,6 +282,35 @@ module tb_chain;
                 $fwrite(fp, "X %0d %08x %.1f\n", be.y, be.disp.lb_rdata, $realtime);
             end
         end
+    end
+
+    // ---- margin check (formal/README.md point 4, as tb_fb.v): frame_low (BUF) and ll_low
+    // (LOW) must have stopped changing at least three pixel clocks before the x = 0, y = 0
+    // read that takes them (two sync2 stages and one clock of margin). A QM record is a
+    // read of a level without that margin.
+    reg [2:0] chain_fl_age = 3'd3, chain_lw_age = 3'd3;
+    reg       chain_fl_d = 1'bx, chain_lw_d = 1'bx;
+    always @(posedge pix_clk) if (!rst) begin
+        chain_fl_age <= (chain_fl_d === 1'bx) ? 3'd3 :
+                        (be.disp.frame_low !== chain_fl_d) ? 3'd0 :
+                        (chain_fl_age == 3'd3 ? 3'd3 : chain_fl_age + 3'd1);
+        chain_lw_age <= (chain_lw_d === 1'bx) ? 3'd3 :
+                        (be.disp.ll_low !== chain_lw_d) ? 3'd0 :
+                        (chain_lw_age == 3'd3 ? 3'd3 : chain_lw_age + 3'd1);
+        chain_fl_d <= be.disp.frame_low;
+        chain_lw_d <= be.disp.ll_low;
+        if (be.x == 0 && be.y == 0 && chain_fl_d !== 1'bx) begin
+            if (!be.ll_p && chain_fl_age < 3'd3) $fwrite(fp, "QM frame_low %0d\n", pc);
+            if (be.ll_p && chain_lw_age < 3'd3) $fwrite(fp, "QM ll_low %0d\n", pc);
+        end
+    end
+    // the display's read of a requested slot, marked for the SDRAM-domain check above
+    always @(posedge pix_clk) if (!rst && !be.ll_p) begin
+        if (be.x == 0 && be.y < V_ACTIVE && be.disp.have_video) begin
+            chain_rd_mark <= 1'b1;
+            chain_rd_line_q <= be.disp.src_cur;
+        end
+        if (chain_rd_mark && be.x == 3) chain_rd_mark <= 1'b0;
     end
 
     integer mode_change_pc = 0;
