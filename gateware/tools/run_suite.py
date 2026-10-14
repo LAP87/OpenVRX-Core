@@ -31,6 +31,7 @@ Exit status: 0 all passed and no shared build directory, 1 a test did not pass
 or a directory is shared, 2 collection failed, 3 tests left (budget).
 """
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -54,6 +55,8 @@ SOURCES = ['gateware/rtl', 'gateware/sim', 'gateware/model', 'gateware/tools', '
            'gateware/boards', 'gateware/formal', 'gateware/vectors', 'gateware/build.sh',
            'gateware/BRINGUP.md', 'mixer', 'tests']   # BRINGUP.md: sim/test_probe.py reads its example
 SKIP_DIRS = {'build', '__pycache__', '.pytest_cache'}
+SKIP_FILES = {'*.result.xml'}            # cocotb's per-test xUnit output, written into gateware/sim
+                                         # (git-ignored); the tests regenerate it every run
 QUICK_LIST = TOOLS / 'quick_tests.txt'
 STARTUP = 2.0          # seconds of pytest start-up per process, on top of the tests' own durations
 
@@ -106,7 +109,8 @@ def fingerprint():
         elif p.is_dir():
             for f in p.rglob('*'):
                 if f.is_file() and not SKIP_DIRS & set(f.relative_to(REPO).parts):
-                    files.append(f)
+                    if not any(fnmatch.fnmatch(f.name, pat) for pat in SKIP_FILES):
+                        files.append(f)
     for f in sorted(files):
         h.update(f.relative_to(REPO).as_posix().encode() + b'\0' + f.read_bytes() + b'\0')
     return h.hexdigest()

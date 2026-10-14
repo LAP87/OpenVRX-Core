@@ -60,10 +60,13 @@ module mixer2 #(
     wire        fa_empty, fb_empty, fa_pop, fb_pop, fa_full, fb_full;
     wire [52:0] fa_data, fb_data;
     wire [7:0]  fa_wl, fa_rl, fb_wl, fb_rl;
-    async_fifo #(.W(53), .AW(7)) fifo_a (
+    // registered read so that both go into block RAM (two BSRAM each instead of 112 RAM16SDP4 each,
+    // which together took 1 792 of the 20 736 LUT positions); rd_data is the same on every clock
+    // (async_fifo.v, sim/test_async_fifo.py)
+    async_fifo #(.W(53), .AW(7), .RD_REG(1)) fifo_a (
         .wclk(a_clk), .wrst(arst), .wr_en(ea_v), .wr_data(ea_d), .full(fa_full), .wr_level(fa_wl),
         .rclk(sys_clk), .rrst(srst), .rd_en(fa_pop), .rd_data(fa_data), .empty(fa_empty), .rd_level(fa_rl));
-    async_fifo #(.W(53), .AW(7)) fifo_b (
+    async_fifo #(.W(53), .AW(7), .RD_REG(1)) fifo_b (
         .wclk(b_clk), .wrst(brst), .wr_en(eb_v), .wr_data(eb_d), .full(fb_full), .wr_level(fb_wl),
         .rclk(sys_clk), .rrst(srst), .rd_en(fb_pop), .rd_data(fb_data), .empty(fb_empty), .rd_level(fb_rl));
 
