@@ -98,6 +98,23 @@ def test_finish_reconciles_identities_and_pending(tmp_path, case, expected_rc):
     assert run_suite.finish(tmp_path, finished, pending, NODES, time.monotonic()) == expected_rc
 
 
+def test_pick_quick_takes_every_file_first_and_keeps_the_limit():
+    """Two workers, 60 s: the fastest test of each file first (y1 alone is longer than the limit),
+    then the rest while the expected wall time (start-up included) stays within 60 s."""
+    nodes = ['gateware/sim/test_x.py::x1', 'gateware/sim/test_x.py::x2', 'gateware/sim/test_y.py::y1',
+             'gateware/model/test_m.py::m1', 'gateware/model/test_m.py::m2', 'gateware/sim/test_z.py::z1']
+    durations = {'gateware/sim/test_x.py::x1': 10, 'gateware/sim/test_x.py::x2': 50,
+                 'gateware/sim/test_y.py::y1': 200, 'gateware/model/test_m.py::m1': 1,
+                 'gateware/model/test_m.py::m2': 1}               # z1 never timed: left out
+    chosen = run_suite.pick_quick(nodes, durations, 60, 2)
+    assert chosen == ['gateware/sim/test_x.py::x1', 'gateware/sim/test_x.py::x2',
+                      'gateware/model/test_m.py::m1', 'gateware/model/test_m.py::m2']
+    units = [run_suite.unit_time(ns, durations) for _, ns in run_suite.units_of(chosen)]
+    assert run_suite.makespan(units, 2) <= 60
+    # with one worker the 50 s test no longer fits beside the others
+    assert 'gateware/sim/test_x.py::x2' not in run_suite.pick_quick(nodes, durations, 60, 1)
+
+
 def cli(repo, out, *args):
     return subprocess.run([sys.executable, str(repo / 'gateware/tools/run_suite.py'), '--jobs', '1',
                            '--timeout', '60', '--out', str(out), 'gateware/model/test_sample.py',
@@ -161,6 +178,22 @@ def test_real_cli_selection_resume_budget_and_source_guard(tmp_path):
     limited = cli(repo, budget, '--budget', '0.01', '--guess', '10')
     assert limited.returncode == 3, limited.stdout + limited.stderr
     assert cli(repo, budget, '--resume').returncode == 0
+    # quick: a list written from the baseline's durations, then a run of only what it names
+    quick_list = tools / 'quick_tests.txt'
+    picked = cli(repo, out, '--pick-quick', '300')
+    assert picked.returncode == 0 and quick_list.exists(), picked.stdout + picked.stderr
+    # every timed test fits; the skipped one has no measured duration and stays out
+    assert run_suite.read_quick(quick_list) == [n for n in json.loads((out / 'run.json').read_text())['nodes']
+                                                if not n.endswith('::test_skip')]
+    quick_list.write_text('# one test\ngateware/model/test_sample.py::test_a\n')
+    quick = tmp_path / 'quick'
+    ran = cli(repo, quick, '--quick')
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert json.loads((quick / 'run.json').read_text())['nodes'] == ['gateware/model/test_sample.py::test_a']
+    quick_list.write_text('gateware/model/test_sample.py::test_gone\n')
+    stale = cli(repo, tmp_path / 'stale', '--quick')
+    assert stale.returncode == 2 and 'not collected' in stale.stdout
+    assert cli(repo, tmp_path / 'both', '--quick', '--full').returncode == 2      # one or the other
     before = files(out)
     (model / 'test_sample.py').write_text((model / 'test_sample.py').read_text() + '# changed source\n')
     assert cli(repo, out, '--resume').returncode == 2

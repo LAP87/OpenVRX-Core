@@ -1,6 +1,13 @@
 """Run the Core test suite in parallel: one pytest process per simulation test.
 
-    .venv/bin/python gateware/tools/run_suite.py [-j 10] [--resume] [--budget S] [paths ...]
+    .venv/bin/python gateware/tools/run_suite.py [-j 10] [--quick | --full] [--resume] [--budget S] [paths ...]
+
+--full (the default) runs everything collected. --quick runs only the tests named in
+gateware/tools/quick_tests.txt: a list chosen by measured time to finish within about five
+minutes with ten processes (before every commit; the full suite before every merge). A name in
+the list that is no longer collected stops the run (exit 2). --pick-quick S writes a new list
+from durations.json in OUT: the fastest test of every file first, then the fastest of the rest,
+as long as the expected wall time with -j processes stays within S seconds.
 
 Tests under gateware/sim and gateware/tools get a process each; the pure Python
 tests (gateware/model, mixer, tests/latency) get one process per file. Every
@@ -47,6 +54,45 @@ SOURCES = ['gateware/rtl', 'gateware/sim', 'gateware/model', 'gateware/tools', '
            'gateware/boards', 'gateware/formal', 'gateware/vectors', 'gateware/build.sh',
            'gateware/BRINGUP.md', 'mixer', 'tests']   # BRINGUP.md: sim/test_probe.py reads its example
 SKIP_DIRS = {'build', '__pycache__', '.pytest_cache'}
+QUICK_LIST = TOOLS / 'quick_tests.txt'
+STARTUP = 2.0          # seconds of pytest start-up per process, on top of the tests' own durations
+
+
+def read_quick(path=QUICK_LIST):
+    """Test names of the quick list (lines that are not empty and not # comments)."""
+    return [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.lstrip().startswith('#')]
+
+
+def makespan(unit_times, jobs):
+    """Wall time of the units on `jobs` workers, longest first (as main() schedules them)."""
+    workers = [0.0] * max(1, jobs)
+    for t in sorted(unit_times, reverse=True):
+        workers[workers.index(min(workers))] += t
+    return max(workers)
+
+
+def unit_time(nodes, durations):
+    return sum(durations[n] for n in nodes) + STARTUP
+
+
+def pick_quick(nodes, durations, seconds, jobs):
+    """Tests for the quick list: of the collected `nodes` with a measured duration, the fastest of
+    every file first, then the rest by duration, each kept only while the expected wall time of
+    the whole selection stays within `seconds`."""
+    timed = sorted((n for n in nodes if n in durations), key=lambda n: (durations[n], n))
+    first, seen = [], set()
+    for n in timed:
+        f = n.split('::', 1)[0]
+        if f not in seen:
+            seen.add(f)
+            first.append(n)
+    chosen = []
+    for n in first + [n for n in timed if n not in set(first)]:
+        trial = chosen + [n]
+        if makespan([unit_time(ns, durations) for _, ns in units_of(trial)], jobs) <= seconds:
+            chosen = trial
+    order = {n: i for i, n in enumerate(nodes)}
+    return sorted(chosen, key=lambda n: order[n])
 
 
 def fingerprint():
@@ -204,6 +250,12 @@ def main(argv=None):
     ap.add_argument('--budget', type=float, default=0, help='seconds; 0: no limit')
     ap.add_argument('--guess', type=float, default=120, help='expected seconds for a unit never timed')
     ap.add_argument('--timeout', type=float, default=3600, help='seconds per process; 0: none')
+    sel = ap.add_mutually_exclusive_group()
+    sel.add_argument('--quick', action='store_true', help='only the tests in quick_tests.txt')
+    sel.add_argument('--full', action='store_true', help='every collected test (the default)')
+    sel.add_argument('--pick-quick', type=float, metavar='S',
+                     help='write quick_tests.txt from OUT/durations.json for a wall time of S seconds, run nothing')
+    ap.add_argument('--quick-list', type=Path, default=QUICK_LIST, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
     out = a.out.resolve()
     t0 = time.monotonic()
@@ -212,6 +264,37 @@ def main(argv=None):
     if nodes is None:
         print('collection failed')
         return 2
+    if a.pick_quick:
+        dfile = out / 'durations.json'
+        if not dfile.exists():
+            print(f'--pick-quick needs {dfile} from a full run')
+            return 2
+        durations = json.loads(dfile.read_text())
+        chosen = pick_quick(nodes, durations, a.pick_quick, a.jobs)
+        wall = makespan([unit_time(ns, durations) for _, ns in units_of(chosen)], a.jobs)
+        files = {n.split('::', 1)[0] for n in nodes}
+        covered = {n.split('::', 1)[0] for n in chosen}
+        head = [f'# Quick suite for run_suite.py --quick, chosen by --pick-quick {a.pick_quick:g} -j {a.jobs} on '
+                f'{time.strftime("%Y-%m-%d")}',
+                f'# from {dfile.relative_to(REPO) if dfile.is_relative_to(REPO) else dfile.name}: {len(chosen)} of '
+                f'{len(nodes)} tests, {len(covered)} of {len(files)} files, expected {wall:.0f} s.',
+                '# The fastest test of every file first, then the fastest of the rest, while the expected wall',
+                '# time stays within the limit. Not in the list: ' + (', '.join(sorted(files - covered)) or 'none') + '.',
+                '# Regenerate after a full run: .venv/bin/python gateware/tools/run_suite.py --pick-quick 300']
+        a.quick_list.write_text('\n'.join(head + chosen) + '\n')
+        print(f'{len(chosen)} of {len(nodes)} tests ({len(covered)} of {len(files)} files), '
+              f'expected {wall:.0f} s with -j {a.jobs}: {a.quick_list}')
+        return 0
+    if a.quick:
+        listed = read_quick(a.quick_list)
+        known = set(nodes)
+        missing = [n for n in listed if n not in known]
+        if missing:
+            print(f'--quick: {len(missing)} tests in {a.quick_list.name} are not collected, e.g. {missing[0]}; '
+                  'regenerate the list with --pick-quick after a full run')
+            return 2
+        listed_set = set(listed)
+        nodes = [n for n in nodes if n in listed_set]
     units = units_of(nodes)
     fp = fingerprint()
     run_file, results_file = out / 'run.json', out / 'results.jsonl'
