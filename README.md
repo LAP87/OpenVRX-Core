@@ -10,27 +10,33 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-13, main `2b67dea`):** 757 tests, all pass on `2b67dea`, run with
-`gateware/tools/run_suite.py` (one process per simulation test, ten at a time; three rounds
-with `--resume`); no two tests share a build directory. The same 757 passed on `bf05ac0`
-in Codex's run, root-accepted 2026-10-13 (hub `docs/overnight/2026-10-08/STATUS.md`);
-since `bf05ac0` only Markdown has changed. Nothing has run on hardware: "simulated" and
-"built" below, never "measured".
+**Status (2026-10-14, main after task 21, suite on `88f5b90`):** 761 tests, all pass on
+`88f5b90`, run with `gateware/tools/run_suite.py` (one process per simulation test, ten at a
+time; rounds with `--resume`); no two tests share a build directory. Before: 757 on `2b67dea`,
+and the same 757 on `bf05ac0` in Codex's run, root-accepted 2026-10-13 (hub
+`docs/overnight/2026-10-08/STATUS.md`). Nothing has run on hardware: "simulated" and "built"
+below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
-requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. The build inputs of `bf05ac0` (and of
-`0958a52`) are those of main. Root-accepted by Codex: M0, M4 and M6 with default options from
-`bf05ac0`, and the `HDMI=1`/`VINTERP=1` builds from `46a1e4f`; the M2, M2s, M2a, M3, M1 and M1s
-builds have no root acceptance.
+requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4
+and M6 with default options from `bf05ac0` (before the FIFO change below), and the
+`HDMI=1`/`VINTERP=1` builds from `46a1e4f` and `bf05ac0`; the builds from `2c64672` and the M2,
+M2s, M2a, M3, M1 and M1s builds have no root acceptance.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `bf05ac0` (Codex) | 0 | reference for the HDMI pairs; with `HDMI=1` from `4ad5a68` |
+| M0 | `2c64672` | 0 | reference for the HDMI pairs; with `HDMI=1` from `4ad5a68` |
 | M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `bf05ac0` (Codex) | 0 | 8 245 LUT4, lowest clock 98.95 MHz; with `HDMI=1` from `4ad5a68` and `VINTERP=1` from `fc267a8`, both before `ext_weak` |
-| M6 | `bf05ac0` (Codex), `0958a52` (Opus) | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 15 505 LUT4, board clock 132.3 MHz in both; with `HDMI=1` from `4ad5a68` and `VINTERP=1` from `fc267a8`, both without RSSI, SCAN and flash; seeds 0-3 from `94a2b32` |
+| M4 | `2c64672` | 0 | 5 831 LUT4, lowest clock 129.17 MHz; with `HDMI=1 VINTERP=1` 6 427 LUT4, 116.33 MHz; each option alone from `bf05ac0` (Codex) |
+| M6 | `2c64672` | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 13 113 LUT4, lowest clock 112.07 MHz; with `HDMI=1 VINTERP=1` 13 719 LUT4, 99.00 MHz; each option alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
+
+M6 with both `HDMI=1` and `VINTERP=1` did not place until 2026-10-14: LUT positions ran out
+(ALUs, LUT RAM and flip-flops without a LUT of their own share them). The mixer's two input
+FIFOs moved from LUT RAM to block RAM (`async_fifo.v` `RD_REG`, same data on every clock,
+proven formally); M4 and M6 lost about 2 400 LUT4 each. Details in gateware/README.md,
+"M6 med HDMI och VINTERP".
 
 What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README.md):
 
