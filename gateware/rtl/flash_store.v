@@ -4,8 +4,13 @@
 //
 // Layout: the last two 4 KB sectors (SECTOR0 = 7FE000h and 7FF000h), far above the bitstream
 // (a GW2AR-18 bitstream ends below about E0000h). Each sector holds 256 records of 16 bytes:
-//   A5h, seq[15:8], seq[7:0], payload (10 bytes, see below), FFh, FFh, CRC-8 (poly 07h, init 0)
-//   over the first 15 bytes.
+//   A5h, seq[15:8], seq[7:0], payload (10 bytes, see below), Z = number of 0 bits in the 13
+//   bytes before it, FFh, CRC-8 (poly 07h, init 0) over the first 15 bytes.
+// A record counts when magic, Z, FFh and CRC are right and band <= 5, mode != 3 (what the menu
+// can set). Z catches every error that goes one way: an erase stopped by a power loss only sets
+// bits, an interrupted program only leaves bits set, so the 0 bits of the data drop while Z can
+// only grow (review 2026-10-14, FL-1: with the CRC alone a half-erased sector could hand the scan
+// a record that was never written, and the next save then erased the sector with the real one).
 // A new record goes in the slot after the newest one when that slot is erased, else in slot 0
 // of the other sector, which is erased first. A sector is therefore erased once per 256 saves
 // (about 25 million saves at the 100k erase cycles the part is rated for), and the newest
@@ -76,6 +81,13 @@ module flash_store #(
             crc8_byte = r;
         end
     endfunction
+    function [3:0] zeros8(input [7:0] d);                // number of 0 bits
+        integer k;
+        begin
+            zeros8 = 4'd0;
+            for (k = 0; k < 8; k = k + 1) zeros8 = zeros8 + {3'd0, ~d[k]};
+        end
+    endfunction
     function newer(input [15:0] a, input [15:0] b);      // a after b, mod 2^16
         reg [15:0] d;
         begin d = a - b; newer = (d != 0) && !d[15]; end
@@ -84,6 +96,7 @@ module flash_store #(
     // ---- the record being read or written
     reg  [7:0]  rec [0:15];
     reg  [7:0]  crc;
+    reg  [7:0]  zc;                       // 0 bits in bytes 0..12 of the record being read or written
     reg  [12:0] pos;                      // byte in the 8 KB scan, or in a record
     reg  [8:0]  slot;                     // record index 0..511 over both sectors
     reg         after_best, after_ok;     // the slot after the newest record so far: still to come / erased
@@ -97,7 +110,8 @@ module flash_store #(
     function [7:0] out_byte(input [3:0] i);
         case (i)
             4'd0: out_byte = 8'hA5; 4'd1: out_byte = seq[15:8]; 4'd2: out_byte = seq[7:0];
-            4'd13, 4'd14: out_byte = 8'hFF;
+            4'd13: out_byte = zc;                                 // complete once S_CRC is past byte 12
+            4'd14: out_byte = 8'hFF;
             4'd15: out_byte = crc;
             default: out_byte = saved[(12 - i) * 8 +: 8];         // i = 3..12: payload, MSB first
         endcase
@@ -133,9 +147,12 @@ module flash_store #(
             rec[pos[3:0]] <= x_rx;
             if (x_rx != 8'hFF) r_ff <= 1'b0;
             if (pos[3:0] != 4'd15) crc <= crc8_byte(crc, x_rx);
+            if (pos[3:0] <= 4'd12) zc <= ((pos[3:0] == 4'd0) ? 8'd0 : zc) + {4'd0, zeros8(x_rx)};
             if (pos[3:0] == 4'd15) begin
                 if (after_best) begin after_ok <= r_ff && x_rx == 8'hFF; after_best <= 1'b0; end
-                if (rec[0] == 8'hA5 && x_rx == crc && (!have || newer({rec[1], rec[2]}, best_seq))) begin
+                if (rec[0] == 8'hA5 && x_rx == crc && rec[13] == zc && rec[14] == 8'hFF
+                    && rec[3][7:5] <= 3'd5 && rec[3][1:0] != 2'd3
+                    && (!have || newer({rec[1], rec[2]}, best_seq))) begin
                     have <= 1'b1; best_seq <= {rec[1], rec[2]}; best_slot <= slot;
                     after_best <= 1'b1; after_ok <= 1'b0;
                     loaded <= {rec[3], rec[4], rec[5], rec[6], rec[7], rec[8], rec[9], rec[10], rec[11], rec[12]};
@@ -166,9 +183,12 @@ module flash_store #(
                 prog_phase <= !need_erase; st <= S_CRC; pos <= 0; crc <= 0;
             end
         end
-        S_CRC: begin                                               // CRC over the first 15 bytes
+        S_CRC: begin                                               // Z over bytes 0..12, CRC over the first 15
             if (pos[3:0] == 4'd15) begin pos <= 0; flash_wp_drive <= 1'b1; st <= S_WREN; k <= 0; end
-            else begin crc <= crc8_byte(crc, out_byte(pos[3:0])); pos <= pos + 1'b1; end
+            else begin
+                crc <= crc8_byte(crc, out_byte(pos[3:0])); pos <= pos + 1'b1;
+                if (pos[3:0] <= 4'd12) zc <= ((pos[3:0] == 4'd0) ? 8'd0 : zc) + {4'd0, zeros8(out_byte(pos[3:0]))};
+            end
         end
         S_WREN: if (!x_busy && !x_go) begin                        // 06h, alone
             if (k == 0) begin flash_cs_n <= 1'b0; x_tx <= 8'h06; x_go <= 1'b1; k <= 1; end

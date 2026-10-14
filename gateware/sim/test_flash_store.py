@@ -9,13 +9,18 @@ reads back. Cases: an empty flash (first save erases sector 0); quick changes (o
 is saved); no change (no write); a full sector 0 with garbage in sector 1 (the next save erases
 sector 1 and goes in its slot 0); a newest record with a bad CRC (the one before it loads, and
 the slot after it is not erased, so the save moves to the other sector); seq wrapping past
-FFFFh; a restart on the image a run left (its last save loads).
+FFFFh; a restart on the image a run left (its last save loads). An erase of a full sector that
+power loss stopped half-way (150 images, bits set at random): only the newest written record
+loads; a record outside what the menu can set does not load.
 
 Negative controls, each disagrees with the model: a copy that does not check the CRC, one that
-never erases, one that writes at once instead of after SAVE_MS, one that never drives WP#.
+checks magic and CRC only (no zero count: a half-erased record loads), one without the range
+check (band 7 loads), one that never erases,
+one that writes at once instead of after SAVE_MS, one that never drives WP#.
 
 Run: .venv/bin/python -m pytest -q gateware/sim/test_flash_store.py"""
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +40,11 @@ P2 = ref.payload(4, 7, 1, 1, 1, 4000, 12000, 4800, 12800)
 P3 = ref.payload(0, 0, 2, 0, 1, 100, 9000, 200, 9100)
 
 MUTANTS = {
-    'no_crc': [("if (rec[0] == 8'hA5 && x_rx == crc && (!have", "if (rec[0] == 8'hA5 && (!have")],
+    'no_crc': [("if (rec[0] == 8'hA5 && x_rx == crc && rec[13] == zc", "if (rec[0] == 8'hA5 && rec[13] == zc")],
+    # the acceptance before 2026-10-14: magic and CRC only
+    'no_zero_count': [("x_rx == crc && rec[13] == zc && rec[14] == 8'hFF\n                    && rec[3][7:5] <= 3'd5 && rec[3][1:0] != 2'd3",
+                       "x_rx == crc")],
+    'no_range': [("\n                    && rec[3][7:5] <= 3'd5 && rec[3][1:0] != 2'd3", "")],
     'no_erase': [("prog_phase <= !need_erase; st <= S_CRC;", "prog_phase <= 1'b1; st <= S_CRC;")],
     'no_wait': [("            else if (t != SAVE_MS * MS) t <= t + 1;\n", "")],
     'no_wp': [("if (pos[3:0] == 4'd15) begin pos <= 0; flash_wp_drive <= 1'b1;", "if (pos[3:0] == 4'd15) begin pos <= 0;")],
@@ -140,8 +149,91 @@ def test_flash_store_matches_model(case):
         assert loads == [(P2, 1)] and writes == 0
 
 
+def full_image():
+    """Both sectors full: seq 1..256 in sector 0, 257..512 in sector 1 (the next save erases sector 0)."""
+    rng = random.Random(14)
+    mem = bytearray()
+    for s in range(512):
+        mn_a, mn_b = rng.randrange(8000), rng.randrange(8000)
+        mem += ref.record(s + 1, ref.payload(rng.randrange(6), rng.randrange(8), rng.randrange(3), rng.randrange(2),
+                                             rng.randrange(2), mn_a, mn_a + rng.randrange(400, 20000),
+                                             mn_b, mn_b + rng.randrange(400, 20000)))
+    return bytes(mem)
+
+
+def half_erased(mem, p, rng):
+    """Sector 0 after an erase that stopped: every 0 bit set with probability p (an assumed model;
+    erasing only sets bits)."""
+    out = bytearray(mem)
+    for i in range(4096):
+        b = out[i]
+        for k in range(8):
+            if not b >> k & 1 and rng.random() < p:
+                b |= 1 << k
+        out[i] = b
+    return bytes(out)
+
+
+def scan_crc_only(mem):
+    """The newest record by magic and CRC alone (the acceptance before 2026-10-14)."""
+    best = None
+    for s in range(ref.SLOTS):
+        r = mem[16 * s:16 * s + 16]
+        if r[0] == 0xA5 and ref.crc8(r[:15]) == r[15]:
+            seq = r[1] << 8 | r[2]
+            if best is None or ref.newer(seq, best[0]):
+                best = (seq, bytes(r[3:13]))
+    return best
+
+
+def interrupted_erase_images(n=150):
+    rng = random.Random(7)
+    full = full_image()
+    return full, [half_erased(full, p, rng) for p in (0.05, 0.1, 0.2) for _ in range(n // 3)]
+
+
+def test_interrupted_erase_loads_only_written_records():
+    """Review 2026-10-14, FL-1. Power fails while the 513th save erases sector 0 (seq 1..256): 150
+    half-erased images. The scan must load the newest real record, seq 512 in sector 1, every time
+    (model), and the RTL must do so on the images where magic and CRC alone take a record that was
+    never written (model-level negative control: there are such images)."""
+    full, images = interrupted_erase_images()
+    newest = (full[16 * 511 + 3:16 * 511 + 13], 512)
+    for mem in images:
+        pay, seq, nxt, erase = ref.scan(mem)
+        assert (pay, seq) == newest and (nxt, erase) == (0, True), 'the next save erases sector 0 again'
+    fooled = [m for m in images if scan_crc_only(m) != (512, newest[0])]
+    assert len(fooled) >= 5, len(fooled)
+    for k, mem in enumerate(fooled[:2]):
+        loads, end, out, ready = run(f'tb_flash_store_half_erased{k}', mem, [], end_ms=300)
+        assert loads == [newest], loads
+
+
+GOOD = ref.payload(3, 3, 0, 0, 0, 0xFFFF, 0, 0xFFFF, 0)
+BAND7 = image([(0, 19, GOOD, True), (1, 20, ref.payload(7, 1, 0, 0, 0, 0xFFFF, 0, 0xFFFF, 0), True)])
+
+
+def test_record_outside_the_menu_is_not_loaded():
+    """A record with right magic, Z and CRC but band 7 (the menu has bands 0..5) newer than a good
+    one: the good one loads (model and RTL). Before 2026-10-14 band 7 loaded and the RX5808 got the
+    empty table entry (synthesiser word 0)."""
+    assert ref.scan(BAND7)[:2] == (GOOD, 19)
+    loads, end, out, ready = run('tb_flash_store_band7', BAND7, [], end_ms=300)
+    assert loads == [(GOOD, 19)], loads
+
+
 @pytest.mark.parametrize('mutant', sorted(MUTANTS))
 def test_flash_store_negative_control(mutant):
+    if mutant == 'no_zero_count':
+        full, images = interrupted_erase_images()
+        mem = next(m for m in images if scan_crc_only(m) != (512, full[16 * 511 + 3:16 * 511 + 13]))
+        loads, end, out, ready = run('tb_flash_store_no_zero_count', mem, [], end_ms=300, mutant=mutant)
+        assert loads != [(full[16 * 511 + 3:16 * 511 + 13], 512)], 'without Z the half-erased record loads'
+        return
+    if mutant == 'no_range':
+        loads, end, out, ready = run('tb_flash_store_no_range', BAND7, [], end_ms=300, mutant=mutant)
+        assert loads == [(ref.payload(7, 1, 0, 0, 0, 0xFFFF, 0, 0xFFFF, 0), 20)], 'without the range check band 7 loads'
+        return
     case = {'no_crc': 'bad_newest', 'no_erase': 'full_sector', 'no_wait': 'empty', 'no_wp': 'empty'}[mutant]
     mem, sched = CASES[case]
     loads, end, out, ready = run(f'tb_flash_store_{mutant}', mem, sched, mutant=mutant)
