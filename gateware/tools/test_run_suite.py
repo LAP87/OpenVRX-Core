@@ -161,6 +161,12 @@ def test_real_cli_selection_resume_budget_and_source_guard(tmp_path):
     limited = cli(repo, budget, '--budget', '0.01', '--guess', '10')
     assert limited.returncode == 3, limited.stdout + limited.stderr
     assert cli(repo, budget, '--resume').returncode == 0
+    # cocotb's per-test xUnit output (git-ignored, regenerated every run) must not change
+    # the fingerprint: a resume after a cocotb round still reuses the passed tests
+    sim = repo / 'gateware/sim'
+    sim.mkdir()
+    (sim / 'test_x_result.result.xml').write_text('<results/>\n')
+    assert cli(repo, out, '--resume').returncode == 0
     before = files(out)
     (model / 'test_sample.py').write_text((model / 'test_sample.py').read_text() + '# changed source\n')
     assert cli(repo, out, '--resume').returncode == 2
