@@ -4,15 +4,16 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-13
+## Status 2026-10-14
 
-### Nuläge, `main` `2b67dea`
+### Nuläge, `main` efter uppgift 21 (`88f5b90`)
 
-Hela sviten: **757 test gröna på `2b67dea`** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången; tre omgångar med `--resume`, de formella bevisen ensamma i sista), ingen delad byggkatalog. Samma 757 gick igenom på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Efter `bf05ac0` har bara Markdown ändrats (`BRINGUP.md`, `sim/FUZZ_2026-10-07.md`, den här filen), så byggindata för alla toppar är desamma som i `bf05ac0`. Inget är kört på hårdvara.
+Hela sviten: **761 test gröna på `88f5b90`** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången; omgångar med `--resume`, de formella bevisen ensamma i sista), ingen delad byggkatalog. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
-| M0, M4, M6 (standardval) | `bf05ac0`, byggda av Codex och rootaccepterade 2026-10-13; M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 8 245 / 15 505 LUT4; lägsta maxfrekvens 154,58 / 98,95 / 104,58 MHz; M6:s 27 MHz-domän 132,28 MHz |
+| M0, M4, M6 (standardval), M4 och M6 med `HDMI=1 VINTERP=1` | `2c64672` (Opus, samma byggindata som `88f5b90`); M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 5 831 / 13 113 LUT4; M4 och M6 med båda valen 6 427 / 13 719; lägsta maxfrekvens 152,35 / 129,17 / 112,07 MHz, med båda valen 116,33 / 99,00 MHz. Inte rootaccepterade |
+| M0, M4, M6 (standardval) före FIFO-ändringen | `bf05ac0`, byggda av Codex och rootaccepterade 2026-10-13 | 0, 0, 2 | 789 / 8 245 / 15 505 LUT4; lägsta maxfrekvens 154,58 / 98,95 / 104,58 MHz; M6:s 27 MHz-domän 132,28 MHz |
 | M6 | `0958a52` (Opus; samma byggindata som `bf05ac0`, samma LUT4 och 27 MHz-siffra) | 2 | "Sparade inställningar" under M6; utan dem ur `9023ab1` under "RSSI" |
 | M4 | `f78fe82` (före `ext_weak`) | 0 | "Den varierande raden" under `LOW` |
 | M0; M4, M6 med `HDMI=1` | `4ad5a68` (M4 före `ext_weak`, M6 utan RSSI, SCAN och flash) | 0 (M6: 2) | "DVI eller HDMI" under M0 |
@@ -22,7 +23,7 @@ Hela sviten: **757 test gröna på `2b67dea`** med `tools/run_suite.py` (en proc
 | M3; M6 seed 0–3 | `94a2b32` | 0; 0–3 | "Klockroutningen, 2026-10-12" nedan |
 | M1, M1s | `62a69be` | 0 | milstolpetabellen |
 
-Alla klockor över kravet 75 MHz efter routning; HDMI-paren i M2, M2s, M4 och M6 packas som i M0. Rootaccepterat av Codex: sviten och M0/M4/M6 med standardval på `bf05ac0`, Codex egna optionsbyggen (`HDMI=1`, `VINTERP=1` och båda) på `46a1e4f`. Byggena av M2, M2s, M2a, M3, M1 och M1s är gjorda av Opus och har ingen rootacceptans i navets STATUS. Inget optionsbygge är gjort på källa med RSSI, SCAN och flashlagret. Ändrat 2026-10-12: parallellkörare och byggkatalogsrevision ("Hela sviten parallellt"), ingen BUFG-flagga på dekodrarnas SCLK, I/O-register i I/O-cellerna för SDRAM-topparna, C3-kampanjen avslutad med en rättning i `fb_sdram.v`, marginalkontroller för de formella bevisens öppna punkter 4 och 5.
+Alla klockor över kravet 75 MHz efter routning; HDMI-paren i M2, M2s, M4 och M6 packas som i M0. Rootaccepterat av Codex: sviten och M0/M4/M6 med standardval på `bf05ac0`, Codex egna optionsbyggen (`HDMI=1`, `VINTERP=1` och båda) på `46a1e4f`, och `HDMI=1` respektive `VINTERP=1` på `bf05ac0`. Byggena av M2, M2s, M2a, M3, M1 och M1s, och byggena ur `2c64672`, är gjorda av Opus och har ingen rootacceptans i navets STATUS. Ändrat 2026-10-12: parallellkörare och byggkatalogsrevision ("Hela sviten parallellt"), ingen BUFG-flagga på dekodrarnas SCLK, I/O-register i I/O-cellerna för SDRAM-topparna, C3-kampanjen avslutad med en rättning i `fb_sdram.v`, marginalkontroller för de formella bevisens öppna punkter 4 och 5.
 
 Milstolpetabellen nedan har samma byggen. Avsnitten om C2, C1 och C3 efter den är kvitton från sina datum; det de anger som återstående (260-frökampanjen, M6 med seed 2) är gjort 2026-10-12.
 
