@@ -1,6 +1,6 @@
 # Formella bevis
 
-`run.sh` bevisar med k-induktion i yosys, utan extern lösare, och körs av `tools/test_formal.py`. Varje bevis har negativa kontroller: en avsiktligt felaktig variant som måste ge ett motexempel från reset. Testet kräver sju `PROVEN` och fjorton `CONTROL OK`; genlockdelen tar flera minuter.
+`run.sh` bevisar med k-induktion i yosys, utan extern lösare, och körs av `tools/test_formal.py`. Varje bevis har negativa kontroller: en avsiktligt felaktig variant som måste ge ett motexempel från reset. Testet kräver tio `PROVEN` och sjutton `CONTROL OK` (sedan 2026-10-14); genlockdelen tar flera minuter.
 
 Här beskrivs klockdomänsövergångarna i `rtl/fb_backend.v`. FIFO:n och genlocken står i `gateware/README.md`.
 

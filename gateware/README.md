@@ -128,7 +128,7 @@ M4 seed 0 och M6 seed 3 ovan återanvänder de godkända `8d7b0e9`-byggena: dera
 | `video_timing.v` | 720p60-tidsbas (CEA-861) | `sim/test_video.py` |
 | `dvi_tx_gowin.v`, `clocks_720p.v` | OSER10 + TLVDS, rPLL 27→371,25 MHz, /5 → 74,25 MHz | via bygge (primitiver enligt apicula-exemplet) |
 | `tvp_sync_rx.v` | Mottagare för separata synksignaler (HSYNC/VSYNC/AVID), självinställande polaritet och bytefas | `sim/test_m1s_input.py` |
-| `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | Ord om två pixlar, klockdomänsbyte, SDRAM-styrning (burstar om 8 ord), BT.601 till RGB utan signerad aritmetik | `sim/test_sdram.py`, `sim/test_m2.py` |
+| `word_packer.v`, `async_fifo.v`, `sdram_burst.v`, `ycbcr2rgb.v`, `clocks_sdram.v` | Ord om två pixlar, klockdomänsbyte, SDRAM-styrning (burstar om 8 ord), BT.601 till RGB utan signerad aritmetik. `async_fifo.v` med `RD_REG = 1` läser nästa ord till ett register vid varje läsklocka, så att minnet kan ligga i block-RAM; `rd_data` är detsamma som med `RD_REG = 0` vid varje klocka. Mixerns två ingångs-FIFO:er använder det sedan 2026-10-14 (se "M6 med HDMI och VINTERP") | `sim/test_sdram.py`, `sim/test_m2.py`; `sim/test_async_fifo.py` (båda lägena sida vid sida mot en kö, läsare som står still och sedan läser varje klocka; negativ kontroll med registret laddat från nuvarande pekare); formellt bevisad i båda lägena |
 | `fb_sdram.v`, `fb_display.v`, `field_phase.v` | Fältminne i SDRAM med fyra buffertar: väljer vid varje bildstart vilket fält som visas, håller reda på vilka rader som är lagrade och täcker de som saknas; radmappning med halv rads förskjutning mellan fälten; vilket fält som är det nedre avgörs på ankomsttid. Tiden från återställning till första referensraden räknas inte som ett intervall (till 2026-10-07 gjorde den det, och en progressiv källa vars första referensrad kom ungefär en radtid före ett fältintervall efter starten ritades ett fält en halv rad lägre; hittat med `sim/test_fuzz_chain.py`). En rad räknas som lagrad bara om dess ord 0 togs i samma fält: raden skrivaren går in i mitt i efter reset eller `LOW` är inte lagrad (till 2026-10-12 var den det, och en bild utan video läste dess oskrivna ord; C3-kampanjens frön 1437 och 1445) | `sim/test_fb.py` mot `model/fb_ref.py` (varje beslut, varje läst rad), `model/test_fb_ref.py`; `sim/test_fb.py::test_first_interval_is_not_measured`, `::test_joined_line_from_the_middle_is_not_stored`; med `VINTERP=1` (interpolation i höjdled, standard av) `::test_vinterp_blends_two_source_lines` och `sim/test_vblend.py` |
 | `fb_backend.v`, `cdc_sync.v` | Fältminne och visning, delad av M2 och M4. LOW:s 16 ringplatser delar RAM med BUF. En plats blir initialiserad efter accepterade skrivningar till dess ordadresser 0–359 i ordning, i BUF eller LOW. Global reset nollställer giltighetsmasken, inte RAM. LOW visar svart för en plats som saknar en komplett rad sedan reset. Senare partiella eller uteblivna rader behåller platsens giltighet och dess äldre, ej överskrivna ord. Klockdomänsövergångarna ligger i `cdc_sync.v` | `sim/test_m2.py` (båda lägena); `sim/test_ll_ring.py` mot `model/ll_ring_ref.py`, inklusive sex verkliga RTL-felvarianter; semantisk skriv-/displaykontroll i `sim/test_fuzz_chain.py`; CDC-handskakningar formellt bevisade, se "Formella bevis" |
 | `genlock_timing.v` | Tidsbas som `video_timing.v`, låsbar till ingångens fält (låglatensläget) och 720p50 för PAL. Varje fullständig utgångsbild har en full vsync. `JUMP_AFTER` tidiga triggers klipper efter den fulla synken och hoppar till sista porchraden; den direkt följande återhämtningsbilden kan också korta sin back porch. Övriga bilder är minst `V_TOTAL−1` rader. Både klipp och återhämtningsbild kör hela sista porchraden för att återställa skalning och radindex i `fb_display`; `HOLD` gäller mellan klipp. `WAIT_BEFORE_VSYNC = 1` (standard 0) lägger den varierande raden före vsync, se "Den varierande raden" under `LOW` | `sim/test_m2.py::m2_low_latency`, `sim/test_fb.py` (låglatenstesterna med båda placeringarna), `sim/test_genlock.py`, formellt bevis för båda |
@@ -520,11 +520,11 @@ Kostnad, byggt ur `fc267a8` (standardval i övrigt, siffror efter routning, krav
 
 ## Formella bevis
 
-`formal/run.sh` tar flera minuter och ingår i testsviten via `tools/test_formal.py`; C1-kandidatens frysta körning tog 572,163 s och gav 7 `PROVEN`-bevis samt 14 `CONTROL OK` i negativa kontroller. Sedan `WAIT_BEFORE_VSYNC` (2026-10-13) är det 8 `PROVEN` och 16 `CONTROL OK`. Bevisen använder k-induktion i yosys utan extern lösare:
+`formal/run.sh` tar flera minuter och ingår i testsviten via `tools/test_formal.py`; C1-kandidatens frysta körning tog 572,163 s och gav 7 `PROVEN`-bevis samt 14 `CONTROL OK` i negativa kontroller. Sedan `WAIT_BEFORE_VSYNC` (2026-10-13) var det 8 `PROVEN` och 16 `CONTROL OK`, och sedan `RD_REG` i `async_fifo.v` (2026-10-14) är det 10 och 17. Bevisen använder k-induktion i yosys utan extern lösare:
 
 | Modul | Bevisat | Negativ kontroll |
 |---|---|---|
-| `async_fifo.v` (djup 4 och 8) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under |
+| `async_fifo.v` (djup 4 och 8, `RD_REG` 0 och 1) | med två fria klockor och fria in-signaler: ingen överflödning eller underflödning, varje sidas bild av den andra pekaren är konservativ, Gray-pekarna stämmer och rör sig ett steg i taget, och ett ord kommer ut oförändrat; med `RD_REG = 1` håller läsregistret ordet vid läspekaren så fort första synksteget sett det skrivet | en FIFO som aldrig är full flödar över; en som aldrig är tom flödar under; ett läsregister som laddas från nuvarande pekare i stället för nästa visar det poppade ordet igen |
 | `genlock_timing.v` | med fria `lock`, `trig`, `h_alt` och `rst` på liten geometri: räknarna håller sig inom gränserna, varje bild slutar inom `V_TOTAL+MAX_WAIT`, exakt en vsyncpuls registreras per bild med exakt `V_SYNC` synkrader. Normala bilder är minst `V_TOTAL−1`; bara avsiktligt klipp och direkt följande återhämtningsbild får vara kortare, och återhämtningen är minst `V_SYNC_END+1` rader. `HOLD` gäller mellan klipp. Med `WAIT_BEFORE_VSYNC = 1` (två front-porch-rader) samma egenskaper, och dessutom slutar varje låst bild med hela sin back porch efter synken och ingen återhämtningsbild förekommer | borttagen väntegräns, två överhoppade porch-rader i en normalbild, borttagen `HOLD`, tappad sync i klippet och återhämtningsflagga som fastnar; med `WAIT_BEFORE_VSYNC = 1`: den naturliga bilden hoppar över en back-porch-rad, väntan slutar på andra synkraden |
 | `cdc_sync.v` `toggle_rx` (radbegäran, publicering, lågfördröjningstrigger i `fb_backend.v`) | två fria klockor, högst 3 flanker av den ena mellan två av den andra (27–108 MHz mot 74,25 MHz), ett sampel mitt i en ändring får bli vilket värde som helst: med vändning högst var 16:e sändarklocka och data som hålls 16 klockor tappas eller dubbleras ingen händelse, varje händelse tas emot inom 4 mottagarflanker, och mottagen data är den skickade | flanken tagen direkt från andra domänen ger fel data; vändning var 8:e klocka tappar en händelse; data som ändras efter 2 klockor kommer fram fel |
 | `cdc_sync.v` `toggle_tx` (lågfördröjningstriggerns sändarsida) | en klocka, fria begäranden: vändningar minst 16 klockor isär, data hålls från vändning till vändning, varje begäran skickas inom 16 klockor med den senaste datan; det är sändarvillkoren i raden ovan | en sändare som vänder direkt på varje begäran bryter avståndet |
@@ -573,6 +573,42 @@ Alla fyra seeds routade i den historiska körningen med 12 600 LUT och 25 BSRAM.
 `tools/tmds_fuses.py`: alla fyra HDMI-par i M4 (seed 0) och M6 (seed 3) som i M0. På `main` före ändringen (`5314ed1`) routade M6 också med seed 0–3; felet syntes alltså inte på den källan, men risken fanns kvar.
 
 Iakttagelse: med seed 1 och 3 (och seed 3 före ändringen) når `sd_clk_shift`, SDRAM-klockan ut till stiftet, inte stiftet över dedikerad routning och går via vanliga ledningar. Det ger inget fel, men fördröjningen till SDRAM-klockstiftet beror då på placeringen; det är vad minnestestet `m2a_memtest` mäter på kortet.
+
+### M6 med HDMI och VINTERP, 2026-10-14
+
+**Orsak.** `HDMI=1 VINTERP=1 gateware/build.sh m6_puck_proto` stannade i placeringen: nextpnr 0.11.1 gav upp med "Unable to find legal placement for all cells, design is probably at utilisation limit" (Codex på `bf05ac0` efter 57 min, Opus på `072dbde` efter 2 382 s). Placeraren ger det felet när den slutliga legaliseringen har flyttat celler fler än åtta gånger antalet celler. Ingen celltyp är över sin egen kapacitet i nextpnr:s tabell (LUT4 16 220 av 20 736, ALU 4 604 av 15 552, DFF 7 700 av 15 552, RAM16SDP4 282 av 648, BSRAM 29 av 46). Det som tar slut är LUT-platserna, som flera celltyper delar: en ALU tar en LUT-plats, en RAM16SDP4 tar en hel CFU (8 LUT-platser och dess 6 vippor), och en vippa bredvid en LUT måste ta sin data från just den LUT:en. Varje vippa som matas av något annat (en vippa, ett RAM, en MUX) tar därför en egen plats, där nextpnr efter placeringen lägger en genomgångs-LUT. Räknat ur syntesens nätlista för `072dbde`:
+
+| M6 | LUT ur syntesen | ALU med kedjeändar | RAM16SDP4 × 8 | Vippor utan egen LUT | Summa av 20 736 |
+|---|---:|---:|---:|---:|---:|
+| standard | 9 057 | 4 192 | 2 256 | 2 725 | 18 230 (87,9 %) |
+| `VINTERP=1` | 9 226 | 4 554 | 2 256 | 2 720 | 18 756 (90,5 %) |
+| `HDMI=1` | 9 200 | 4 238 | 2 256 | 3 013 | 18 707 (90,2 %) |
+| båda | 9 360 | 4 604 | 2 256 | 3 008 | 19 228 (92,7 %) |
+
+`HDMI=1` lägger till 288 vippor utan egen LUT (fördröjningslinjen på 10 klockor i `tmds_link.v`), `VINTERP=1` 362 ALU. 224 av de 282 RAM16SDP4 var mixerns två ingångs-FIFO:er (128 × 53 bitar vardera med asynkron läsning, alltså bara LUT-RAM möjligt): 1 792 LUT-platser. nextpnr:s DFF-tal räknar 6 vippor per RAM16SDP4, därav 7 700 mot syntesens 6 083.
+
+**Åtgärd.** `async_fifo.v` har `RD_REG`: med 1 laddas ordet vid läspekarens nästa värde i ett register vid varje läsklocka, så att minnet kan ligga i block-RAM. `rd_data` är då detsamma som förut vid varje klocka medan FIFO:n inte är tom (formellt bevisat för båda lägena; `sim/test_async_fifo.py`). `mixer2.v` använder det för `fifo_a` och `fifo_b`: två BSRAM vardera i stället för 112 RAM16SDP4 vardera. Alla M4- och M6-byggen får därmed 4 BSRAM fler och 224 RAM16SDP4 färre. Andra vägar som planen nämnde behövdes inte: mätarsidans text är kvar i HDMI-bygget, och I/O-registren i I/O-cellerna är kvar (felet gällde inte IOLOGIC). Efter placeringen upptar M6 med båda valen 17 137 av 20 736 LUT-platser (82,6 %: 8 653 LUT ur syntesen, 3 418 genomgångs-LUT, 4 602 ALU, 58 RAM16SDP4) och M6 med standardval 16 245 (78,3 %).
+
+**Byggt** ur `2c64672` (siffror efter routning, krav 75 MHz för alla klockor, inga `ERROR`, HDMI-paren i alla fyra som i M0):
+
+| Topp | Val | Seed | LUT4 | DFF | BSRAM | Lägsta klocka (MHz) | Tid |
+|---|---|---:|---:|---:|---:|---|---:|
+| `m6_puck_proto` | standard | 2 | 13 113 | 6 029 | 29 | `clocks.clk_27` 112,07 | 676 s |
+| `m6_puck_proto` | `HDMI=1 VINTERP=1` | 2 | 13 719 | 6 356 | 33 | `sd_clk` 99,00 | 730 s |
+| `m4_dual_mix` | standard | 0 | 5 831 | 3 179 | 29 | `sd_clk` 129,17 | 237 s |
+| `m4_dual_mix` | `HDMI=1 VINTERP=1` | 0 | 6 427 | 3 505 | 33 | `clk_pixel` 116,33 | 243 s |
+| `m0_testpattern` | standard | 0 | 789 | | 0 | `clk_pixel` 152,35 | 36 s |
+
+Mot `bf05ac0` är det 2 392 LUT4 färre i M6 och 2 414 färre i M4; M6:s 27 MHz-domän ligger på 112,07 MHz mot 132,28 (placeringen, inte logiken i den domänen).
+
+Vilka byggval som är byggda tillsammans:
+
+| | standard | `VINTERP=1` | `HDMI=1` | båda |
+|---|---|---|---|---|
+| M4 | `2c64672` | `bf05ac0` (Codex) | `bf05ac0` (Codex) | `2c64672`; före ändringen också `bf05ac0` (Codex) |
+| M6 | `2c64672` | `bf05ac0` (Codex) | `bf05ac0` (Codex) | `2c64672`; föll på `bf05ac0` och `072dbde` |
+
+`VINTERP=1` och `HDMI=1` var för sig är inte ombyggda efter ändringen, som bara tar bort LUT-RAM.
 
 ## Störningskampanjen C3 avslutad, 2026-10-12
 
