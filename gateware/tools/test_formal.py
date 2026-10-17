@@ -1,5 +1,6 @@
 """Formal proofs (gateware/formal/run.sh): async FIFO, genlock timing, and the clock
-domain crossings of fb_backend.v (toggle handshakes, mode bit, line buffer slots) by
+domain crossings of fb_backend.v (toggle handshakes, mode bit, line buffer slots, both read
+ports with VINTERP) by
 k-induction in yosys, each with negative controls that must produce a real
 counterexample, including lost sync and a recovery flag that never expires."""
 import subprocess
@@ -16,5 +17,5 @@ def test_formal_proofs():
     r = subprocess.run([str(GW / 'formal' / 'run.sh')], capture_output=True, text=True)
     lines = r.stdout.splitlines()
     assert r.returncode == 0, r.stdout + r.stderr
-    assert sum(l.startswith('PROVEN') for l in lines) == 10, lines
-    assert sum(l.startswith('CONTROL OK') for l in lines) == 17, lines
+    assert sum(l.startswith('PROVEN') for l in lines) == 11, lines
+    assert sum(l.startswith('CONTROL OK') for l in lines) == 19, lines

@@ -253,9 +253,9 @@ module fb_display #(
 
 `ifdef FORMAL
     // Proven by formal/run.sh (formal/linebuf_props.v: genlock_timing + fb_display in a small
-    // picture, all other inputs free): a line requested during an active output line goes to a
-    // line buffer slot that the display does not read for the rest of that line; the first
-    // request of a frame (slot 0, which the display then reads) is made on a blanking line.
+    // picture, all other inputs free; VINTERP = 0 and 1): a line requested during an active output
+    // line goes to a line buffer slot that lb_raddr does not read for the rest of that line; the
+    // first request of a frame (slot 0, which the display then reads) is made on a blanking line.
     // That the SDRAM side has written the slot before the next line start is a matter of
     // SDRAM latency and is not part of the proof (gateware/formal/README.md).
     reg        f_t_q, f_rst_q, f_pend;
@@ -274,12 +274,80 @@ module fb_display #(
         if (f_pend) assert (f_slot != src_cur[1:0] && f_slot == fetch_slot);
 `ifndef FORMAL_NO_STRENGTHEN
         // induction strengthening: the next line is at most one ahead of the line read, and level
-        // with it from the start of an active line until its request
+        // with it from the start of an active line until its request; VINTERP in buffer mode asks
+        // for the line after it, one slot further on
         assert (f_ahead <= 1);
         if (y < V_ACTIVE && (x == 1 || x == 2)) assert (f_ahead == 0);
-        if (f_pend || (f_req && !fetch_first)) assert (f_ahead == 1 && fetch_slot == src_next[1:0]);
+        if (f_pend || (f_req && !fetch_first))
+            assert ((f_ahead == 1 && fetch_slot == src_next[1:0]) || (VINTERP != 0 && fetch_slot == src_next[1:0] + 2'd1));
 `endif
     end
+
+    // VINTERP = 1, both read ports (formal/linebuf_props.v with VI = 1). In a frame that is in
+    // buffer mode from its first request on and has at most V_ACTIVE / 2 source lines (scaled up
+    // at least twice, see the header), from x = 2 of every active output line to its end: the slot
+    // lb_raddr reads, and the slot lb_raddr_b reads when the weight w_cur is not 0 (with 0, vblend.v
+    // does not look at the second line), was last asked for the line that port shows, and that
+    // request was made before the line started. src_cur, src_b_cur and w_cur hold the line's values
+    // from x = 2 on (the window starts at H_WIN0 = 160 in 720p). f_lb shadows the line last asked
+    // for in each slot; f_now marks the slots asked for since the current line started.
+    reg [39:0] f_lb;                                            // 4 slots x 10 bits
+    reg [3:0]  f_now;
+    reg        f_buf, f_ll_q;
+    always @(posedge clk) begin
+        f_ll_q <= ll;
+        if (f_req) begin
+            f_lb[fetch_slot * 10 +: 10] <= fetch_line;
+            f_now[fetch_slot] <= 1'b1;
+        end
+        // a request seen at a line start was made in the line before (after a reset in the middle of
+        // a line, genlock_timing's registered y shows the old line for one clock)
+        if (line_start) f_now <= 4'd0;
+        if (f_req && fetch_first) f_buf <= !f_ll_q && !ll;     // ll as the request was made, and now
+        else if (ll) f_buf <= 1'b0;
+        if (rst) begin f_now <= 4'd0; f_buf <= 1'b0; end
+    end
+    // the slots as they stand, counting a request made in the last clock
+    function [9:0] f_line(input [1:0] s);
+        f_line = (f_req && fetch_slot == s) ? fetch_line : f_lb[s * 10 +: 10];
+    endfunction
+    function f_new(input [1:0] s);
+        f_new = f_now[s] || (f_req && fetch_slot == s);
+    endfunction
+    wire [1:0] f_sa = lb_raddr[10:9], f_sb = lb_raddr_b[10:9];
+    wire       f_chk = f_buf && lines <= V_ACTIVE / 2 && y < V_ACTIVE && x >= 2;
+    always @* if (VINTERP != 0 && f_chk) begin
+        assert (lb_raddr[12:11] == 2'b00 && f_line(f_sa) == src_cur && !f_new(f_sa));
+        if (w_cur != 0) assert (f_line(f_sb) == src_b_cur && !f_new(f_sb));
+    end
+`ifndef FORMAL_NO_STRENGTHEN
+    // induction strengthening for VINTERP: the lines asked for in a frame are 0, 1, 2, ... up to
+    // req_hi, one per slot in turn; req_hi is 0 until output line 0 asks for line 1 at x = 2, and
+    // then the line after src_next (the last line at most); output line 0 has weight 0
+    reg f_l0;                                                   // req_hi is still the frame's line 0
+    always @(posedge clk)
+        if (rst) f_l0 <= 1'b0;
+        else if (line_start && y == V_TOTAL - 1) f_l0 <= 1'b1;
+        else if (x == 2 && y < V_ACTIVE - 1) f_l0 <= 1'b0;
+    wire [9:0] f_hi_next = (src_next + 1 < lines) ? src_next + 1'b1 : src_next;
+    wire       f_inv = VINTERP != 0 && f_buf && lines <= V_ACTIVE / 2;
+    always @* if (f_inv) begin
+        assert (lines != 0 && src_next < lines);
+        assert (fetch_line == req_hi && fetch_slot == req_hi[1:0]);
+        if (f_l0) assert (req_hi == 0 && src_next == 0 && (y == V_TOTAL - 1 || (y == 0 && x <= 2)));
+        else assert (req_hi == f_hi_next);
+        if (y < V_ACTIVE && x != 0) assert (src_b_cur == ((src_cur + 1 < lines) ? src_cur + 1'b1 : src_cur));
+        if (y == 0 && x >= 2) assert (w_cur == 0);
+        if (y != 0 && y < V_ACTIVE && x >= 3 && |f_now) assert (src_next == src_cur + 1 && req_hi == src_next + 1);
+    end
+    genvar f_g;
+    generate for (f_g = 0; f_g < 4; f_g = f_g + 1) begin : f_slot_inv
+        always @* if (f_inv) begin
+            if (f_g <= req_hi) assert (f_line(f_g) == req_hi - ((req_hi - f_g) & 10'd3));
+            if (f_new(f_g)) assert (f_g == req_hi[1:0]);
+        end
+    end endgenerate
+`endif
 `endif
 endmodule
 `default_nettype wire
