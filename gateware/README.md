@@ -6,7 +6,9 @@ Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LIC
 
 ## Status 2026-10-14
 
-### Nuläge, `main` efter uppgift 21 (`88f5b90`)
+### Nuläge, granska-2026-10-14-grenen efter RS-2/SC-1/HD-1/VI-1
+
+2026-10-17 stängs de öppna fynden i den andra granskningen (navets `docs/reviews/2026-10-14`): RSSI-varningens marginal (`MARGIN_PCT` i `rssi_adc.v`), SCAN:s startkanal vid lika poäng, `RGB_FULL = 0` som skalar pixlarna till 16–235 i `tmds_link.v`, och det formella beviset för `VINTERP = 1` över båda läsporterna (`formal/linebuf_vi_props.v`; 11 `PROVEN`, 18 `CONTROL OK`). Riktad verifiering på denna källa: `test_review_2026_10_14.py`, `test_rssi_adc.py`, `test_chan_scan.py`, `test_hdmi.py`, `test_fb.py` (38 pass, med `B`-marginalraden), `test_mixer.py` (38 pass), `tools/` (92 pass, med de formella bevisen), `test_puck_ui.py`, `test_vblend.py`, `test_genlock.py`, `test_m2.py`, `test_fuzz_chain.py`, `test_top_pins.py` m.fl.; hela sviten har inte körts om runt alla källor. M4 med `HDMI=1 VINTERP=1` byggs ur denna källa: 6 432 LUT4, alla klockor över 75 MHz (skalningen i `tmds_link.v` kostar cirka 5 LUT4 mot 6 427 på `2c64672`). M6 med `HDMI=1 VINTERP=1` (`m6_puck_proto_vinterp_hdmi.fs`, seed 0): 13 872 LUT4, alla klockor över 75 MHz (skalningen kostar cirka 150 LUT4 mot 13 719 på `2c64672`).
 
 Hela sviten: **761 test gröna på `88f5b90`** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången; omgångar med `--resume`, de formella bevisen ensamma i sista), ingen delad byggkatalog. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
 

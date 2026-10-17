@@ -10,11 +10,19 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-14, main after task 21, suite on `88f5b90`):** 761 tests, all pass on
-`88f5b90`, run with `gateware/tools/run_suite.py` (one process per simulation test, ten at a
-time; rounds with `--resume`); no two tests share a build directory. Before: 757 on `2b67dea`,
-and the same 757 on `bf05ac0` in Codex's run, root-accepted 2026-10-13 (hub
-`docs/overnight/2026-10-08/STATUS.md`). Nothing has run on hardware: "simulated" and "built"
+**Status (2026-10-17, review-2026-10-14 branch, after closing RS-2/SC-1/HD-1/VI-1):** the four
+open findings of the second adversarial review are fixed and verified: the RSSI warning's margin
+(MARGIN_PCT), SCAN keeping the starting channel on a tie, RGB_FULL = 0 scaling the pixels to
+16..235, and the formal line-buffer proof for VINTERP = 1 over both read ports
+(formal/linebuf_vi_props.v; run.sh now proves 11 and controls 18). Targeted suites pass
+(test_review_2026_10_14.py without xfail markers, test_rssi_adc.py, test_chan_scan.py,
+test_hdmi.py, test_fb.py with the new B margin record, test_mixer.py, tools/ including the
+formal proofs, test_puck_ui.py, test_genlock.py, test_fuzz_chain.py, test_top_pins.py and more);
+M4 with HDMI=1 VINTERP=1 builds from this source: 6 432 LUT4, and M6: 13 872 LUT4
+(m6_puck_proto_vinterp_hdmi.fs), all clocks above 75 MHz. The
+full suite (761 tests on `88f5b90`, main after task 21) has not been re-run around all sources
+on this branch. Before that: 757 on `2b67dea`, and the same 757 on `bf05ac0` in Codex's run,
+root-accepted 2026-10-13 (hub `docs/overnight/2026-10-08/STATUS.md`).
 below, never "measured".
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
