@@ -10,12 +10,10 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-14, main after task 21, suite on `88f5b90`):** 761 tests, all pass on
-`88f5b90`, run with `gateware/tools/run_suite.py` (one process per simulation test, ten at a
-time; rounds with `--resume`); no two tests share a build directory. Before: 757 on `2b67dea`,
-and the same 757 on `bf05ac0` in Codex's run, root-accepted 2026-10-13 (hub
-`docs/overnight/2026-10-08/STATUS.md`). Nothing has run on hardware: "simulated" and "built"
-below, never "measured".
+**Status (2026-10-17, main `e3a76f3`):** 770 tests collected; on the branch merged here 767 pass and 3 are
+expected failures (open findings #21, #22, #23 of the second adversarial review, strict xfail), run one
+process per simulation test. M4 and M6 built from that branch with all clocks over 75 MHz after routing
+(M4 5810 LUT4, 29 BSRAM; M6 13259 LUT4, 29 BSRAM). Nothing has run on hardware.
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
 requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4
