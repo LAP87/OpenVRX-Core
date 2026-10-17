@@ -5,16 +5,19 @@
 //   F t ok margin   frame_low taken at line 0 of a BUF frame with video (fb_display.v, low_r)
 //   W t ok margin   ll_low taken at line 0 of a LOW frame with video
 //   R t ok margin   the line-buffer slot of a BUF output line with video, at its first window pixel
+//   B t ok margin   VINTERP: the slot the second read port reads (lb_raddr_b, in the copy of the four
+//                   slots) for the same line, when its weight is not 0 (with 0 it is not looked at)
 // t: simulation time (ns). ok: the value taken is the one decided for this frame and was there one
-// pixel clock earlier too (F, W); the slot holds the requested line, written up to its last word (R).
+// pixel clock earlier too (F, W); the slot holds the requested line, written up to its last word (R, B).
 // margin (ns): from the decision to the read, less three pixel clocks for the synchroniser (F, W), or
-// from the line's last word to the read (R). The tests require ok and a margin of one pixel clock.
+// from the line's last word to the read (R, B). The tests require ok and a margin of one pixel clock.
 integer   mc_f;
 real      mc_t_req = -1.0, mc_t_dec = -1.0, mc_t_fire = -1.0;
 reg       mc_fl_d = 1'b0, mc_lw_d = 1'b0, mc_in_d = 1'b0;
 reg [9:0] mc_line [0:3];
 reg [3:0] mc_done = 4'd0;
 real      mc_t_done [0:3];
+wire [1:0] mc_sb = `MC_BE.disp.lb_raddr_b[10:9];
 initial mc_f = $fopen("margin.txt", "w");
 
 // SDRAM side: when a frame's line-0 decision is taken, when the ring writer decides ll_low, and
@@ -45,10 +48,16 @@ always @(posedge pix_clk) if (!rst) begin
                     `MC_BE.disp.lw_q === `MC_BE.s_ll_low && mc_lw_d === `MC_BE.s_ll_low,
                     (mc_t_fire >= 0.0) ? $realtime - mc_t_fire - 3.0 * T_P : -1.0);
     end
-    if (`MC_BE.disp.in43 && !mc_in_d && `MC_BE.y < V_ACTIVE && !`MC_BE.disp.ll && `MC_BE.disp.have_video)
+    if (`MC_BE.disp.in43 && !mc_in_d && `MC_BE.y < V_ACTIVE && !`MC_BE.disp.ll && `MC_BE.disp.have_video) begin
         $fwrite(mc_f, "R %.1f %0d %.1f\n", $realtime,
                 mc_done[`MC_BE.disp.src_cur[1:0]] && mc_line[`MC_BE.disp.src_cur[1:0]] == `MC_BE.disp.src_cur,
                 mc_done[`MC_BE.disp.src_cur[1:0]] ? $realtime - mc_t_done[`MC_BE.disp.src_cur[1:0]] : -1.0);
+        // lb_raddr_b was registered one pixel earlier, on the same line
+        if (`MC_BE.disp.w_cur != 4'd0)
+            $fwrite(mc_f, "B %.1f %0d %.1f\n", $realtime,
+                    mc_done[mc_sb] && mc_line[mc_sb] == `MC_BE.disp.src_b_cur,
+                    mc_done[mc_sb] ? $realtime - mc_t_done[mc_sb] : -1.0);
+    end
     mc_fl_d <= `MC_BE.disp.fl_q;
     mc_lw_d <= `MC_BE.disp.lw_q;
     mc_in_d <= `MC_BE.disp.in43;
