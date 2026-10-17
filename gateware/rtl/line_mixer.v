@@ -14,7 +14,9 @@
 // channel, or to fill a gap (channels in step, line good, no line of the other
 // channel arrived within T_PAIR of it). Seen from a lone line of the other
 // channel, the current channel changes when it is sick while the other is well
-// (last 8 lines), or when it has been silent for N_STEP such lines (channels
+// (last 8 lines; weak lines count as bad here), when its last 8 lines were bad while
+// the other's had no bad line (weak lines allowed: a weak receiver still takes over
+// from a broken one), or when it has been silent for N_STEP such lines (channels
 // were in step) or N_DEAD (they were not; longer than a blanking interval).
 //
 // Lines bad on both receivers: a line that would be shown although it has no
@@ -65,6 +67,8 @@ module line_mixer #(
     input  wire        near_a, near_b,    // head line: a line of the other channel arrived within T_PAIR of it
     input  wire        psick_a, psick_b,  // head line: the other channel was sick when it arrived
     input  wire        swell_a, swell_b,  // head line: its own channel was well when it arrived
+    input  wire        pdead_a, pdead_b,  // as psick, swell with bad lines only (weak lines not counted)
+    input  wire        sok_a, sok_b,
 
     output reg         o_we,
     output reg  [51:0] o_data,
@@ -147,13 +151,17 @@ module line_mixer #(
     wire             x_bad     = x ? badb : bada;
     wire             x_psick   = x ? psick_b : psick_a;
     wire             x_swell   = x ? swell_b : swell_a;
+    wire             x_pdead   = x ? pdead_b : pdead_a;
+    wire             x_sok     = x ? sok_b : sok_a;
     wire             x_near    = x ? near_b : near_a;
     wire [QW-1:0]    quiet_cur = cur ? quiet_b : quiet_a;
     wire             qfast_cur = cur ? qfast_b : qfast_a;
     wire [QW-1:0]    q_inc     = (quiet_cur == N_DEAD) ? quiet_cur : quiet_cur + 1'b1;
     wire             fast      = (quiet_cur == 0) ? in_step : qfast_cur;
     wire             silent    = (q_inc == N_DEAD) || (fast && q_inc >= N_STEP);
-    wire             s_cur     = ((x != cur) && (silent || (x_psick && x_swell))) ? x : cur;
+    // health (a weak receiver counts as sick and is never well) or rescue (bad lines only: a weak
+    // receiver without bad lines takes over from one whose last 8 lines were all bad, RS-1)
+    wire             s_cur     = ((x != cur) && (silent || (x_psick && x_swell) || (x_pdead && x_sok))) ? x : cur;
     wire             s_owner   = (x == s_cur);
     // gap fill: the other channel (it is the current one when this matters) lost this line
     wire             gap_ok    = in_step && !x_bad && !x_near;
