@@ -93,6 +93,9 @@ FLOW="chformal -lower;" prove cdc_toggle_tx toggle_tx_props 40 "" "$cdc" "$here/
 lb_flow="chformal -lower; chformal -assert -assert2assume a:src=*genlock_timing.v*;"
 lb_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/../rtl/vblend.v" "$here/linebuf_props.v")
 FLOW="$lb_flow" prove fb_linebuf_slots linebuf_props 20 "" "${lb_src[@]}" "$here/../rtl/fb_display.v" || status=1
+# VINTERP = 1 (VI = 1: 12 active lines): both read ports read the line they show, asked for before the line
+lb_vi="chparam -set VI 1 linebuf_props;"
+FLOW="$lb_flow" prove fb_linebuf_slots_vinterp linebuf_props 20 "$lb_vi" "${lb_src[@]}" "$here/../rtl/fb_display.v" || status=1
 # negative controls, without the induction strengthening so that the counterexample comes from the
 # property itself: the toggle edge taken straight from the other domain (no synchroniser stage) delivers
 # torn data; flips every 8 sender clocks lose events; data that changes 2 sender clocks after its flip
@@ -115,4 +118,13 @@ must_fail cdc_level_two_edges level_props 20 "chparam -set SETTLE 2 level_props;
 sed "s/fetch_slot <= src_next\[1:0\] + 2'd1;/fetch_slot <= src_next[1:0];/" "$here/../rtl/fb_display.v" > fb_display_same_slot.v
 grep -q "fetch_slot <= src_next\[1:0\];" fb_display_same_slot.v
 DEFS=-DFORMAL_NO_STRENGTHEN FLOW="$lb_flow" must_fail fb_linebuf_same_slot linebuf_props 30 "" "${lb_src[@]}" "$work/fb_display_same_slot.v" || status=1
+# VINTERP: the second line asked for after the line being shown instead of after the line the next output line
+# starts from (one output line late after each step of the source line); port B reading the slot after its own,
+# the one being fetched. Both break the port B assertion
+sed '/VINTERP: ask for the line after/,/fetch_slot   <= src_hi/s/src_hi/src_next/g' "$here/../rtl/fb_display.v" > fb_display_vi_late.v
+grep -q 'src_next + 1 < lines && src_next + 1 > req_hi' fb_display_vi_late.v
+DEFS=-DFORMAL_NO_STRENGTHEN FLOW="$lb_flow" must_fail fb_linebuf_vinterp_late linebuf_props 60 "$lb_vi" "${lb_src[@]}" "$work/fb_display_vi_late.v" || status=1
+sed "s/lb_raddr_b <= {src_b_cur\[1:0\], sx\[9:1\]};/lb_raddr_b <= {src_b_cur[1:0] + 2'd1, sx[9:1]};/" "$here/../rtl/fb_display.v" > fb_display_vi_b_ahead.v
+grep -q "lb_raddr_b <= {src_b_cur\[1:0\] + 2'd1, sx" fb_display_vi_b_ahead.v
+DEFS=-DFORMAL_NO_STRENGTHEN FLOW="$lb_flow" must_fail fb_linebuf_vinterp_b_ahead linebuf_props 60 "$lb_vi" "${lb_src[@]}" "$work/fb_display_vi_b_ahead.v" || status=1
 exit $status

@@ -10,11 +10,12 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-17, main after task 24):** 772 tests; on `d3d9753` 769 pass and 3 are expected
+**Status (2026-10-17, main after task 31):** 774 tests; on `76ceedf` 771 pass and 3 are expected
 failures (open findings #21, #22, #23 of the second adversarial review, strict xfail), one process per
-simulation test, 15 minutes with ten at a time. `run_suite.py --quick` runs 702 of them in about four
-minutes. M4 and M6 built from the review merge `8a71a0a` (no RTL change since) with all clocks over
-75 MHz after routing (M4 5810 LUT4, 29 BSRAM; M6 13259 LUT4, 29 BSRAM). Nothing has run on hardware.
+simulation test, 18 minutes with ten at a time. `run_suite.py --quick` runs 702 of them in about four
+minutes. M4 and M6 built from the review merge `8a71a0a` (synthesized RTL unchanged since) with all
+clocks over 75 MHz after routing (M4 5810 LUT4, 29 BSRAM; M6 13259 LUT4, 29 BSRAM). Nothing has run on
+hardware.
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
 requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4

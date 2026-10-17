@@ -964,9 +964,9 @@ def check_vinterp(name, frames):
     """Every output line of every frame with video: second line and weight as fb_ref.src_lines, port B
     holds word 52 of what the store read for the second line, the words of window pixel 136 are
     word 51 of both lines, and the YCbCr put out is their blend. Returns (lines checked, weights
-    seen, lines where the two words differ)."""
+    seen, lines where the two words differ, lines with a weight that is not 0)."""
     by_time = {round(fr.cyc * T_S / T_P): fr for fr in frames}
-    checked, weights, differ = 0, set(), 0
+    checked, weights, differ, weighted = 0, set(), 0, 0
     for pf in vinterp_frames(name):
         if not pf['video']:
             continue
@@ -987,19 +987,24 @@ def check_vinterp(name, frames):
             checked += 1
             weights.add(w)
             differ += wa != wb
-    return checked, weights, differ
+            weighted += w != 0
+    return checked, weights, differ, weighted
 
 
 def test_vinterp_blends_two_source_lines():
     """VINTERP = 1 (buffer mode): each output line shows the blend of the two source lines around its
     position, weighted in eighths as fb_ref.src_lines says, the second line prefetched like the
-    first; the first line, the frame decisions and what the store reads are as without it."""
+    first; the first line, the frame decisions and what the store reads are as without it. Port B's
+    slot holds its line, written a pixel clock or more before the read, on every line with a weight
+    (margin_checks.vh, B, through run_sim)."""
     sd, pix = run_sim('tb_fb_vinterp', IL_SRC, RT_EN=0, VINTERP=1)
     frames, st = replay(sd, IL_SRC, RT_EN=0)
     assert check_display(frames, pix_frames(pix)) >= 3 * V_ACTIVE
-    checked, weights, differ = check_vinterp('tb_fb_vinterp', frames)
+    checked, weights, differ, weighted = check_vinterp('tb_fb_vinterp', frames)
     assert checked >= 3 * V_ACTIVE
     assert len(weights - {0, 8}) >= 3 and differ >= checked // 2, (weights, differ)
+    _, rows = margin_faults(HERE / 'build' / 'tb_fb_vinterp')
+    assert sum(r[0] == 'B' for r in rows) >= weighted > 0
 
 
 def test_vinterp_off_puts_out_the_first_line():
@@ -1032,6 +1037,30 @@ def test_vinterp_check_is_tested(fault, alter):
         sd, pix = run_sim(name, IL_SRC, alter=alter, RT_EN=0, VINTERP=1)
         frames, st = replay(sd, IL_SRC, RT_EN=0)
         check_vinterp(name, frames)
+
+
+SECOND_LINE_REQ = ("if (VINTERP != 0 && !ll && src_hi + 1 < lines && src_hi + 1 > req_hi) begin\n"
+                   "                req_hi       <= src_hi + 1'b1;\n"
+                   "                fetch_line   <= src_hi + 1'b1;\n"
+                   "                fetch_slot   <= src_hi[1:0] + 2'd1;")
+
+
+@pytest.mark.parametrize('fault, alter', [
+    ('late_second_line', {'fb_display.v': (SECOND_LINE_REQ, SECOND_LINE_REQ.replace('src_hi', 'src_next'))}),
+    ('b_reads_next_slot', {'fb_display.v': ("lb_raddr_b <= {src_b_cur[1:0], sx[9:1]};",
+                                            "lb_raddr_b <= {src_b_cur[1:0] + 2'd1, sx[9:1]};")}),
+])
+def test_margin_check_of_port_b_is_tested(fault, alter):
+    """Negative controls for the B check of margin_checks.vh (VINTERP = 1), the same faults as the
+    formal controls fb_linebuf_vinterp_late and _b_ahead: the second line asked for after the line
+    being shown instead of after the line the next output line starts from (one output line late
+    after each step of the source line), and port B reading the slot after its own, the one being
+    fetched. B checks fail; R (port A) and the others do not."""
+    name = f'tb_fb_margin_vi_{fault}'
+    run_sim(name, IL_SRC, alter=alter, margins=False, RT_EN=0, VINTERP=1)
+    bad, rows = margin_faults(HERE / 'build' / name)
+    assert [r for r in bad if r[0] == 'B'], f'no B check of {sum(r[0] == "B" for r in rows)} failed'
+    assert not [r for r in bad if r[0] != 'B'], bad[:3]
 
 
 def test_mode_switch_checks_catch_faults():
