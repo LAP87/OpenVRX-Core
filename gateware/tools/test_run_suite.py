@@ -100,14 +100,15 @@ def test_finish_reconciles_identities_and_pending(tmp_path, case, expected_rc):
 
 def test_pick_quick_takes_every_file_first_and_keeps_the_limit():
     """Two workers, 60 s: the fastest test of each file first (y1 alone is longer than the limit),
-    then the rest while the expected wall time (start-up included) stays within 60 s."""
+    then the rest while the expected wall time (start-up included) stays within 60 s; the list
+    comes back longest first, collection order on a tie."""
     nodes = ['gateware/sim/test_x.py::x1', 'gateware/sim/test_x.py::x2', 'gateware/sim/test_y.py::y1',
              'gateware/model/test_m.py::m1', 'gateware/model/test_m.py::m2', 'gateware/sim/test_z.py::z1']
     durations = {'gateware/sim/test_x.py::x1': 10, 'gateware/sim/test_x.py::x2': 50,
                  'gateware/sim/test_y.py::y1': 200, 'gateware/model/test_m.py::m1': 1,
                  'gateware/model/test_m.py::m2': 1}               # z1 never timed: left out
     chosen = run_suite.pick_quick(nodes, durations, 60, 2)
-    assert chosen == ['gateware/sim/test_x.py::x1', 'gateware/sim/test_x.py::x2',
+    assert chosen == ['gateware/sim/test_x.py::x2', 'gateware/sim/test_x.py::x1',
                       'gateware/model/test_m.py::m1', 'gateware/model/test_m.py::m2']
     units = [run_suite.unit_time(ns, durations) for _, ns in run_suite.units_of(chosen)]
     assert run_suite.makespan(units, 2) <= 60
@@ -189,14 +190,25 @@ def test_real_cli_selection_resume_budget_and_source_guard(tmp_path):
     quick_list = tools / 'quick_tests.txt'
     picked = cli(repo, out, '--pick-quick', '300')
     assert picked.returncode == 0 and quick_list.exists(), picked.stdout + picked.stderr
-    # every timed test fits; the skipped one has no measured duration and stays out
-    assert run_suite.read_quick(quick_list) == [n for n in json.loads((out / 'run.json').read_text())['nodes']
-                                                if not n.endswith('::test_skip')]
+    # every timed test fits, longest first; the skipped one has no measured duration and stays out
+    listed = run_suite.read_quick(quick_list)
+    assert sorted(listed) == sorted(n for n in json.loads((out / 'run.json').read_text())['nodes']
+                                    if not n.endswith('::test_skip'))
+    measured = json.loads((out / 'durations.json').read_text())
+    assert [measured[n] for n in listed] == sorted((measured[n] for n in listed), reverse=True)
     quick_list.write_text('# one test\ngateware/model/test_sample.py::test_a\n')
     quick = tmp_path / 'quick'
     ran = cli(repo, quick, '--quick')
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert json.loads((quick / 'run.json').read_text())['nodes'] == ['gateware/model/test_sample.py::test_a']
+    # without --out a quick run writes to its own directory and leaves the full run's alone
+    own = subprocess.run([sys.executable, str(tools / 'run_suite.py'), '--jobs', '1', '--timeout', '60',
+                          '--quick', 'gateware/model/test_sample.py'],
+                         cwd=repo, capture_output=True, text=True, timeout=60)
+    assert own.returncode == 0, own.stdout + own.stderr
+    assert json.loads((repo / 'gateware/sim/build/quick/run.json').read_text())['nodes'] == \
+        ['gateware/model/test_sample.py::test_a']
+    assert not (repo / 'gateware/sim/build/suite').exists()
     quick_list.write_text('gateware/model/test_sample.py::test_gone\n')
     stale = cli(repo, tmp_path / 'stale', '--quick')
     assert stale.returncode == 2 and 'not collected' in stale.stdout
@@ -205,3 +217,28 @@ def test_real_cli_selection_resume_budget_and_source_guard(tmp_path):
     (model / 'test_sample.py').write_text((model / 'test_sample.py').read_text() + '# changed source\n')
     assert cli(repo, out, '--resume').returncode == 2
     assert files(out) == before
+
+
+def test_quick_without_durations_starts_in_list_order(tmp_path):
+    """The stored list is longest first. A quick run whose output directory has no durations yet
+    (a fresh checkout) starts the tests in the list's order, not in collection order, so the
+    longest test does not start last."""
+    repo = tmp_path / 'repo'
+    tools = repo / 'gateware/tools'
+    tools.mkdir(parents=True)
+    for name in ('run_suite.py', 'build_dirs.py', 'suite_trace.py'):
+        shutil.copyfile(Path(run_suite.__file__).with_name(name), tools / name)
+    sim = repo / 'gateware/sim'
+    sim.mkdir()
+    (sim / 'test_order.py').write_text(''.join(f'def test_{i}(): pass\n' for i in (1, 2, 3)))
+    order = ['gateware/sim/test_order.py::test_3', 'gateware/sim/test_order.py::test_1',
+             'gateware/sim/test_order.py::test_2']
+    (tools / 'quick_tests.txt').write_text('# longest first\n' + '\n'.join(order + order[:1]) + '\n')
+    out = tmp_path / 'quick'
+    r = subprocess.run([sys.executable, str(tools / 'run_suite.py'), '--jobs', '1', '--timeout', '60',
+                        '--out', str(out), '--quick', 'gateware/sim/test_order.py'],
+                       cwd=repo, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert '3 tests in 3 processes' in r.stdout          # the repeated name runs once
+    started = [json.loads(l)['unit'] for l in (out / 'results.jsonl').read_text().splitlines()]
+    assert started == order

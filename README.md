@@ -10,10 +10,11 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-17, main `e3a76f3`):** 770 tests collected; on the branch merged here 767 pass and 3 are
-expected failures (open findings #21, #22, #23 of the second adversarial review, strict xfail), run one
-process per simulation test. M4 and M6 built from that branch with all clocks over 75 MHz after routing
-(M4 5810 LUT4, 29 BSRAM; M6 13259 LUT4, 29 BSRAM). Nothing has run on hardware.
+**Status (2026-10-17, main after task 24):** 772 tests; on `d3d9753` 769 pass and 3 are expected
+failures (open findings #21, #22, #23 of the second adversarial review, strict xfail), one process per
+simulation test, 15 minutes with ten at a time. `run_suite.py --quick` runs 702 of them in about four
+minutes. M4 and M6 built from the review merge `8a71a0a` (no RTL change since) with all clocks over
+75 MHz after routing (M4 5810 LUT4, 29 BSRAM; M6 13259 LUT4, 29 BSRAM). Nothing has run on hardware.
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
 requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4
@@ -102,12 +103,17 @@ testbenches look there first).
 ## Run
 
 ```sh
-.venv/bin/python gateware/tools/run_suite.py       # whole suite, one process per simulation test, ten at a time
+.venv/bin/python gateware/tools/run_suite.py --quick   # before every commit: the tests in gateware/tools/quick_tests.txt
+.venv/bin/python gateware/tools/run_suite.py       # before every merge: whole suite, one process per simulation test, ten at a time
 .venv/bin/python -m pytest -q tests/latency mixer gateware/model gateware/sim gateware/tools   # same tests in one process (over 90 min)
 gateware/build.sh m6_puck_proto                   # seed from boards/m6_puck_proto.seed -> gateware/build/m6_puck_proto.fs
 .venv/bin/python gateware/tools/build_manifest.py verify gateware/build/m6_puck_proto.build.json --root .
 openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 ```
+
+The quick list is chosen from the measured times of a full run (`run_suite.py --pick-quick 300`):
+the fastest test of every file, then the fastest of the rest. `--quick` refuses (exit status 2) when the
+list names a test that is no longer collected; pick a new list after the next full run.
 
 Each build uses a frozen source copy and writes a manifest with source and
 artifact hashes, tool versions, options and clock timing. A failed build leaves

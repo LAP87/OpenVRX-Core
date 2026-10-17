@@ -4,14 +4,15 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-14
+## Status 2026-10-17
 
-### Nuläge, `main` efter uppgift 21 (`88f5b90`)
+### Nuläge, `main` efter uppgift 24
 
-Hela sviten: **761 test gröna på `88f5b90`** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången; omgångar med `--resume`, de formella bevisen ensamma i sista), ingen delad byggkatalog. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
+Hela sviten: **772 test på `d3d9753`, 769 gröna och 3 xfail** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 907 s i en omgång), ingen delad byggkatalog. De tre xfail är strikta test för öppna fynd ur andra granskningen (Core #21, #22, #23). Snabbsviten före varje commit: 702 av testen på 235 s ("Snabbsviten före varje commit" under Verktyg). Granskningens rättningar RS-1 och FL-1 kom in med `8a71a0a`; RTL är oförändrad sedan dess. Före det: 761 gröna på `88f5b90` efter uppgift 21. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
+| M4, M6 (standardval) | granskningsgrenen, sammanslagen i `8a71a0a` (Fable, 2026-10-17; samma RTL som `main` nu); M6 med `--mspi_as_gpio` | 0, 2 | 5 810 / 13 259 LUT4, 29 BSRAM var; lägsta maxfrekvens 115,06 / 91,70 MHz. Inte rootaccepterade |
 | M0, M4, M6 (standardval), M4 och M6 med `HDMI=1 VINTERP=1` | `2c64672` (Opus, samma byggindata som `88f5b90`); M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 5 831 / 13 113 LUT4; M4 och M6 med båda valen 6 427 / 13 719; lägsta maxfrekvens 152,35 / 129,17 / 112,07 MHz, med båda valen 116,33 / 99,00 MHz. Inte rootaccepterade |
 | M0, M4, M6 (standardval) före FIFO-ändringen | `bf05ac0`, byggda av Codex och rootaccepterade 2026-10-13 | 0, 0, 2 | 789 / 8 245 / 15 505 LUT4; lägsta maxfrekvens 154,58 / 98,95 / 104,58 MHz; M6:s 27 MHz-domän 132,28 MHz |
 | M6 | `0958a52` (Opus; samma byggindata som `bf05ac0`, samma LUT4 och 27 MHz-siffra) | 2 | "Sparade inställningar" under M6; utan dem ur `9023ab1` under "RSSI" |
@@ -147,13 +148,21 @@ M4 seed 0 och M6 seed 3 ovan återanvänder de godkända `8d7b0e9`-byggena: dera
 - `.venv/` (uv): yowasp-yosys, yowasp-nextpnr-himbaechel-gowin, apycula (gowin_pack), cocotb, pytest.
 - `.tools/iverilog/` — Icarus Verilog 12 byggd från källkod.
 - Bygg: `gateware/build.sh <toppmodul>` → `gateware/build/<toppmodul>.fs`.
-- Simulera hela sviten: `.venv/bin/python gateware/tools/run_suite.py` (se nedan). Ett enstaka test: `.venv/bin/python -m pytest -q gateware/sim/test_m2.py`.
+- Före varje commit: `.venv/bin/python gateware/tools/run_suite.py --quick` (snabbsviten, nedan). Före varje sammanslagning till `main`: hela sviten, `.venv/bin/python gateware/tools/run_suite.py`. Ett enstaka test: `.venv/bin/python -m pytest -q gateware/sim/test_m2.py`.
 
 ### Hela sviten parallellt
 
 `tools/run_suite.py` startar en pytest-process per test under `gateware/sim` och `gateware/tools` och en per fil för de rena Pythontesten, tio åt gången (`-j`). Varje process har en egen `--basetemp`. Längst först, efter tiderna från förra körningen. I `gateware/sim/build/suite/` (`--out`) hamnar en logg per process, `results.jsonl`, `status.json` och `report.txt`. Returkod 0 bara när alla test gick igenom och ingen byggkatalog delas; 1 vid fel eller delad katalog, 3 när `--budget S` lämnade test kvar. `--resume` kör det som återstår och vägrar med returkod 2 om källorna eller de insamlade testidentiteterna ändrats, eller om en lagrad testpost saknar begärda utfall. Ett vägrat återupptagande lämnar resultatkatalogen orörd. Äldre manifest utan testidentiteter kräver även samma sökvägar och `-k`-uttryck. Använd en ny `--out` för ett annat testurval.
 
 Revisionen av byggkataloger går i samma körning: `tools/suite_trace.py` spelar in vilka kataloger under `gateware/build`, `gateware/sim/build` och `gateware/formal/build` varje tests underprocesser använder, och vilken cocotb-resultatfil. `tools/build_dirs.py --list` skriver ut dem per test och fäller en katalog eller fil som två test använder. Den fann tre sådana par på `main` f32407f (`tb_m2`, `tb_sdram`, `tb_tvp_ctrl_100_0`), som nu har egna kataloger. Med dem: 658 test gröna, 169 byggkataloger och 19 resultatfiler utan delning, 633 s med tio åt gången på en 24-trådars maskin (längst tar `tools/test_formal.py`, 7 minuter).
+
+### Snabbsviten före varje commit
+
+`run_suite.py --quick` kör bara testen i `tools/quick_tests.txt` och skriver till `gateware/sim/build/quick/`, så att den senaste hela körningens loggar, resultat och tider står kvar. `--full`, eller inget val, kör allt. Regeln: snabbsviten före varje commit, hela sviten på den commit som slås ihop före varje sammanslagning till `main`.
+
+Listan väljs ur uppmätta tider: `--pick-quick 300` läser `durations.json` från en hel körning och tar först det snabbaste testet ur varje fil, sedan de snabbaste av resten, så länge den väntade väggtiden med `-j` processer stannar inom 300 s. Listan skrivs längst först, och en snabbkörning utan egna tider startar testen i den ordningen. Huvudet säger när listan valdes och vilka filer som saknas. Står det ett namn i listan som inte längre samlas in vägrar `--quick` med returkod 2; välj då en ny lista ur nästa hela körning.
+
+Listan från 2026-10-17 kommer ur hela körningen på `main` b1a6e65 (771 test, 768 gröna och 3 xfail, 961 s): 702 test ur 49 av 50 filer, väntat 296 s med tio åt gången. Utanför listan: de formella bevisen (`tools/test_formal.py`, 8–15 minuter) och 68 simuleringar på 40–226 s var, de flesta i `sim/test_fb.py`, `sim/test_fuzz_chain.py` och `sim/test_mixer.py`; varje sådan fil har kvar sina snabbaste test. Testet för listans ordning kom till efter körningen och är med först när listan väljs om. Längst i listan tar `sim/test_puck_ui.py` (268 s), det enda testet i sin fil. Snabbsviten på `d3d9753` i en färsk kopia, alltså utan egna tider och i listans ordning: 699 gröna och 3 xfail på 235 s med tio åt gången, ingen delad byggkatalog.
 - Flasha (när kortet finns): openFPGALoader behövs, t.ex. `sudo pacman -S openfpgaloader` (Arch), sedan
   `openFPGALoader -b tangnano20k gateware/build/m0_testpattern.fs` (RAM) eller med `-f` (flash).
 

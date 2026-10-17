@@ -7,7 +7,8 @@ gateware/tools/quick_tests.txt: a list chosen by measured time to finish within 
 minutes with ten processes (before every commit; the full suite before every merge). A name in
 the list that is no longer collected stops the run (exit 2). --pick-quick S writes a new list
 from durations.json in OUT: the fastest test of every file first, then the fastest of the rest,
-as long as the expected wall time with -j processes stays within S seconds.
+as long as the expected wall time with -j processes stays within S seconds. The list is written
+longest first, and --quick starts the tests in its order when its own OUT has no durations yet.
 
 Tests under gateware/sim and gateware/tools get a process each; the pure Python
 tests (gateware/model, mixer, tests/latency) get one process per file. Every
@@ -15,7 +16,8 @@ process has its own --basetemp, and suite_trace.py records which build
 directories and cocotb results files each test used; at the end build_dirs.py
 fails the run when two tests used the same one.
 
-Output in OUT (default gateware/sim/build/suite): logs/ (one log per process),
+Output in OUT (default gateware/sim/build/suite; gateware/sim/build/quick with --quick, so that
+a quick run leaves the last full run's results and durations alone): logs/ (one log per process),
 results.jsonl (one record per finished process), status.json (progress),
 report.txt, durations.json (used to start the longest tests first next time).
 
@@ -81,7 +83,8 @@ def unit_time(nodes, durations):
 def pick_quick(nodes, durations, seconds, jobs):
     """Tests for the quick list: of the collected `nodes` with a measured duration, the fastest of
     every file first, then the rest by duration, each kept only while the expected wall time of
-    the whole selection stays within `seconds`."""
+    the whole selection stays within `seconds`. Returned longest first (collection order on a
+    tie): the order a quick run without durations of its own starts them in."""
     timed = sorted((n for n in nodes if n in durations), key=lambda n: (durations[n], n))
     first, seen = [], set()
     for n in timed:
@@ -95,7 +98,7 @@ def pick_quick(nodes, durations, seconds, jobs):
         if makespan([unit_time(ns, durations) for _, ns in units_of(trial)], jobs) <= seconds:
             chosen = trial
     order = {n: i for i, n in enumerate(nodes)}
-    return sorted(chosen, key=lambda n: order[n])
+    return sorted(chosen, key=lambda n: (-durations[n], order[n]))
 
 
 def fingerprint():
@@ -249,7 +252,8 @@ def main(argv=None):
     ap.add_argument('paths', nargs='*', default=PATHS)
     ap.add_argument('-j', '--jobs', type=int, default=10)
     ap.add_argument('-k', dest='keyword')
-    ap.add_argument('--out', type=Path, default=GW / 'sim' / 'build' / 'suite')
+    ap.add_argument('--out', type=Path,
+                    help='default gateware/sim/build/suite, with --quick gateware/sim/build/quick')
     ap.add_argument('--resume', action='store_true')
     ap.add_argument('--budget', type=float, default=0, help='seconds; 0: no limit')
     ap.add_argument('--guess', type=float, default=120, help='expected seconds for a unit never timed')
@@ -261,7 +265,7 @@ def main(argv=None):
                      help='write quick_tests.txt from OUT/durations.json for a wall time of S seconds, run nothing')
     ap.add_argument('--quick-list', type=Path, default=QUICK_LIST, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
-    out = a.out.resolve()
+    out = (a.out or GW / 'sim' / 'build' / ('quick' if a.quick else 'suite')).resolve()
     t0 = time.monotonic()
 
     nodes = collect(a.paths, a.keyword)
@@ -284,6 +288,7 @@ def main(argv=None):
                 f'{len(nodes)} tests, {len(covered)} of {len(files)} files, expected {wall:.0f} s.',
                 '# The fastest test of every file first, then the fastest of the rest, while the expected wall',
                 '# time stays within the limit. Not in the list: ' + (', '.join(sorted(files - covered)) or 'none') + '.',
+                '# Longest first: --quick starts them in this order until it has measured times of its own.',
                 '# Regenerate after a full run: .venv/bin/python gateware/tools/run_suite.py --pick-quick 300']
         a.quick_list.write_text('\n'.join(head + chosen) + '\n')
         print(f'{len(chosen)} of {len(nodes)} tests ({len(covered)} of {len(files)} files), '
@@ -297,8 +302,7 @@ def main(argv=None):
             print(f'--quick: {len(missing)} tests in {a.quick_list.name} are not collected, e.g. {missing[0]}; '
                   'regenerate the list with --pick-quick after a full run')
             return 2
-        listed_set = set(listed)
-        nodes = [n for n in nodes if n in listed_set]
+        nodes = list(dict.fromkeys(listed))     # the list's order (longest first), each test once
     units = units_of(nodes)
     fp = fingerprint()
     run_file, results_file = out / 'run.json', out / 'results.jsonl'
@@ -333,7 +337,9 @@ def main(argv=None):
     run_file.write_text(json.dumps({'fingerprint': fp, 'paths': a.paths, 'keyword': a.keyword, 'nodes': nodes}, indent=1))
 
     expected = {u: sum(durations.get(n, a.guess) for n in ns) for u, ns in units}
-    todo = sorted((u for u in units if u[0] not in done), key=lambda u: -expected[u[0]])
+    todo = [u for u in units if u[0] not in done]
+    if durations or not a.quick:        # a quick run without times of its own keeps the list's order
+        todo.sort(key=lambda u: -expected[u[0]])
     total = len(units)
     print(f'{len(nodes)} tests in {total} processes, {len(done)} already passed, '
           f'{len(todo)} to run, {a.jobs} at a time; sources {fp[:12]}', flush=True)
