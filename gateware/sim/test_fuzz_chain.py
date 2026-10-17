@@ -693,7 +693,7 @@ def check_margins(logs, fd):
     """The margin checks of margin_checks.vh (formal/README.md, items 4 and 5): frame_low and
     ll_low have arrived a pixel clock before line 0 takes them, and a BUF line-buffer slot holds
     its line up to the last word when the display starts reading it."""
-    kinds = {'F': ('display', 'low_margin'), 'W': ('display', 'low_margin'), 'R': ('store', 'line_late')}
+    kinds = {'F': ('display', 'low_margin'), 'W': ('display', 'low_margin'), 'R': ('store', 'line_late'), 'B': ('store', 'line_late')}
     for row in logs.get('margin', []):
         try:
             kind, t_ns, ok, margin = row[0], float(row[1]), row[2], float(row[3])

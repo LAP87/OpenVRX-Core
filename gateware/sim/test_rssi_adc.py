@@ -41,9 +41,9 @@ SCHED = [
     (0.6 * V, 1.4 * V, 0, 0, None),                 # 6..8 A at 10 %: low and warning in the third round
     (0.6 * V, 1.4 * V, 0, 0, None),
     (0.6 * V, 1.4 * V, 0, 0, None),
-    (0.6 * V, 0.62 * V, 0, 0, None),                # 9..11 B falls too: A warns until B is low as well
-    (0.6 * V, 0.62 * V, 0, 0, None),
-    (0.6 * V, 0.62 * V, 0, 0, None),
+    (0.6 * V, 0.75 * V, 0, 0, None),                # 9..11 B at 15 %: margin 5, A warns until B is low as well
+    (0.6 * V, 0.75 * V, 0, 0, None),
+    (0.6 * V, 0.75 * V, 0, 0, None),
     (1.4 * V, 0.62 * V, 0, 0, None),                # 12 A recovers: B warns
     (1.4 * V, 0.62 * V, 1, 0, None),                # 13 no ADC: nothing valid, no warning
     (0.7 * V, 1.4 * V, 0, 0, None),                 # 14..16 20 % exactly: not low
@@ -79,8 +79,8 @@ def model(sched, n_low=ref.N_LOW, absent_ok=True):
 
 MUTANTS = {
     'warns_without_the_other': [
-        ("warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0],", "warn <= {nb == N_LOW,"),
-        ("                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1]};", "                         na == N_LOW};"),
+        ("warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0] && p_a - p_b >= MARGIN_PCT,", "warn <= {nb == N_LOW,"),
+        ("                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1] && p_b - p_a >= MARGIN_PCT};", "                         na == N_LOW};"),
     ],
     'ignores_other_masters': [("if (free_cnt == 2'd2 && !other_active && !busy) begin", "if (!busy) begin")],
     'n_low_1': [("    parameter N_LOW = 3,", "    parameter N_LOW = 1,")],
@@ -128,7 +128,7 @@ def test_model_scenario_says_what_it_claims():
     low = [(r[12], r[13]) for r in rows]
     assert [w for w in warn[:6]] == [(0, 0)] * 6 and rows[5][8:10] == (1, 1)
     assert warn[6:9] == [(0, 0), (0, 0), (1, 0)], 'A warns in its third low round'
-    assert warn[9:12] == [(1, 0), (1, 0), (0, 0)] and low[11] == (1, 1), 'both low: neither warns'
+    assert warn[9:12] == [(1, 0), (1, 0), (0, 0)] and low[11] == (1, 1), 'margin 5: A warns until B is low too'
     assert warn[12] == (0, 1) and rows[13][2:4] == (0, 0) and warn[13] == (0, 0)
     assert rows[14][10] == 20 and low[14:17] == [(0, 0)] * 3
     assert rows[17][10] == 19 and low[17:20] == [(0, 0), (0, 0), (1, 0)]

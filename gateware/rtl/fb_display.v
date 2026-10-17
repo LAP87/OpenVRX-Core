@@ -256,18 +256,35 @@ module fb_display #(
     // picture, all other inputs free): a line requested during an active output line goes to a
     // line buffer slot that the display does not read for the rest of that line; the first
     // request of a frame (slot 0, which the display then reads) is made on a blanking line.
+    // With VINTERP = 1 (formal/linebuf_vi_props.v, which also assumes the request path's scale
+    // contract pub_lines/ll_lines <= V_ACTIVE/2) the same holds for the second read port: the
+    // requested slot is not the slot of src_b_cur either, except on output line 0, where w_cur
+    // is 0 and vblend does not look at the port; in low-latency mode the port is unused (w is
+    // forced to 0 from line 0, and a mode switch blanks the rest of the frame).
     // That the SDRAM side has written the slot before the next line start is a matter of
     // SDRAM latency and is not part of the proof (gateware/formal/README.md).
     reg        f_t_q, f_rst_q, f_pend;
     reg [1:0]  f_slot;
+    reg        f_req_ll;                                         // the mode the pending request was made in
+    reg        f_ll_d1;                                          // ll one clock back (the request's clock)
     reg [11:0] f_y;                                             // the line in which the request was made
     wire       f_req = fetch_toggle != f_t_q && !f_rst_q;       // a request was made in the last clock
     always @(posedge clk) begin
-        f_t_q <= fetch_toggle; f_rst_q <= rst; f_y <= y;
+        f_t_q <= fetch_toggle; f_rst_q <= rst; f_y <= y; f_ll_d1 <= ll;
         if (line_start || rst) f_pend <= 1'b0;
-        else if (f_req && !fetch_first) begin f_pend <= 1'b1; f_slot <= fetch_slot; end
+        else if (f_req && !fetch_first) begin f_pend <= 1'b1; f_slot <= fetch_slot; f_req_ll <= f_ll_d1; end
     end
     wire [9:0] f_ahead = src_next - src_cur;
+    // f_ll_bad: ll changed since this frame's first request (checked at the request clock, not
+    // the property clock, so a flip between the two does not mask a violation). A mode switch
+    // blanks the rest of the frame (have_video), so the request geometry of the two modes may
+    // be mixed only in a frame that shows nothing.
+    reg        f_ll_bad, f_ll_q;
+    always @(posedge clk) begin
+        if (line_start && y == V_TOTAL - 1) f_ll_bad <= 1'b0;
+        else if (ll != f_ll_q) f_ll_bad <= 1'b1;
+        f_ll_q <= ll;
+    end
     always @* begin
         if (f_req && !fetch_first) assert (f_y < V_ACTIVE - 1 && fetch_slot != src_cur[1:0]);
         if (f_req && fetch_first) assert (f_y >= V_ACTIVE);
@@ -277,9 +294,62 @@ module fb_display #(
         // with it from the start of an active line until its request
         assert (f_ahead <= 1);
         if (y < V_ACTIVE && (x == 1 || x == 2)) assert (f_ahead == 0);
-        if (f_pend || (f_req && !fetch_first)) assert (f_ahead == 1 && fetch_slot == src_next[1:0]);
+        // VINTERP = 1 requests the second line (src_hi + 1) instead, which fires also on output
+        // lines the source does not advance on; the vi properties in the generate block below
+        // carry that case. Both hold only while the mode has not changed since the frame's first
+        // request (a switch blanks the rest of the frame).
+        if (VINTERP == 0 || f_ll_d1) begin
+            if (!f_ll_bad && f_req && !fetch_first)
+                assert (f_ahead == 1 && fetch_slot == src_next[1:0]);
+        end
+        if (VINTERP == 0 || f_req_ll) begin
+            if (!f_ll_bad && f_pend)
+                assert (f_ahead == 1 && f_slot == src_next[1:0]);
+        end
 `endif
     end
+    generate if (VINTERP != 0) begin : f_vi
+        // The same property over the second read port (formal/linebuf_vi_props.v, which assumes the
+        // request path's scale contract pub_lines/ll_lines <= V_ACTIVE/2): a request made during
+        // an active output line goes to a slot neither port reads for the rest of that line,
+        // except on output line 0, where w_cur is 0 and vblend does not look at the second port.
+        // f_line remembers the requested line, so the strengthened properties can tie the request
+        // to the second line the next output line starts from (src_b_cur).
+        reg        f_pend_d;
+        reg [9:0]  f_line;
+        always @(posedge clk) begin
+            f_pend_d <= f_pend && !rst;
+            if (f_req && !fetch_first) f_line <= fetch_line;
+        end
+        // have_video: the frame is shown. A mode switch (ll changing mid-frame) blanks the rest
+        // of the frame, so a torn slot then never reaches the output; the property holds while
+        // the pixels do.
+        wire f_show = have_video && !ll;
+        wire f_show_pend = have_video && !f_req_ll && !f_ll_bad;
+        always @* begin
+            if (f_req && !fetch_first && f_show)
+                assert ((fetch_slot != src_b_cur[1:0]) || (w_cur == 4'd0));
+            if (f_pend && f_show_pend)
+                assert ((f_slot != src_b_cur[1:0]) || (w_cur == 4'd0));
+`ifndef FORMAL_NO_STRENGTHEN
+            // the scale contract as an invariant; the source advances at most every other output
+            // line, so one request per output line reaches the second line in time
+            assert (latest_lines <= V_ACTIVE / 2);
+            assert (lines <= V_ACTIVE / 2);
+            assert (src_b_cur >= src_cur && src_b_cur <= src_cur + 10'd1);
+            if (!ll && y == 0 && x >= 2) assert (w_cur == 4'd0);
+            // a request made in output line y is for the second line of output line y + 1, which
+            // is what the second port reads from that line's start on (a low-latency request is
+            // not tied to the second line; the frame it belongs to shows nothing once the modes
+            // mix, and have_video blanks it)
+            if (!f_req_ll && !f_ll_bad && f_pend_d && x == 1 && 1 <= y && y < V_ACTIVE) assert (src_b_cur == f_line);
+            if (!f_req_ll && !f_ll_bad && f_pend) assert (req_hi == f_line);
+            // the requested slot is the requested line's (both request kinds agree on that)
+            if (f_req && !fetch_first) assert (fetch_slot == fetch_line[1:0]);
+            if (f_pend) assert (f_slot == f_line[1:0]);
+`endif
+        end
+    end endgenerate
 `endif
 endmodule
 `default_nettype wire

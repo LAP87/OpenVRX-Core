@@ -895,11 +895,12 @@ def late_sync(name, depth):
 def test_margin_checks_see_every_kind():
     """margin_checks.vh (formal/README.md, items 4 and 5) runs in every test of this file through
     run_sim. Here: the checks are not vacuous. A BUF run with an interlaced source has frame_low
-    reads (F) and line-buffer reads (R), a LOW run ll_low reads (W); all pass with at least one
-    pixel clock to spare (the smallest margins seen in this file are about 22 us for F, 1.3 us
-    for W and 12.6 us for R)."""
+    reads (F) and line-buffer reads (R), a LOW run ll_low reads (W), a VINTERP run also the second
+    read port's slot checks (B); all pass with at least one pixel clock to spare (the smallest
+    margins seen in this file are about 22 us for F, 1.3 us for W and 12.6 us for R and B)."""
     for name, src, params, kinds in (('tb_fb_margin_buf', IL_SRC, dict(RT_EN=0), 'FR'),
-                                     ('tb_fb_margin_ll', LL_SRC, dict(LL=1, **LL_V), 'W')):
+                                     ('tb_fb_margin_ll', LL_SRC, dict(LL=1, **LL_V), 'W'),
+                                     ('tb_fb_margin_vinterp', IL_SRC, dict(RT_EN=0, VINTERP=1), 'FRB')):
         run_sim(name, src, **params)
         bad, rows = margin_faults(HERE / 'build' / name)
         assert not bad

@@ -12,10 +12,12 @@
 // receivers. With 1024 lines per window that is
 // about 100-160 ms per channel, 5-8 s for 48.
 //
-// The lowest score wins; on a tie the earlier channel. When no channel had a locked decoder
-// the scan ends on the channel it started from (found = 0). `abort` (any button) ends the
-// scan at once on the starting channel. `done` pulses once with the channel to keep in `idx`,
-// and `tune` pulses with it in the same clock.
+// The lowest score wins; on a tie the channel the scan started from, else the earlier one:
+// where several transmitters give an equally clean picture the pilot is on the starting
+// channel, and a clean score (noise 0) does not say which signal is stronger. When no channel
+// had a locked decoder the scan ends on the channel it started from (found = 0). `abort` (any
+// button) ends the scan at once on the starting channel. `done` pulses once with the channel
+// to keep in `idx`, and `tune` pulses with it in the same clock.
 `default_nettype none
 module chan_scan #(
     parameter CLK_HZ = 27_000_000,
@@ -75,11 +77,17 @@ module chan_scan #(
                 if (new_a && wa != 2'd2) begin wa <= wa + 1'b1; sa <= noise_a; end
                 if (new_b && wb != 2'd2) begin wb <= wb + 1'b1; sb <= noise_b; end
                 if (both_decided) begin
-                    if ((ok_a || ok_b) && {1'b0, sc} < best) begin best <= {1'b0, sc}; best_idx <= idx; have <= 1'b1; end
+                    // a tie keeps the starting channel, otherwise the earlier channel wins
+                    if ((ok_a || ok_b) && ({1'b0, sc} < best || ({1'b0, sc} == best && idx == start_idx))) begin
+                        best <= {1'b0, sc}; best_idx <= idx; have <= 1'b1;
+                    end
                     if (idx == N_CH - 1) begin
                         busy <= 1'b0; tune <= 1'b1; done <= 1'b1;
-                        found <= have || ((ok_a || ok_b) && {1'b0, sc} < best);
-                        idx <= ((ok_a || ok_b) && {1'b0, sc} < best) ? idx : have ? best_idx : start_idx;
+                        found <= have || ((ok_a || ok_b) &&
+                            ({1'b0, sc} < best || ({1'b0, sc} == best && idx == start_idx)));
+                        idx <= ((ok_a || ok_b) &&
+                            ({1'b0, sc} < best || ({1'b0, sc} == best && idx == start_idx))) ? idx
+                            : have ? best_idx : start_idx;
                     end else begin
                         idx <= idx + 1'b1; tune <= 1'b1; st <= S_SETTLE; t <= 0;
                     end

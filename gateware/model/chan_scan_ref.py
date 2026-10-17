@@ -4,9 +4,11 @@ obs[i] = (ok_a, noise_a, ok_b, noise_b) for channel i = band * 8 + channel: whet
 A / B counted on that channel (its second noise window after the settling came, and its
 decoder was locked when the channel was decided) and that window's noise value. observe()
 works the observations out from a scan's events.
-A channel's score is the lower noise of the counting receivers; the lowest score wins, the
-earlier channel on a tie. No counting receiver on any channel: the scan keeps the starting
-channel (found False). An abort keeps the starting channel.
+A channel's score is the lower noise of the counting receivers; the lowest score wins. On a
+tie the starting channel keeps its place (the pilot was on it; a clean score does not say
+which signal is stronger), otherwise the earlier channel. No counting receiver on any
+channel: the scan keeps the starting channel (found False). An abort keeps the starting
+channel.
 """
 
 
@@ -21,7 +23,9 @@ def scan(obs, start_idx):
     best = None
     for i, o in enumerate(obs):
         s = score(o)
-        if s is not None and (best is None or s < best[0]):
+        if s is None:
+            continue
+        if best is None or s < best[0] or (s == best[0] and i == start_idx):
             best = (s, i)
     return (best[1], True) if best else (start_idx, False)
 

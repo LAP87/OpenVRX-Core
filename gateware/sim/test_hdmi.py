@@ -165,11 +165,17 @@ def check_island(isl, want_vic, full=True):
     return f
 
 
+def lim(c):
+    """The limited-range copy of a component (tmds_link.v): (c * 219 + 128) / 255 + 16, rounded."""
+    return ((c * 219 + 128) * 257 >> 16) + 16
+
+
 def check_hdmi(rows, full=True):
     """All faults of an HDMI stream against its inputs."""
     video, islands, faults = decode_hdmi(rows)
+    scale = (lambda p: p) if full else (lambda p: sum(lim(p >> s & 255) << s for s in (0, 8, 16)))
     want_video = [(i + DELAY, r[4]) for i, r in enumerate(rows) if r[0]]
-    want_video = [(i, p) for i, p in want_video if i < len(rows)]
+    want_video = [(i, scale(p)) for i, p in want_video if i < len(rows)]
     if [p for _, p in video] != [p for _, p in want_video][:len(video)] or len(video) < len(want_video) - 1:
         faults.append(f'video: {len(video)} pixels decoded, {len(want_video)} sent, first difference at '
                       f'{next((k for k, (a, b) in enumerate(zip(video, want_video)) if a[1] != b[1]), None)}')
@@ -199,9 +205,13 @@ def test_hdmi_stream_decodes():
 
 
 def test_hdmi_limited_range_flag():
+    """RGB_FULL = 0: every pixel is scaled to 16..235, so the stream says what the InfoFrame's
+    limited-range flag says (a sink that ignores the flag reads it right; 720p's default is
+    limited)."""
     rows = run('tb_hdmi_limited', RGB_FULL=0)
-    faults, _, _ = check_hdmi(rows, full=False)
+    faults, video, _ = check_hdmi(rows, full=False)
     assert not faults, faults[:5]
+    assert all(16 <= p >> s & 255 <= 235 for _, p in video for s in (0, 8, 16))
 
 
 def test_dvi_is_unchanged():

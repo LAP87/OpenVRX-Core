@@ -8,8 +8,10 @@
 // and the video guard band (2 clocks). After each vsync rising edge one data island is sent in the
 // vertical blanking: preamble (8 clocks, CTL0 = CTL2 = 1), guard band (2), one packet (32 clocks of
 // TERC4) and guard band (2). The packet is an AVI InfoFrame (type 82h, version 2, length 13): RGB,
-// 16:9, active format as the picture, quantization range full (RGB_FULL = 1, what ycbcr2rgb.v puts
-// out) or limited, VIC 4 (720p60) or VIC 19 (720p50 while hz50 is high), no pixel repetition.
+// 16:9, active format as the picture, VIC 4 (720p60) or VIC 19 (720p50 while hz50 is high), no
+// pixel repetition, and the quantization range the pixels carry: full with RGB_FULL = 1 (what
+// ycbcr2rgb.v puts out), limited with RGB_FULL = 0, which then scales 0..255 to 16..235 (a sink
+// that ignores the flag reads limited RGB right; 720p's default is limited either way).
 // Header and subpackets carry BCH parity (G(x) = 1 + x^6 + x^7 + x^8, bits in transmission order).
 // Tables and packet layout from HDMI 1.4: TERC4 (table 5-18), guard bands (5.2.2.1, 5.2.3.3),
 // packet bit layout (figure 5-5), AVI InfoFrame (CEA-861). Compared with a decoder written from the
@@ -83,7 +85,20 @@ module tmds_link #(
             if (rst) begin de_sr <= 10'd0; hs_sr <= 10'd0; vs_sr <= 10'd0; end
         end
         wire       de_d = de_sr[9], hs_d = hs_sr[9], vs_d = vs_sr[9];
-        wire [7:0] r_d = rgb_sr[9][23:16], g_d = rgb_sr[9][15:8], b_d = rgb_sr[9][7:0];
+        wire [23:0] rgb_d = rgb_sr[9];
+        // limited range: (c * 219 + 128) / 255 + 16, rounded; 257 = 2^16 / 255 rounded up, so the
+        // shift does the division: the exact inverse of the standard (v - 16) * 255 / 219
+        function [7:0] lim(input [7:0] c);
+            reg [23:0] t;
+            begin
+                if (RGB_FULL != 0) lim = c;
+                else begin
+                    t = ({16'd0, c} * 24'd219 + 24'd128) * 24'd257;
+                    lim = t[23:16] + 8'd16;
+                end
+            end
+        endfunction
+        wire [7:0] r_d = lim(rgb_d[23:16]), g_d = lim(rgb_d[15:8]), b_d = lim(rgb_d[7:0]);
 
         // ---- video lead-in: the undelayed DE rises 10 clocks before the delayed one
         reg       de_q;

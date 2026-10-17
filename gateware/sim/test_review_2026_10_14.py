@@ -1,14 +1,15 @@
-"""Open findings of the second adversarial review (hub docs/reviews/2026-10-14/ADVERSARIAL_REVIEW_2.md),
-as strict xfail tests: each states what should hold and fails today. A fix makes its test pass,
-which a strict xfail reports as a failure, so the marker has to be removed with the fix.
+"""Findings of the second adversarial review (hub docs/reviews/2026-10-14/ADVERSARIAL_REVIEW_2.md),
+kept as tests that state what should hold. All three are fixed on this branch, so the strict xfail
+markers are removed and the tests pass:
 
-  RS-2  Core #21  the RSSI warning has no margin between the two receivers
-  SC-1  Core #22  SCAN: on a tie of clean channels the earlier table entry wins
-  HD-1  Core #23  HDMI: RGB_FULL = 0 changes the InfoFrame's flag, not the pixels
+  RS-2  Core #21  the RSSI warning needs a margin between the receivers (MARGIN_PCT, model/rssi_ref.py)
+  SC-1  Core #22  SCAN keeps the starting channel on a tie (model/chan_scan_ref.py)
+  HD-1  Core #23  RGB_FULL = 0 scales the pixels to 16..235, as its InfoFrame says (rtl/tmds_link.v)
 
 Fixed in the review: RS-1 (sim/test_mixer.py::test_weak_receiver_takes_over_from_a_broken_one) and
-FL-1 (sim/test_flash_store.py::test_interrupted_erase_loads_only_written_records). VI-1 (Core #24)
-is a gap in the formal proof, with nothing that fails.
+FL-1 (sim/test_flash_store.py::test_interrupted_erase_loads_only_written_records). VI-1 (Core #24),
+the formal gap for VINTERP = 1, is closed by formal/linebuf_vi_props.v and the B record of
+sim/margin_checks.vh, with no test here: nothing failed.
 """
 import sys
 from pathlib import Path
@@ -23,7 +24,6 @@ import chan_scan_ref  # noqa: E402
 import rssi_ref  # noqa: E402
 
 
-@pytest.mark.xfail(strict=True, reason='Core #21 (RS-2): no margin between the receivers')
 def test_rssi_warning_needs_a_margin():
     """Both receivers calibrated over the same range; A reads 19 %, B 21 %. Two points near the
     floor say nothing about which picture is better: A must not warn (today it warns from the
@@ -34,7 +34,6 @@ def test_rssi_warning_needs_a_margin():
     assert all(w == (0, 0) for w in warns), warns
 
 
-@pytest.mark.xfail(strict=True, reason='Core #22 (SC-1): a tie of clean channels goes to the earlier one')
 def test_scan_keeps_the_starting_channel_on_a_tie():
     """Started from F4 (index 27): F4 and A1 (index 0) both lock with noise 0. The scan should keep
     F4, the channel the pilot was on; today it keeps A1."""
@@ -43,7 +42,6 @@ def test_scan_keeps_the_starting_channel_on_a_tie():
     assert chan_scan_ref.scan(obs, 27) == (27, True)
 
 
-@pytest.mark.xfail(strict=True, reason='Core #23 (HD-1): RGB_FULL = 0 changes only the flag')
 def test_hdmi_limited_flag_means_limited_pixels():
     """tmds_link.v with RGB_FULL = 0 says "limited range" in every AVI InfoFrame; the pixels it then
     sends must lie in 16..235. sim/tb_hdmi.v feeds a full-range pattern."""

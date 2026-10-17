@@ -49,7 +49,8 @@ MUTANTS = {
                       "if (new_a && wa != 2'd2) begin wa <= wa + 1'b1; if (wa == 2'd0) sa <= noise_a; end"),
                      ("if (new_b && wb != 2'd2) begin wb <= wb + 1'b1; sb <= noise_b; end",
                       "if (new_b && wb != 2'd2) begin wb <= wb + 1'b1; if (wb == 2'd0) sb <= noise_b; end")],
-    'keeps_highest': [("if ((ok_a || ok_b) && {1'b0, sc} < best) begin", "if ((ok_a || ok_b) && (best[20] || {1'b0, sc} > best)) begin")],
+    'keeps_highest': [("if ((ok_a || ok_b) && ({1'b0, sc} < best || ({1'b0, sc} == best && idx == start_idx))) begin",
+                       "if ((ok_a || ok_b) && (best[20] || {1'b0, sc} > best)) begin")],
     'ignores_lock': [("wire        ok_a = (wa == 2'd2) && locked[0];", "wire        ok_a = (wa == 2'd2);"),
                      ("wire        ok_b = (wb == 2'd2) && locked[1];", "wire        ok_b = (wb == 2'd2);")],
 }

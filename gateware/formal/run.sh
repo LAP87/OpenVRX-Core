@@ -93,6 +93,15 @@ FLOW="chformal -lower;" prove cdc_toggle_tx toggle_tx_props 40 "" "$cdc" "$here/
 lb_flow="chformal -lower; chformal -assert -assert2assume a:src=*genlock_timing.v*;"
 lb_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/../rtl/vblend.v" "$here/linebuf_props.v")
 FLOW="$lb_flow" prove fb_linebuf_slots linebuf_props 20 "" "${lb_src[@]}" "$here/../rtl/fb_display.v" || status=1
+# VINTERP = 1 (Core #24): the same property over both read ports, under the request path's scale
+# contract (assumed in linebuf_vi_props.v, with pub_lines held between flips of pub_toggle and ll
+# held over a frame region). Negative control: the second line's prefetch asks for the slot the
+# first port reads for the rest of the current line (the VI request into src_cur's slot).
+vi_src=("$here/../rtl/genlock_timing.v" "$cdc" "$here/ycbcr2rgb_stub.v" "$here/../rtl/vblend.v" "$here/linebuf_vi_props.v")
+FLOW="$lb_flow" prove fb_linebuf_vi_slots linebuf_vi_props 90 "" "${vi_src[@]}" "$here/../rtl/fb_display.v" || status=1
+sed "s/fetch_slot   <= src_hi\[1:0\] + 2'd1;/fetch_slot   <= src_cur[1:0];/" "$here/../rtl/fb_display.v" > fb_display_vi_cur_slot.v
+grep -q "fetch_slot   <= src_cur\[1:0\];" fb_display_vi_cur_slot.v
+DEFS=-DFORMAL_NO_STRENGTHEN FLOW="$lb_flow" must_fail fb_linebuf_vi_cur_slot linebuf_vi_props 40 "" "${vi_src[@]}" "$work/fb_display_vi_cur_slot.v" || status=1
 # negative controls, without the induction strengthening so that the counterexample comes from the
 # property itself: the toggle edge taken straight from the other domain (no synchroniser stage) delivers
 # torn data; flips every 8 sender clocks lose events; data that changes 2 sender clocks after its flip
