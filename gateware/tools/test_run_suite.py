@@ -197,6 +197,14 @@ def test_real_cli_selection_resume_budget_and_source_guard(tmp_path):
     ran = cli(repo, quick, '--quick')
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert json.loads((quick / 'run.json').read_text())['nodes'] == ['gateware/model/test_sample.py::test_a']
+    # without --out a quick run writes to its own directory and leaves the full run's alone
+    own = subprocess.run([sys.executable, str(tools / 'run_suite.py'), '--jobs', '1', '--timeout', '60',
+                          '--quick', 'gateware/model/test_sample.py'],
+                         cwd=repo, capture_output=True, text=True, timeout=60)
+    assert own.returncode == 0, own.stdout + own.stderr
+    assert json.loads((repo / 'gateware/sim/build/quick/run.json').read_text())['nodes'] == \
+        ['gateware/model/test_sample.py::test_a']
+    assert not (repo / 'gateware/sim/build/suite').exists()
     quick_list.write_text('gateware/model/test_sample.py::test_gone\n')
     stale = cli(repo, tmp_path / 'stale', '--quick')
     assert stale.returncode == 2 and 'not collected' in stale.stdout

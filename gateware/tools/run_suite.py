@@ -15,7 +15,8 @@ process has its own --basetemp, and suite_trace.py records which build
 directories and cocotb results files each test used; at the end build_dirs.py
 fails the run when two tests used the same one.
 
-Output in OUT (default gateware/sim/build/suite): logs/ (one log per process),
+Output in OUT (default gateware/sim/build/suite; gateware/sim/build/quick with --quick, so that
+a quick run leaves the last full run's results and durations alone): logs/ (one log per process),
 results.jsonl (one record per finished process), status.json (progress),
 report.txt, durations.json (used to start the longest tests first next time).
 
@@ -249,7 +250,8 @@ def main(argv=None):
     ap.add_argument('paths', nargs='*', default=PATHS)
     ap.add_argument('-j', '--jobs', type=int, default=10)
     ap.add_argument('-k', dest='keyword')
-    ap.add_argument('--out', type=Path, default=GW / 'sim' / 'build' / 'suite')
+    ap.add_argument('--out', type=Path,
+                    help='default gateware/sim/build/suite, with --quick gateware/sim/build/quick')
     ap.add_argument('--resume', action='store_true')
     ap.add_argument('--budget', type=float, default=0, help='seconds; 0: no limit')
     ap.add_argument('--guess', type=float, default=120, help='expected seconds for a unit never timed')
@@ -261,7 +263,7 @@ def main(argv=None):
                      help='write quick_tests.txt from OUT/durations.json for a wall time of S seconds, run nothing')
     ap.add_argument('--quick-list', type=Path, default=QUICK_LIST, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
-    out = a.out.resolve()
+    out = (a.out or GW / 'sim' / 'build' / ('quick' if a.quick else 'suite')).resolve()
     t0 = time.monotonic()
 
     nodes = collect(a.paths, a.keyword)
