@@ -10,10 +10,11 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-18, main `0f8548c`):** 776 tests collected; 775 pass and 1 is an expected failure (Core #23,
-strict xfail), run one process per simulation test on the integration of the two fixes merged here.
-M4 and M6 built from that integration with all clocks over 75 MHz after routing (M4 5810 LUT4, 29 BSRAM;
-M6 13297 LUT4, 29 BSRAM). Nothing has run on hardware.
+**Status (2026-10-18, main after task 35, tested on `52c2ffe`):** 797 tests collected, all pass, run one
+process per simulation test; the three strict xfail tests of the second review (Core #21-#23) are plain
+tests now. M0, M4 and M6 built from `52c2ffe` with and without `HDMI=1`, all clocks over 75 MHz after
+routing, the HDMI pairs packed as in M0 (M6 13190 LUT4, with `HDMI=1` 13544; 29 BSRAM). Nothing has
+run on hardware.
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
 requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4
@@ -23,12 +24,12 @@ M2s, M2a, M3, M1 and M1s builds have no root acceptance.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `2c64672` | 0 | reference for the HDMI pairs; with `HDMI=1` from `4ad5a68` |
+| M0 | `52c2ffe` | 0 | reference for the HDMI pairs; 789 LUT4, with `HDMI=1` 950 |
 | M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `2c64672` | 0 | 5 831 LUT4, lowest clock 129.17 MHz; with `HDMI=1 VINTERP=1` 6 427 LUT4, 116.33 MHz; each option alone from `bf05ac0` (Codex) |
-| M6 | `2c64672` | 2 | with RSSI, SCAN and the flash store (`--mspi_as_gpio`): 13 113 LUT4, lowest clock 112.07 MHz; with `HDMI=1 VINTERP=1` 13 719 LUT4, 99.00 MHz; each option alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
+| M4 | `52c2ffe` | 0 | 5 810 LUT4, lowest clock 115.06 MHz; with `HDMI=1` 5 993 LUT4, 123.00 MHz; with `HDMI=1 VINTERP=1` from `2c64672` (6 427 LUT4, 116.33 MHz); each option alone from `bf05ac0` (Codex) |
+| M6 | `52c2ffe` | 2 | with RSSI, SCAN, the flash store (`--mspi_as_gpio`) and the HDMI range field: 13 190 LUT4, lowest clock 103.80 MHz; with `HDMI=1` 13 544 LUT4, 103.80 MHz; with `HDMI=1 VINTERP=1` from `2c64672` (13 719 LUT4, 99.00 MHz); each option alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
 
 M6 with both `HDMI=1` and `VINTERP=1` did not place until 2026-10-14: LUT positions ran out
 (ALUs, LUT RAM and flip-flops without a LUT of their own share them). The mixer's two input

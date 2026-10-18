@@ -4,20 +4,21 @@
 
 Plan: `docs/GATEWARE_PLAN.md` i navet (OpenVRX). Licens: CERN-OHL-S-2.0, se `LICENSE` i repots rot.
 
-## Status 2026-10-17
+## Status 2026-10-18
 
-### Nuläge, `main` efter uppgift 24
+### Nuläge, `main` efter uppgift 35
 
-Hela sviten: **774 test på `76ceedf`, 771 gröna och 3 xfail** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 1 063 s i en omgång, varav de formella bevisen 1 061 s), ingen delad byggkatalog. De tre xfail är strikta test för öppna fynd ur andra granskningen (Core #21, #22, #23). Snabbsviten före varje commit: 702 av testen på 235 s ("Snabbsviten före varje commit" under Verktyg). Granskningens rättningar RS-1 och FL-1 kom in med `8a71a0a`; den syntetiserade RTL:en är oförändrad sedan dess (2026-10-17 tillkom formella egenskaper i `fb_display.v`, inom `ifdef FORMAL`). Före det: 772 test med 769 gröna på `d3d9753`, och 761 gröna på `88f5b90` efter uppgift 21. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
+Hela sviten: **797 test på `52c2ffe`, alla gröna** med `tools/run_suite.py` (en process per simuleringstest, tio åt gången, 995 s i en omgång, varav de formella bevisen 986 s), ingen delad byggkatalog. Andra granskningens tre strikta xfail-test (Core #21, #22, #23) är vanliga test sedan uppgift 33, 34 och 35; uppgift 35 gav HDMI-läget omfånget `FULL`/`LTD` i M6-menyn ("Omfånget i HDMI-läget" under M0). Snabbsviten före varje commit: 702 av testen på 230–270 s ("Snabbsviten före varje commit" under Verktyg); de 21 test som kom till med uppgift 35 är med först när listan väljs om. Före det: 776 test med 775 gröna och 1 xfail på `0f8548c` (uppgift 33–34), och 774 test med 771 gröna och 3 xfail på `76ceedf`. Granskningens rättningar RS-1 och FL-1 kom in med `8a71a0a`. Före det: 772 test med 769 gröna på `d3d9753`, och 761 gröna på `88f5b90` efter uppgift 21. 2026-10-14 ändrades mixerns två ingångs-FIFO:er till block-RAM (`async_fifo.v` `RD_REG`), så att M6 med `HDMI=1` och `VINTERP=1` går att placera ("M6 med HDMI och VINTERP" under "Bygget av M6"); M4 och M6 är ombyggda. Före det: 757 gröna på `2b67dea`, och samma 757 på `bf05ac0` i Codex körning, rootaccepterad 2026-10-13 (navets `docs/overnight/2026-10-08/STATUS.md`). Inget är kört på hårdvara.
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
+| M0, M4, M6, var och en med och utan `HDMI=1` | `52c2ffe` (Opus, 2026-10-18, uppgift 35); M6 med `--mspi_as_gpio` | 0, 0, 2 | utan / med `HDMI=1`: 789 / 950, 5 810 / 5 993, 13 190 / 13 544 LUT4; M4 och M6 29 BSRAM; lägsta maxfrekvens 161,16 / 211,10, 115,06 / 123,00, 103,80 / 103,80 MHz; tabellen under "Omfånget i HDMI-läget". Inte rootaccepterade |
 | M4, M6 (standardval) | granskningsgrenen, sammanslagen i `8a71a0a` (Fable, 2026-10-17; samma RTL som `main` nu); M6 med `--mspi_as_gpio` | 0, 2 | 5 810 / 13 259 LUT4, 29 BSRAM var; lägsta maxfrekvens 115,06 / 91,70 MHz. Inte rootaccepterade |
 | M0, M4, M6 (standardval), M4 och M6 med `HDMI=1 VINTERP=1` | `2c64672` (Opus, samma byggindata som `88f5b90`); M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 5 831 / 13 113 LUT4; M4 och M6 med båda valen 6 427 / 13 719; lägsta maxfrekvens 152,35 / 129,17 / 112,07 MHz, med båda valen 116,33 / 99,00 MHz. Inte rootaccepterade |
 | M0, M4, M6 (standardval) före FIFO-ändringen | `bf05ac0`, byggda av Codex och rootaccepterade 2026-10-13 | 0, 0, 2 | 789 / 8 245 / 15 505 LUT4; lägsta maxfrekvens 154,58 / 98,95 / 104,58 MHz; M6:s 27 MHz-domän 132,28 MHz |
 | M6 | `0958a52` (Opus; samma byggindata som `bf05ac0`, samma LUT4 och 27 MHz-siffra) | 2 | "Sparade inställningar" under M6; utan dem ur `9023ab1` under "RSSI" |
 | M4 | `f78fe82` (före `ext_weak`) | 0 | "Den varierande raden" under `LOW` |
-| M0; M4, M6 med `HDMI=1` | `4ad5a68` (M4 före `ext_weak`, M6 utan RSSI, SCAN och flash) | 0 (M6: 2) | "DVI eller HDMI" under M0 |
+| M0; M4, M6 med `HDMI=1` | `4ad5a68` (M4 före `ext_weak`, M6 utan RSSI, SCAN och flash) | 0 (M6: 2) | "DVI eller HDMI" under M0 (äldre tabellen) |
 | M4, M6 med `VINTERP=1` | `fc267a8` (samma) | 0 (M6: 2) | "Interpolation i höjdled" under bildvägen |
 | M2, M2s | `0da655d` | 0 | "Störningskampanjen C3 avslutad" nedan |
 | M2a | `dc307bc` | 0 | "I/O-register i I/O-cellerna" nedan |
@@ -184,7 +185,18 @@ Koppla kortets HDMI till en TV/skärm. Förväntat: färgstaplar i en vit 4:3-ra
 
 **Omfånget i HDMI-läget: `FULL` eller `LTD`** (sedan 2026-10-18, Core #23, granskning 2 HD-1). `FULL` är standard och samma som förut: pixlarna sänds som de kommer ur `ycbcr2rgb.v`, 0–255, och infoframen säger fullt omfång (Q1:Q0 = 10b). `LTD` skalar varje färgkomponent till 16–235 och säger begränsat omfång (01b): ut = 16 + avrundat x·219/255, i `tmds_link.v` räknat som v = x·219 + 128, q = (v + (v >> 8)) >> 8, ut = 16 + q (0 → 16, 128 → 126, 255 → 235; en multiplikator per komponent). För 720p är begränsat omfång standard för RGB, och enligt CTA-861 får källan säga något annat bara till en skärm som anger QS i sin EDID; en skärm utan QS kan alltså strunta i flaggan och ta `FULL` för begränsat, med krossad svärta som följd. Med `LTD` stämmer bilden för en sådan skärm, men en skärm som tar allt för fullt omfång visar då gråsvart. Kortet kan inte läsa skärmens EDID (DDC ligger på stift 52/53, konfigurationsstift som inte används), så vilket läge som ger rätt svärta avgörs på bänken med gråskala och EDID per skärm (navets `docs/MATPROTOKOLL.md`, blad 16). Valet görs i M6-menyn (fältet `HDMI`, se M6) och sparas i flashen; M0, M4 och de andra topparna har ingen meny och sänder `FULL`. `tmds_link.v` tar valet via två vippor och byter vid nästa vsync, så en bild och infoframen före den har alltid samma omfång; före första vsync gäller parametern `RGB_FULL`. DVI-läget ändras inte av valet. Simulerat i `sim/test_hdmi.py`: en ramp med alla 256 värden per komponent i båda lägena, med kända värden och omfånget i varje infoframe, ett byte mitt i en bild som slår igenom först i nästa, och DVI med valet växlande; negativa kontroller: 220 i stället för 219, förskjutning 17, utan avrundningsterm, flaggan utan skalning (som före rättningen), skalning utan flagga och ett val som inte hålls till vsync. `sim/test_review_2026_10_14.py::test_hdmi_limited_flag_means_limited_pixels` är ett vanligt test.
 
-Byggt ur `4ad5a68` (siffror efter routning, krav 75 MHz, HDMI-paren i alla sex som i M0 med DVI):
+Byggt ur `52c2ffe` (2026-10-18; siffror efter routning, krav 75 MHz, inga `ERROR`, manifesten verifierade, alla fyra HDMI-par i alla sex med samma IOB-fuses som i M0 med DVI enligt `tools/tmds_fuses.py`). M0 och M4 knyter `rgb_full` till 1; M0 med `HDMI=1` har 950 LUT4 mot 948 ur `4ad5a68`, så skalningen följer inte med där. I M6 med `HDMI=1` väljs den i menyn:
+
+| Topp | Läge | LUT4 | BSRAM | Lägsta maxfrekvens (MHz) |
+|---|---|---:|---:|---|
+| `m0_testpattern` seed 0 | DVI | 789 | 0 | 161,16 (pixel) |
+| `m0_testpattern` seed 0 | HDMI | 950 | 0 | 211,10 (pixel) |
+| `m4_dual_mix` seed 0 | DVI | 5 810 | 29 | 115,06 (pixel) |
+| `m4_dual_mix` seed 0 | HDMI | 5 993 | 29 | 123,00 (`sd_clk`; pixel 142,45) |
+| `m6_puck_proto` seed 2 | DVI | 13 190 | 29 | 103,80 (27 MHz-domänen; pixel 133,67) |
+| `m6_puck_proto` seed 2 | HDMI | 13 544 | 29 | 103,80 (`sd_clk`; pixel 115,38) |
+
+Äldre bygge, ur `4ad5a68` (siffror efter routning, krav 75 MHz, HDMI-paren i alla sex som i M0 med DVI):
 
 | Topp | Läge | LUT4 | DFF | Pixelklocka (MHz) |
 |---|---|---:|---:|---:|
