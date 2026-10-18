@@ -27,10 +27,19 @@ def crc8(data):
     return c
 
 
-def payload(band, ch, mode, low_lat, filter_vcr, min_a, max_a, min_b, max_b):
-    """The 80-bit payload as 10 bytes."""
-    return bytes([band << 5 | ch << 2 | mode, low_lat << 7 | filter_vcr << 6]) + b''.join(
+def payload(band, ch, mode, low_lat, filter_vcr, min_a, max_a, min_b, max_b, hdmi_ltd=0):
+    """The 80-bit payload as 10 bytes: {band, ch, mode}, {low_lat, filter_vcr, hdmi_ltd, five 0 bits},
+    then the RSSI calibration (min A, max A, min B, max B, MSB first). hdmi_ltd (HDMI limited range,
+    2026-10-18) took a bit that every earlier record has at 0, so those read as full range."""
+    return bytes([band << 5 | ch << 2 | mode, low_lat << 7 | filter_vcr << 6 | hdmi_ltd << 5]) + b''.join(
         v.to_bytes(2, 'big') for v in (min_a, max_a, min_b, max_b))
+
+
+def settings(pay):
+    """What a payload sets: the inverse of payload(), as the M6 top hands it to the menu and rssi_adc."""
+    return dict(band=pay[0] >> 5, ch=pay[0] >> 2 & 7, mode=pay[0] & 3, low_lat=pay[1] >> 7,
+                filter_vcr=pay[1] >> 6 & 1, hdmi_ltd=pay[1] >> 5 & 1,
+                rssi=tuple(int.from_bytes(pay[k:k + 2], 'big') for k in (2, 4, 6, 8)))
 
 
 def zeros(data):
