@@ -51,22 +51,27 @@ What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README
   simulation, with negative controls.
 - Vertical interpolation (two source lines per output line in BUF) is the build option
   `VINTERP=1`, off by default: about 500 LUT4 and 4 BSRAM more in M4 and M6.
-- The output stays DVI by default. `HDMI=1` sends HDMI with an AVI InfoFrame (RGB, full
-  range, VIC 4 or 19), simulated against a decoder; no real sink has seen it.
+- The output stays DVI by default. `HDMI=1` sends HDMI with an AVI InfoFrame (RGB, VIC 4 or
+  19), simulated against a decoder; no real sink has seen it. Since 2026-10-18 the range is a
+  choice in the M6 menu: `FULL` (default, as before) or `LTD`, which scales the pixels to 16-235
+  and says so in the InfoFrame (Core #23). The board cannot read the screen's EDID, so which one
+  shows black right is decided on the bench (hub `docs/MATPROTOKOLL.md`, sheet 16).
 - In LOW the varying line of each output frame can be placed before vsync instead of after
   it (`WAIT_BEFORE_VSYNC` in `genlock_timing.v`, default 0), so that vsync-to-picture is the
   same in every frame. Proven formally and simulated, but at 720p it shows each line 0.56 ms
   later, more than the 16-line LOW ring holds at the bottom of the picture; see gateware/README.md.
 
-M6 has a TV/VCR filter field (`FILT`) for both decoders; the UART row shows the
-requested mode as `T` or `V`. Which mode holds lock and picture better is not measured.
+M6 has a TV/VCR filter field for both decoders and an HDMI range field (`FULL`/`LTD`); the
+UART row shows the requested filter as `T` or `V` and the range as `F` or `L`. Which filter
+mode holds lock and picture better is not measured.
 M6 also reads both receivers' RSSI from the Puck rev A board's ADS1115 once per field
-(`rssi_adc.v`), with a calibration page in the menu and RSSI in the UART row (85 bytes, was 62).
+(`rssi_adc.v`), with a calibration page in the menu and RSSI in the UART row (87 bytes since the
+HDMI range, 85 before it, 62 before RSSI).
 A receiver whose calibrated RSSI stays low while the other's does not loses the mixer's
 pairs before its picture breaks up; its lines are never left out for it. Simulated against
 a model of the ADC; thresholds are set on the bench. A menu SCAN steps all 48 channels and
 keeps the one where a decoder locks with the least noise (no RSSI needed), and band,
-channel, modes, filter and RSSI calibration are saved in the board's SPI flash and loaded
+channel, modes, filter, HDMI range and RSSI calibration are saved in the board's SPI flash and loaded
 at start (a record only after a change has stood still for 3 s; simulated against a flash
 model, not tried on the board).
 Earlier acceptance receipts (C1, C2, C3) are kept in [gateware/README.md](gateware/README.md).
