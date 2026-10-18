@@ -12,11 +12,12 @@ Per round (one reading of each channel):
 - pct = 0 at or below min, 100 at or above max, else floor((raw - min) * 100 / (max - min));
   published pct is 0 for an uncalibrated channel;
 - a channel is low after N_LOW rounds in a row in which it was calibrated, valid and
-  pct < LOW_PCT; it warns while low if the other channel is calibrated, valid and not low.
+  pct < LOW_PCT; it warns while low if the other channel is calibrated, valid, not low and
+  reads at least MARGIN_PCT points higher (Core #21: no margin let two points decide).
 """
 
 FSR_UV = 4_096_000
-LOW_PCT, N_LOW, MIN_SPAN = 20, 3, 400
+LOW_PCT, N_LOW, MIN_SPAN, MARGIN_PCT = 20, 3, 400, 10
 
 
 def code(uv, fsr_uv=FSR_UV):
@@ -26,8 +27,8 @@ def code(uv, fsr_uv=FSR_UV):
 
 
 class Rssi:
-    def __init__(self, low_pct=LOW_PCT, n_low=N_LOW, min_span=MIN_SPAN):
-        self.low_pct, self.n_low, self.min_span = low_pct, n_low, min_span
+    def __init__(self, low_pct=LOW_PCT, n_low=N_LOW, min_span=MIN_SPAN, margin_pct=MARGIN_PCT):
+        self.low_pct, self.n_low, self.min_span, self.margin_pct = low_pct, n_low, min_span, margin_pct
         self.raw = [0, 0]
         self.valid = [False, False]
         self.mn = [0xFFFF, 0xFFFF]
@@ -69,7 +70,8 @@ class Rssi:
         is_low = [self.cal_ok[c] and self.valid[c] and p[c] < self.low_pct for c in (0, 1)]
         self.n = [min(self.n[c] + 1, self.n_low) if is_low[c] else 0 for c in (0, 1)]
         low = [self.n[c] == self.n_low for c in (0, 1)]
-        warn = [low[c] and not low[1 - c] and self.cal_ok[1 - c] and self.valid[1 - c] for c in (0, 1)]
+        warn = [low[c] and not low[1 - c] and self.cal_ok[1 - c] and self.valid[1 - c]
+                and p[1 - c] >= p[c] + self.margin_pct for c in (0, 1)]
         pct = [p[c] if self.cal_ok[c] else 0 for c in (0, 1)]
         return dict(raw=tuple(self.raw), valid=tuple(map(int, self.valid)), mn=tuple(self.mn), mx=tuple(self.mx),
                     cal_ok=tuple(map(int, self.cal_ok)), pct=tuple(pct), low=tuple(map(int, low)),
