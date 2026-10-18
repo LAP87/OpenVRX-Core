@@ -218,7 +218,8 @@ def test_hdmi_bit_is_saved_and_old_records_read_full():
     """The HDMI range (2026-10-18) is bit 5 of payload byte 1, one of the six bits that were 0. A record
     of the layout before it (literal bytes) reads as full range and loads unchanged; a change to LTD is
     saved where the model puts it (the whole image byte for byte) and loads after a restart. This module
-    stores the payload whole; where the bit goes in it is the M6 top's wiring."""
+    stores the payload whole; where the bit goes in it is the M6 top's wiring, checked with negative
+    controls in sim/test_m6_settings.py."""
     assert P2 == OLD_P2 and ref.settings(OLD_P2)['hdmi_ltd'] == 0, 'old records read as full range'
     assert P_LTD[1] == 0x20 and ref.settings(P_LTD) == dict(ref.settings(P1), hdmi_ltd=1)
     loads, end, out, ready = run('tb_flash_store_old_record', image([(0, 41, OLD_P2, True)]), [], end_ms=300)
