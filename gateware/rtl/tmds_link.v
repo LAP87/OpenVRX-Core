@@ -8,12 +8,24 @@
 // and the video guard band (2 clocks). After each vsync rising edge one data island is sent in the
 // vertical blanking: preamble (8 clocks, CTL0 = CTL2 = 1), guard band (2), one packet (32 clocks of
 // TERC4) and guard band (2). The packet is an AVI InfoFrame (type 82h, version 2, length 13): RGB,
-// 16:9, active format as the picture, quantization range full (RGB_FULL = 1, what ycbcr2rgb.v puts
-// out) or limited, VIC 4 (720p60) or VIC 19 (720p50 while hz50 is high), no pixel repetition.
+// 16:9, active format as the picture, quantization range full or limited (below), VIC 4 (720p60)
+// or VIC 19 (720p50 while hz50 is high), no pixel repetition.
 // Header and subpackets carry BCH parity (G(x) = 1 + x^6 + x^7 + x^8, bits in transmission order).
 // Tables and packet layout from HDMI 1.4: TERC4 (table 5-18), guard bands (5.2.2.1, 5.2.3.3),
 // packet bit layout (figure 5-5), AVI InfoFrame (CEA-861). Compared with a decoder written from the
 // same sections in sim/test_hdmi.py; not seen by a real sink.
+//
+// Range (HDMI = 1 only): rgb_full = 1 sends the pixels as they come (full range, what ycbcr2rgb.v
+// puts out) and Q1:Q0 = 10b in the InfoFrame; rgb_full = 0 scales every component to 16..235 and
+// sends Q1:Q0 = 01b (limited):
+//   v = x * 219 + 128,  q = (v + (v >> 8)) >> 8,  out = 16 + q
+// which is 16 + round(x * 219 / 255) for every x in 0..255 (0 -> 16, 128 -> 126, 255 -> 235; there
+// is no tie), one constant multiplier per component, two pipeline stages inside the 10-clock delay.
+// rgb_full may come from another clock domain (the menu): two flip-flops, then it is taken at each
+// delayed vsync rising edge together with hz50, so that a frame's pixels and the InfoFrame sent in
+// the blanking before it agree. Until the first vsync the range is RGB_FULL. In DVI mode rgb_full
+// and RGB_FULL change nothing. Review 2026-10-14, HD-1 (Core #23): before this, RGB_FULL = 0 changed
+// only the flag.
 // Unsigned arithmetic only (Apicula).
 `default_nettype none
 `ifndef HDMI
@@ -21,7 +33,7 @@
 `endif
 module tmds_link #(
     parameter HDMI = `HDMI,
-    parameter RGB_FULL = 1
+    parameter RGB_FULL = 1           // HDMI: the range until the first vsync takes rgb_full
 ) (
     input  wire       clk,
     input  wire       rst,
@@ -32,6 +44,7 @@ module tmds_link #(
     input  wire [7:0] g,
     input  wire [7:0] b,
     input  wire       hz50,          // the timing is 720p50 (VIC 19); else 720p60 (VIC 4)
+    input  wire       rgb_full,      // HDMI: 1 full range, 0 limited (16..235); any clock domain
     output wire [9:0] sym0,          // blue, with hsync/vsync
     output wire [9:0] sym1,          // green
     output wire [9:0] sym2           // red
@@ -70,16 +83,29 @@ module tmds_link #(
             end
         endfunction
 
-        // ---- delay line: the outputs follow the inputs by 10 clocks (plus the encoders' one)
+        // limited range, second stage: 16 + ((v + (v >> 8)) >> 8), at most 16 + 219 (see the header)
+        function [7:0] lim(input [15:0] v);
+            reg [16:0] s;
+            begin s = {1'b0, v} + {9'd0, v[15:8]}; lim = 8'd16 + s[15:8]; end
+        endfunction
+
+        // ---- delay line: the outputs follow the inputs by 10 clocks (plus the encoders' one); the
+        // last two stages scale to limited range when the frame's range (full_l) says so
         reg [9:0] de_sr, hs_sr, vs_sr;
         reg [23:0] rgb_sr [0:9];
+        reg [15:0] lv_r, lv_g, lv_b;                           // v = x * 219 + 128 of the pixel in rgb_sr[8]
+        reg        full_l;                                     // range of the frame (below)
         integer k;
         always @(posedge clk) begin
             de_sr <= {de_sr[8:0], de};
             hs_sr <= {hs_sr[8:0], hsync};
             vs_sr <= {vs_sr[8:0], vsync};
             rgb_sr[0] <= {r, g, b};
-            for (k = 1; k < 10; k = k + 1) rgb_sr[k] <= rgb_sr[k - 1];
+            for (k = 1; k < 9; k = k + 1) rgb_sr[k] <= rgb_sr[k - 1];
+            lv_r <= {8'd0, rgb_sr[7][23:16]} * 16'd219 + 16'd128;
+            lv_g <= {8'd0, rgb_sr[7][15:8]}  * 16'd219 + 16'd128;
+            lv_b <= {8'd0, rgb_sr[7][7:0]}   * 16'd219 + 16'd128;
+            rgb_sr[9] <= full_l ? rgb_sr[8] : {lim(lv_r), lim(lv_g), lim(lv_b)};
             if (rst) begin de_sr <= 10'd0; hs_sr <= 10'd0; vs_sr <= 10'd0; end
         end
         wire       de_d = de_sr[9], hs_d = hs_sr[9], vs_d = vs_sr[9];
@@ -99,15 +125,18 @@ module tmds_link #(
         end
 
         // ---- data island after each delayed vsync rising edge: 1..8 preamble, 9..10 guard band,
-        // 11..42 packet, 43..44 guard band
+        // 11..42 packet, 43..44 guard band. The range of the next frame is taken at the same edge
+        // (rgb_full through two flip-flops; RGB_FULL until the first vsync).
         reg       vs_q, hz50_l;
+        reg [1:0] full_s;
         reg [5:0] icnt;
         wire      vs_rise = vs_d && !vs_q;
         always @(posedge clk) begin
             vs_q <= vs_d;
-            if (vs_rise) begin icnt <= 6'd1; hz50_l <= hz50; end
+            full_s <= {full_s[0], rgb_full};
+            if (vs_rise) begin icnt <= 6'd1; hz50_l <= hz50; full_l <= full_s[1]; end
             else if (icnt != 6'd0) icnt <= (icnt == 6'd44) ? 6'd0 : icnt + 6'd1;
-            if (rst) begin vs_q <= 1'b0; icnt <= 6'd0; hz50_l <= 1'b0; end
+            if (rst) begin vs_q <= 1'b0; icnt <= 6'd0; hz50_l <= 1'b0; full_l <= (RGB_FULL != 0); end
         end
         wire       i_pre  = icnt >= 6'd1 && icnt <= 6'd8;
         wire       i_gb   = icnt == 6'd9 || icnt == 6'd10 || icnt == 6'd43 || icnt == 6'd44;
@@ -117,7 +146,7 @@ module tmds_link #(
         // ---- the AVI InfoFrame
         wire [7:0] pb1 = 8'h10;                                // RGB, active format present, no bars or scan info
         wire [7:0] pb2 = 8'h28;                                // no colorimetry, 16:9, active format as the picture
-        wire [7:0] pb3 = (RGB_FULL != 0) ? 8'h08 : 8'h04;      // quantization range full / limited
+        wire [7:0] pb3 = full_l ? 8'h08 : 8'h04;               // quantization range full / limited
         wire [7:0] pb4 = hz50_l ? 8'd19 : 8'd4;                // VIC
         wire [7:0] pb5 = 8'h00;                                // no pixel repetition
         wire [7:0] pb0 = 8'h00 - (8'h82 + 8'h02 + 8'h0D + pb1 + pb2 + pb3 + pb4 + pb5);   // checksum

@@ -77,6 +77,36 @@ def test_parse_rssi():
     assert set(snowlog.FIELDS) >= set(r), 'every parsed key has a CSV column'
 
 
+def test_parse_hdmi():
+    """Lines with the HDMI range after the filter (puck_ui.v, 87 bytes): F full, L limited. The 85-byte line
+    of the bitstreams before it reads as before, without the column; an 87-byte line that lost its F/L byte,
+    a wrong token or the two tokens swapped do not read."""
+    base = 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T'
+    tail = ' - -- 12000 04567 075 003 -W'
+    assert len(base + ' F' + tail) + 2 == 87 and len(base + tail) + 2 == 85
+    full, ltd, old = (snowlog.parse(base + mid + tail) for mid in (' F', ' L', ''))
+    assert (full['hdmi'], ltd['hdmi']) == ('F', 'L') and 'hdmi' not in old
+    assert {k: v for k, v in full.items() if k != 'hdmi'} == old, 'the other columns are the same'
+    assert snowlog.parse(base.replace(' T', ' V') + ' L' + tail)['filter'] == 'V'
+    for damaged in (' X', ' FL', ' f', ' -', '  '):
+        assert snowlog.parse(base + damaged + tail) is None, damaged
+    assert snowlog.parse(base[:-2] + ' F T' + tail) is None, 'HDMI before the filter'
+    assert set(snowlog.FIELDS) >= set(full)
+
+
+def test_log_writes_the_hdmi_column(tmp_path, monkeypatch):
+    """A new line fills the hdmi column, an 85-byte line from an older bitstream leaves it empty."""
+    fake_port(monkeypatch, [b'S 000100 000200 000003 000000 050 040 010 F4 5800 MIX T L - -- 12000 04567 075 003 -W\r\n'
+                            b'S 000100 000200 000003 000000 050 040 010 F4 5800 MIX T - -- 12000 04567 075 003 -W\r\n'
+                            b'S 000100 000200 000003 000000 050 040 010 F4 5800 MIX V F ! L? ----- ----- --- --- ??\r\n'])
+    out = tmp_path / 'hdmi.csv'
+    snowlog.log(argparse.Namespace(port='COM5', label='t', seconds=0.3, out=str(out)))
+    with open(out, newline='') as fh:
+        rows = list(csv.DictReader(fh))
+    assert [(r['filter'], r['hdmi'], r['dropped'], r['rssi_a']) for r in rows] == [
+        ('T', 'L', '0', '12000'), ('T', '', '0', '12000'), ('V', 'F', '1', '')]
+
+
 def fake_port(monkeypatch, data):
     monkeypatch.setattr(snowlog, 'open_serial', lambda path: 99)
     monkeypatch.setattr(snowlog.os, 'read', lambda fd, n: data.pop(0) if data else b'')

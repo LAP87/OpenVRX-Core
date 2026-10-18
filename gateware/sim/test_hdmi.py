@@ -5,10 +5,14 @@ TERC4, guard bands, else video), periods are recognised from their preambles, vi
 TMDS-decoded (test_video.TmdsRef / tmds_decode), packet bits are gathered from the TERC4 nibbles,
 and the BCH parity is checked as a reflected CRC-8 with G(x) = x^8 + x^7 + x^6 + 1 computed by
 polynomial division on bit-reversed data (the RTL uses a shift register). Checked per frame: the
-video is the input, delayed; each active line has the 8-clock video preamble and 2-clock guard
+video is the input, delayed (and in limited range scaled to 16 + round(x * 219 / 255), computed
+here as an exact fraction); each active line has the 8-clock video preamble and 2-clock guard
 band; exactly one data island follows each vsync, with header 82h 02h 0Dh, valid parity, a zero
-checksum, RGB, 16:9, full range and the VIC of the timing (4, or 19 while hz50 was high).
+checksum, RGB, 16:9, the frame's quantization range (full Q = 2, limited Q = 1) and the VIC of the
+timing (4, or 19 while hz50 was high). A frame's range is RGB_FULL before the first vsync, then
+rgb_full as it was when vsync rose (the testbench changes it only far from vsync).
 """
+from fractions import Fraction
 import os
 import shutil
 import subprocess
@@ -53,9 +57,22 @@ def run(name, alter=None, **params):
     subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True)
     rows = []
     for ln in (work / 'sym.txt').read_text().splitlines():
-        de, hs, vs, hz, pat, s0, s1, s2 = ln.split()
-        rows.append((int(de), int(hs), int(vs), int(hz), int(pat, 16), int(s0), int(s1), int(s2)))
+        de, hs, vs, hz, pat, s0, s1, s2, full = ln.split()
+        rows.append((int(de), int(hs), int(vs), int(hz), int(pat, 16), int(s0), int(s1), int(s2), int(full)))
     return rows
+
+
+def limited(p):
+    """A full-range RGB pixel (R << 16 | G << 8 | B) in limited range: each component 16 + round(x * 219 / 255),
+    as an exact fraction (x * 219 / 255 is never half-way between two integers)."""
+    return sum((16 + int(Fraction((p >> s & 255) * 219, 255) + Fraction(1, 2))) << s for s in (0, 8, 16))
+
+
+def frame_ranges(rows):
+    """Full range (True) or not, per frame: frame 0 (before the first vsync) is sent in RGB_FULL, which the
+    testbench also starts rgb_full at; frame k + 1 in rgb_full as it was when vsync k rose."""
+    rises = [i for i in range(1, len(rows)) if rows[i][2] and not rows[i - 1][2]]
+    return [bool(rows[0][8])] + [bool(rows[i][8]) for i in rises], rises
 
 
 def crc8_reflected(bits):
@@ -165,21 +182,25 @@ def check_island(isl, want_vic, full=True):
     return f
 
 
-def check_hdmi(rows, full=True):
+def check_hdmi(rows):
     """All faults of an HDMI stream against its inputs."""
     video, islands, faults = decode_hdmi(rows)
-    want_video = [(i + DELAY, r[4]) for i, r in enumerate(rows) if r[0]]
+    ranges, vs_rises = frame_ranges(rows)
+    frame = [0] * len(rows)                               # frame of each input clock: vsync rises before it
+    for v in vs_rises:
+        for i in range(v, len(rows)):
+            frame[i] += 1
+    want_video = [(i + DELAY, r[4] if ranges[frame[i]] else limited(r[4])) for i, r in enumerate(rows) if r[0]]
     want_video = [(i, p) for i, p in want_video if i < len(rows)]
     if [p for _, p in video] != [p for _, p in want_video][:len(video)] or len(video) < len(want_video) - 1:
         faults.append(f'video: {len(video)} pixels decoded, {len(want_video)} sent, first difference at '
                       f'{next((k for k, (a, b) in enumerate(zip(video, want_video)) if a[1] != b[1]), None)}')
     if [i for i, _ in video] != [i for i, _ in want_video][:len(video)]:
         faults.append('video not delayed by 11 clocks')
-    vs_rises = [i for i in range(1, len(rows)) if rows[i][2] and not rows[i - 1][2]]
     if len(islands) != len([v for v in vs_rises if v + DELAY + 45 < len(rows)]):
         faults.append(f'{len(islands)} data islands for {len(vs_rises)} vsync pulses')
-    for isl, v in zip(islands, vs_rises):
-        faults += check_island(isl, 19 if rows[v][3] else 4, full)
+    for k, (isl, v) in enumerate(zip(islands, vs_rises)):
+        faults += check_island(isl, 19 if rows[v][3] else 4, ranges[k + 1])
     # control symbols outside the periods: channel 0 carries the delayed sync
     for i in range(DELAY, len(rows)):
         c = CTRL_INV.get(rows[i][5])
@@ -199,15 +220,86 @@ def test_hdmi_stream_decodes():
 
 
 def test_hdmi_limited_range_flag():
+    """RGB_FULL = 0 and rgb_full = 0: every InfoFrame says limited (Q = 1) and every pixel is scaled."""
     rows = run('tb_hdmi_limited', RGB_FULL=0)
-    faults, _, _ = check_hdmi(rows, full=False)
+    faults, video, islands = check_hdmi(rows)
     assert not faults, faults[:5]
+    assert len(islands) >= 3 and len(video) >= 3 * 400
+
+
+# Known values: input -> output in limited range (16 + x * 219 / 255, rounded); full range sends x.
+KNOWN = {0: 16, 1: 17, 2: 18, 16: 30, 127: 125, 128: 126, 235: 218, 254: 234, 255: 235}
+
+
+@pytest.mark.parametrize('full', [1, 0])
+def test_hdmi_range_scaling(full):
+    """Every component value 0..255 in (a ramp): in full range the decoded pixels are the inputs, in
+    limited range each component is the value of the table above (and of limited()), all in 16..235."""
+    rows = run(f'tb_hdmi_ramp_{full}', RGB_FULL=full, RAMP=1)
+    faults, video, islands = check_hdmi(rows)
+    assert not faults, faults[:5]
+    sent = {i + DELAY: r[4] for i, r in enumerate(rows) if r[0]}
+    pairs = [(sent[k] >> s & 255, p >> s & 255) for k, p in video for s in (0, 8, 16)]
+    assert {x for x, _ in pairs} == set(range(256)), 'every component value was sent'
+    for x, y in pairs:
+        want = x if full else KNOWN.get(x, limited(x) & 255)
+        assert y == want, (x, y, want)
+    outs = {y for _, y in pairs}
+    if full:
+        assert outs == set(range(256))
+    else:
+        assert outs == {KNOWN.get(x, limited(x) & 255) for x in range(256)} and min(outs) == 16 and max(outs) == 235
+        assert {x: limited(x) & 255 for x in KNOWN} == KNOWN, 'the table and limited() agree'
+    assert [bits_to_bytes(isl['sub'][0][:56])[3] for isl in islands] == [0x08 if full else 0x04] * len(islands)
+
+
+def test_hdmi_range_follows_rgb_full_per_frame():
+    """rgb_full toggles in the middle of each frame's picture: the frame keeps the range it started with
+    to its end, and the next frame and its InfoFrame take the new one."""
+    rows = run('tb_hdmi_switch', RGB_FULL=1, RAMP=1, SWITCH=1, FRAMES=5)
+    faults, video, islands = check_hdmi(rows)
+    assert not faults, faults[:5]
+    ranges, rises = frame_ranges(rows)
+    assert ranges[:5] == [True, False, True, False, True], ranges
+    assert {r[8] for r in rows[:rises[0]] if r[0]} == {0, 1}, 'rgb_full changed during frame 0'
+    assert len(islands) >= 4 and len(video) >= 4 * 400
+
+
+@pytest.mark.parametrize('fault, alter, params, expect', [
+    ('scale_220', [("rgb_sr[7][23:16]} * 16'd219", "rgb_sr[7][23:16]} * 16'd220")], {}, 'video:'),
+    ('offset_17', [("lim = 8'd16 + s[15:8];", "lim = 8'd17 + s[15:8];")], {}, 'video:'),
+    ('no_rounding', [("rgb_sr[7][23:16]} * 16'd219 + 16'd128", "rgb_sr[7][23:16]} * 16'd219")], {}, 'video:'),
+    ('flag_without_scaling', [("rgb_sr[9] <= full_l ? rgb_sr[8] : {lim(lv_r), lim(lv_g), lim(lv_b)};",
+                               "rgb_sr[9] <= rgb_sr[8];")], {}, 'video:'),
+    ('scaling_without_flag', [("wire [7:0] pb3 = full_l ? 8'h08 : 8'h04;", "wire [7:0] pb3 = 8'h08;")], {},
+     'quantization range 2'),
+    ('range_not_held', [("if (vs_rise) begin icnt <= 6'd1; hz50_l <= hz50; full_l <= full_s[1]; end",
+                         "full_l <= full_s[1];\n            if (vs_rise) begin icnt <= 6'd1; hz50_l <= hz50; end")],
+     {'RGB_FULL': 1, 'SWITCH': 1}, 'video:'),
+])
+def test_hdmi_range_check_is_tested(fault, alter, params, expect):
+    """Negative controls for the range, each in a copy of tmds_link.v and in limited range unless said:
+    a wrong constant (220 for 219, red only), a wrong offset (17), no rounding term (red only), the flag
+    without the scaling (the RTL before HD-1), the scaling without the flag, and a range that follows
+    rgb_full at once instead of at vsync (with rgb_full toggling mid-frame). The decoder must find each."""
+    p = dict(RGB_FULL=0, RAMP=1)
+    p.update(params)
+    faults, _, _ = check_hdmi(run(f'tb_hdmi_range_{fault}', alter=alter, **p))
+    assert any(expect in f for f in faults), faults[:5]
 
 
 def test_dvi_is_unchanged():
     """HDMI = 0: plain DVI, the symbols of tmds_encoder.v for the inputs one clock earlier; no
     guard band, no TERC4 symbol outside video."""
-    rows = run('tb_hdmi_dvi', HDMI=0)
+    check_dvi(run('tb_hdmi_dvi', HDMI=0))
+
+
+def test_dvi_ignores_the_range():
+    """HDMI = 0 with RGB_FULL = 0 and rgb_full toggling: the same plain DVI symbols, pixels unscaled."""
+    check_dvi(run('tb_hdmi_dvi_range', HDMI=0, RGB_FULL=0, RAMP=1, SWITCH=1))
+
+
+def check_dvi(rows):
     ref = [TmdsRef(), TmdsRef(), TmdsRef()]
     for i in range(1, len(rows)):
         de, hs, vs, _, pat, *_ = rows[i - 1]

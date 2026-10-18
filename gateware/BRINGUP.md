@@ -73,7 +73,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
 | M2a | `m2a_memtest` | bara Tang + USB | en ren läspunkt `rs=5` (avsnitt 2.1) |
 | M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
-| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet `FILT` växlar TV/VCR, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott (2.3) |
+| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet växlar `TV`/`VCR` och HDMI-fältet `FULL`/`LTD`, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott (2.3) |
 
 ```bash
 gateware/build.sh m3_probe
@@ -97,11 +97,13 @@ openFPGALoader -b tangnano20k gateware/build/m2a_memtest.fs
 
 Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar `err=00000000` varv efter varv, och `err=00000001` medan S2 hålls intryckt. Visar en annan rad nollorna, eller ingen, står det i README ("M2a — minnestest av SDRAM") hur fasen och läspunkten byts. Bygg sedan M4 med den fas som gav ren rad.
 
-### 2.2 M6: filterfältet och mätloggen
+### 2.2 M6: filterfältet, HDMI-fältet och mätloggen
 
-Menyns sista fält före sidvalet är `FILT`: `TV` eller `VCR` för båda dekodrarna (register 02h, 30h respektive 20h). Efter reset står det på `TV`. Det skrivs till dekodrarna mellan pollrundorna och igen efter en dekoderomstart. Vilket läge som håller låset och bilden bäst är inte avgjort; prova båda med samma kamera och kanal och logga varje läge för sig.
+Filterfältet står på rad 4 som `TV` eller `VCR` (före 2026-10-18 `FILT TV`) och gäller båda dekodrarna (register 02h, 30h respektive 20h). Efter reset står det på `TV`. Det skrivs till dekodrarna mellan pollrundorna och igen efter en dekoderomstart. Vilket läge som håller låset och bilden bäst är inte avgjort; prova båda med samma kamera och kanal och logga varje läge för sig.
 
-Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **85 byte** inklusive CR LF (62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V`, före tappflaggan och de två låstecknen; sist kommer RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`). Utan ADS1115 på kortet står RSSI som `-----` och `??`.
+Efter filtret kommer HDMI-fältet, sist före sidvalet: `HDMI FULL` (standard) eller `HDMI LTD`. Det gör något bara i HDMI-bygget (`HDMI=1 gateware/build.sh m6_puck_proto`, filen `m6_puck_proto_hdmi.fs`): `FULL` sänder 0–255 och säger fullt omfång i AVI-infoframen, `LTD` skalar bilden till 16–235 och säger begränsat. Bytet slår igenom vid nästa bild. Kortet kan inte läsa skärmens EDID, så vilket läge som ger rätt svärta avgörs med gråskala och EDID per skärm (navets `docs/MATPROTOKOLL.md`, blad 16; README under M0, "Omfånget i HDMI-läget"). DVI-bygget, standard, påverkas inte.
+
+Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **87 byte** inklusive CR LF (85 före HDMI-tecknet 2026-10-18, 62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V` och HDMI-omfånget som `F` eller `L`, före tappflaggan och de två låstecknen; sist kommer RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`). Utan ADS1115 på kortet står RSSI som `-----` och `??`.
 
 Filtertecknet är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i tabellen i 2.3 och i README under M6.
 
@@ -111,7 +113,7 @@ python gateware/tools/snowlog.py /dev/ttyUSB1 --label vcr --seconds 30 --out fil
 python gateware/tools/snowlog.py --summary filt.csv
 ```
 
-`snowlog.py` läser också de äldre raderna på 60, 57 och 43 byte från tidigare bitströmmar; deras filterkolumn blir tom.
+`snowlog.py` läser också de äldre raderna på 85, 62, 60, 57 och 43 byte från tidigare bitströmmar; kolumnerna de saknar blir tomma. En CSV-fil skriven före kolumnen `hdmi` (2026-10-18) får inga nya rader; skriv till en ny fil.
 
 ### 2.3 M6: SCAN, CAL och sparade inställningar
 
@@ -121,14 +123,15 @@ Allt här är simulerat (`sim/test_chan_scan.py`, `sim/test_rssi_adc.py`, `sim/t
 
 | Funktion | Var | Gör så här | Vad som händer |
 |---|---|---|---|
-| `FILT` | huvudsidan, femte fältet | OK tills `>` står före `FILT`, NEXT växlar `TV`/`VCR` | avsnitt 2.2 |
-| `SCAN` | huvudsidan, sjunde fältet | OK tills `>` står före `SCAN`, NEXT startar | Rad 2 visar `BUSY` och rad 1 kanalen som provas, 100–160 ms per kanal, 5–8 s för alla 48. Sedan står den kanal där en dekoder låste med lägst brus. Låste ingen står startkanalen kvar och rad 2 visar `NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen |
-| `CAL` | RSSI-sidan (sidfältet: huvud → mätare → RSSI), sjunde fältet | OK tills `>` står före `CAL`, NEXT slår på; flytta sändaren nära och långt bort, eller stäng av den; NEXT stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan avslutar kalibreringen |
+| Filtret | huvudsidan, femte fältet | OK tills `>` står före `TV` eller `VCR`, NEXT växlar | avsnitt 2.2 |
+| `HDMI` | huvudsidan, sjätte fältet | OK tills `>` står före `HDMI`, NEXT växlar `FULL`/`LTD` | avsnitt 2.2; gör något bara i HDMI-bygget |
+| `SCAN` | huvudsidan, åttonde fältet | OK tills `>` står före `SCAN`, NEXT startar | Rad 2 visar `BUSY` och rad 1 kanalen som provas, 100–160 ms per kanal, 5–8 s för alla 48. Sedan står den kanal där en dekoder låste med lägst brus. Låste ingen står startkanalen kvar och rad 2 visar `NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen |
+| `CAL` | RSSI-sidan (sidfältet: huvud → mätare → RSSI), åttonde fältet | OK tills `>` står före `CAL`, NEXT slår på; flytta sändaren nära och långt bort, eller stäng av den; NEXT stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan avslutar kalibreringen |
 
-**Loggraden, 85 byte** (115200 8N1, ungefär 15 rader per sekund):
+**Loggraden, 87 byte** (115200 8N1, ungefär 15 rader per sekund):
 
 ```
-S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003 -W
+S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W
 ```
 
 | Fält | I exemplet | Betydelse |
@@ -139,6 +142,7 @@ S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003
 | kanal, frekvens | `F4 5800` | inställd kanal |
 | mixläge | `MIX` | `MIX`, `A` eller `B` |
 | filter | `T` | `T` (TV) eller `V` (VCR), menyvalet |
+| HDMI | `F` | `F` (`FULL`) eller `L` (`LTD`), menyvalet; står också i DVI-bygget |
 | tappflagga | `-` | `!` om mixern sedan start har tappat en rad för att radplatserna var fulla |
 | lås A, B | `--` | `L` hel pollrunda med "lost lock" (88h bit 4), `-` hela rundor utan, `?` ingen hel runda |
 | RSSI A, B | `12000 04567` | ADS1115-kod, `-----` utan avläsning |
@@ -147,11 +151,11 @@ S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T - -- 12000 04567 075 003
 
 Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En rad skickas efter varje fönster om 1 024 mixerbeslut, så utan video från någon dekoder kommer ingen logg.
 
-**Att se att en inställning sparats och lästs.** Loggen har ingen särskild startrad, men redan den första raden efter start visar det som lästs: flashen läses inom cirka 10 ms efter konfigurationen, före första loggraden och före första kanalskrivningen (0,5 s). Utan sparad post startar M6 på `F4 5800`, `MIX`, `BUF`, `TV`, RSSI okalibrerad.
+**Att se att en inställning sparats och lästs.** Loggen har ingen särskild startrad, men redan den första raden efter start visar det som lästs: flashen läses inom cirka 10 ms efter konfigurationen, före första loggraden och före första kanalskrivningen (0,5 s). Utan sparad post startar M6 på `F4 5800`, `MIX`, `BUF`, `TV`, `HDMI FULL`, RSSI okalibrerad.
 
 1. Programmera M6 i flash (`openFPGALoader -b tangnano20k -f gateware/build/m6_puck_proto.fs`). `build.sh` packar M6 med `--mspi_as_gpio`, och manifestet ska säga `mspi` 1; utan det når M6 inte flashen.
-2. Byt kanal, till exempel till `A1 5865`, och filtret till `VCR`. Rör sedan ingen knapp på minst 3 s: en post skrivs när inställningarna har legat stilla i 3 s, inte vid varje knapptryck.
-3. Bryt strömmen (dra ur USB) och slå på. OSD:n visas 5 s efter start; den, OLED:n och första loggraden ska visa `A1 5865` och `V`.
+2. Byt kanal, till exempel till `A1 5865`, filtret till `VCR` och HDMI till `LTD`. Rör sedan ingen knapp på minst 3 s: en post skrivs när inställningarna har legat stilla i 3 s, inte vid varje knapptryck.
+3. Bryt strömmen (dra ur USB) och slå på. OSD:n visas 5 s efter start; den, OLED:n och första loggraden ska visa `A1 5865`, `VCR` och `HDMI LTD` (i loggen `V` och `L`).
 4. Samma för RSSI-kalibreringen: efter `CAL` av och 3 s, starta om; RSSI-sidan ska visa `OK` och värden, och loggens kalibrerade fält ska vara tal.
 5. Posterna kan läsas direkt ur flashen (8380416 = 7FE000h):
 
@@ -160,7 +164,7 @@ openFPGALoader -b tangnano20k --dump-flash -o 8380416 --file-size 8192 settings.
 xxd settings.bin | head
 ```
 
-Varje post är 16 byte: `A5`, löpnummer (två byte), tio byte inställningar, antalet nollbitar i de 13 byten före (Z), `FF`, CRC-8. Antalet poster är antalet sparanden sedan sektorn raderades. Bitströmmar före 2026-10-14 skrev `FF FF` i stället för Z och `FF`; deras poster godtas inte längre, så M6 startar på standardvärdena första gången efter uppdateringen.
+Varje post är 16 byte: `A5`, löpnummer (två byte), tio byte inställningar, antalet nollbitar i de 13 byten före (Z), `FF`, CRC-8. Antalet poster är antalet sparanden sedan sektorn raderades. Bitströmmar före 2026-10-14 skrev `FF FF` i stället för Z och `FF`; deras poster godtas inte längre, så M6 startar på standardvärdena första gången efter uppdateringen. HDMI-omfånget är bit 5 i den andra inställningsbyten, som förut alltid var 0, så poster från bitströmmar före 2026-10-18 laddas som `HDMI FULL`.
 
 Det som inte syns: `flash_store.v` sätter en felflagga när en skrivning inte läses tillbaka lika, men M6 visar den ingenstans. Ett skrivfel märks bara som att inställningen saknas efter omstart, eller i läsningen ovan.
 

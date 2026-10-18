@@ -16,8 +16,13 @@ module tb_puck_ui;
     wire [2:0] band, ch;
     wire [1:0] mode;
     wire [2:0] field;
-    wire filter_vcr, filter_changed;
+    wire filter_vcr, filter_changed, hdmi_ltd;
     wire       low_lat;
+    // a flash load (flash_store.v set_load) at the end: the current settings and the HDMI range LTD
+    reg        set_load = 0;
+    reg  [2:0] set_band = 0, set_ch = 0;
+    reg  [1:0] set_mode = 0;
+    reg        set_low_lat = 0, set_filter = 0, set_hdmi = 0;
     wire [1:0] page;
     wire       rssi_cal, scan_busy;
     reg  tg = 0;                                  // snow meter windows every 100 ms
@@ -56,7 +61,8 @@ module tb_puck_ui;
         .dec_present(2'b11), .dec_locked(dec_locked), .dec_round(dec_round), .dec_lost(dec_lost),
         .rssi_a(16'd12000), .rssi_b(16'd4567), .rssi_valid(2'b11), .rssi_cal_ok(2'b11), .rssi_low(2'b10),
         .rssi_warn(2'b10), .rssi_pct_a(7'd75), .rssi_pct_b(7'd3), .rssi_cal(rssi_cal),
-        .set_load(1'b0), .set_band(3'd0), .set_ch(3'd0), .set_mode(2'd0), .set_low_lat(1'b0), .set_filter(1'b0),
+        .set_load(set_load), .set_band(set_band), .set_ch(set_ch), .set_mode(set_mode), .set_low_lat(set_low_lat),
+        .set_filter(set_filter), .set_hdmi(set_hdmi),
         .scan_busy(scan_busy),
         .force_bad(force_bad),
         .snow_a(20'd12345), .snow_b(20'd2345), .use_a(11'd410), .use_b(11'd358), .use_mix(11'd256),
@@ -67,7 +73,7 @@ module tb_puck_ui;
         .osd_row(osd_row), .osd_col(osd_col), .osd_char(osd_char), .osd_show(osd_show),
         .mix_overflow(mix_overflow), .uart_txd(txd),
         .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
-        .filter_vcr(filter_vcr), .filter_changed(filter_changed));
+        .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd));
 
     wire scl_low, sda_low, s_low, hold, frame_done, nack_error;
     reg  other_active = 0;
@@ -149,7 +155,7 @@ module tb_puck_ui;
         $display("MARK default");
         sample_osd_row(0);
         $display("FIELD %0d", field);
-        repeat (7) begin press(0); $display("FIELD %0d", field); end   // ... page, SCAN, band
+        repeat (8) begin press(0); $display("FIELD %0d", field); end   // ... HDMI, page, SCAN, band
         press(1); press(1);                       // band F -> R -> L  (L4 5473, outside SE band)
         wait_frames(2);
         $display("MARK band_L force=%b", force_bad);
@@ -158,7 +164,22 @@ module tb_puck_ui;
         wait_frames(2);
         $display("MARK filter_oob");
         sample_osd_row(1);
-        press(0); press(0); press(0);             // filter -> page -> SCAN -> band
+        press(0);                                 // field 5: HDMI
+        wait_frames(2);
+        $display("MARK hdmi_selected field=%0d ltd=%0d", field, hdmi_ltd);
+        sample_osd_row(2);
+        press(1);                                 // FULL -> LTD
+        wait_frames(2);
+        $display("MARK hdmi_ltd ltd=%0d filter_vcr=%0d", hdmi_ltd, filter_vcr);
+        sample_osd_row(3);
+        if ($test$plusargs("hdmi_only")) begin    // the negative controls stop here, after two log lines
+            #250_000_000;
+            wait (!ui.log_active);
+            #400_000;
+            $display("RESULT hdmi_only");
+            $finish;
+        end
+        press(0); press(0); press(0);             // HDMI -> page -> SCAN -> band
         press(1);                                 // band -> A (A4 5805)
         press(0);                                 // field -> channel
         press(1); press(1);                       // A5, A6 (5765)
@@ -176,15 +197,20 @@ module tb_puck_ui;
         press(0);                                 // field -> filter
         wait_frames(2);
         $display("MARK filter_select_vcr");
-        sample_osd_row(2);
+        sample_osd_row(4);
         press(1);                                 // VCR -> TV
         wait_frames(2);
         $display("MARK filter_select_tv");
-        sample_osd_row(3);
+        sample_osd_row(5);
+        press(0);                                 // field -> HDMI
+        press(1);                                 // LTD -> FULL
+        wait_frames(2);
+        $display("MARK hdmi_full ltd=%0d", hdmi_ltd);
+        sample_osd_row(6);
         press(0);                                 // field -> page
         wait_frames(2);
         $display("MARK page_selected");
-        sample_osd_row(4);
+        sample_osd_row(7);
         press(1);                                 // page -> meter
         wait_frames(2);
         $display("MARK meter page=%0d", page);
@@ -209,7 +235,7 @@ module tb_puck_ui;
         press(1);                                 // on again, then leave the page: it ends
         press(0);                                 // CAL -> band (the field wraps after CAL)
         $display("MARK wrapped field=%0d cal=%0d", field, rssi_cal);
-        repeat (5) press(0);                      // -> page
+        repeat (6) press(0);                      // -> page
         press(1);                                 // RSSI -> main
         wait_frames(2);
         $display("MARK left page=%0d cal=%0d", page, rssi_cal);
@@ -225,8 +251,19 @@ module tb_puck_ui;
         press(0);                                 // abort: back to A6
         wait_frames(2);
         $display("MARK scan_aborted busy=%0d band=%0d ch=%0d field=%0d", scan_busy, band, ch, field);
-        $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d filter_pulses=%0d filter_width_errors=%0d final_filter_vcr=%0d",
-                 collisions, nack_error, spi_idle_bad, filter_pulses, filter_width_errors, filter_vcr);
+        // a flash load of the current settings with LTD: only the HDMI range changes (and the filter
+        // is requested again); then two meter windows, so that the last log line is after it
+        {set_band, set_ch, set_mode, set_low_lat, set_filter, set_hdmi} = {band, ch, mode, low_lat, filter_vcr, 1'b1};
+        @(posedge clk); #1 set_load = 1;
+        @(posedge clk); #1 set_load = 0;
+        wait_frames(2);
+        $display("MARK loaded ltd=%0d band=%0d ch=%0d mode=%0d low_lat=%0d filter_vcr=%0d", hdmi_ltd, band, ch, mode,
+                 low_lat, filter_vcr);
+        #200_000_000;
+        wait (!ui.log_active);                    // no log line half sent at the end
+        #400_000;
+        $display("RESULT collisions=%0d nack=%0d spi_idle_bad=%0d filter_pulses=%0d filter_width_errors=%0d final_filter_vcr=%0d t_ms=%0d",
+                 collisions, nack_error, spi_idle_bad, filter_pulses, filter_width_errors, filter_vcr, $time / 1_000_000);
         $finish;
     end
     initial begin #8_000_000_000 $display("RESULT timeout"); $finish; end

@@ -9,8 +9,10 @@
 // prefer the other receiver (mixer2 ext_weak). Without the ADC nothing answers at 48h and
 // nothing changes. Three masters share SCL + SDA_A: rssi_adc goes first (it raises its hold
 // only between OLED bytes), the OLED waits for it and tvp_ctrl, tvp_ctrl waits for both holds.
-// Saved settings: flash_store.v keeps band, channel, mode, latency, filter and the RSSI calibration
-// in the last two sectors of the onboard SPI flash (pins 57, 59-62) and loads them at start.
+// Saved settings: flash_store.v keeps band, channel, mode, latency, filter, HDMI range and the RSSI
+// calibration in the last two sectors of the onboard SPI flash (pins 57, 59-62) and loads them at start.
+// HDMI range: the menu's FULL / LTD (puck_ui hdmi_ltd, board clock) goes to tmds_link.v as rgb_full,
+// which takes it into the pixel clock domain at each vsync; only the HDMI build (HDMI=1) uses it.
 //
 // LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
@@ -68,7 +70,7 @@ module m6_puck_proto #(
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid, round_ok, lost_lock;
     wire [15:0] st0, st1;
-    wire filter_vcr, filter_changed;
+    wire filter_vcr, filter_changed, hdmi_ltd;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
@@ -82,13 +84,14 @@ module m6_puck_proto #(
     wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn;
     wire [6:0]  rssi_pct_a, rssi_pct_b;
     wire [15:0] rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b;
-    // ---- saved settings: band, channel, mode, latency, filter, RSSI calibration
+    // ---- saved settings: band, channel, mode, latency, filter, HDMI range, RSSI calibration
+    //      (payload layout in flash_store.v and model/flash_store_ref.py)
     wire [79:0] saved;
     wire        set_load, flash_ready, flash_err, wp_drive, scan_busy;
     flash_store #(.CLK_HZ(CLK_HZ)) store (
                    .clk(clk), .rst(rst_c[2]), .flash_cs_n(flash_cs_n), .flash_clk(flash_clk), .flash_mosi(flash_mosi),
                    .flash_miso(flash_miso), .flash_wp_drive(wp_drive),
-                   .cur({band, ch, mode, low_lat, filter_vcr, 6'd0, rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b}),
+                   .cur({band, ch, mode, low_lat, filter_vcr, hdmi_ltd, 5'd0, rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b}),
                    .loaded(saved), .load(set_load), .ready(flash_ready), .err(flash_err), .seq());
     assign flash_wp_n = wp_drive ? 1'b1 : 1'bz;
     rssi_adc #(.CLK_HZ(CLK_HZ)) rssi (
@@ -134,13 +137,13 @@ module m6_puck_proto #(
                 .rssi_low(rssi_low), .rssi_warn(rssi_warn), .rssi_pct_a(rssi_pct_a), .rssi_pct_b(rssi_pct_b),
                 .rssi_cal(rssi_cal),
                 .set_load(set_load), .set_band(saved[79:77]), .set_ch(saved[76:74]), .set_mode(saved[73:72]),
-                .set_low_lat(saved[71]), .set_filter(saved[70]), .scan_busy(scan_busy),
+                .set_low_lat(saved[71]), .set_filter(saved[70]), .set_hdmi(saved[69]), .scan_busy(scan_busy),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
-                .filter_vcr(filter_vcr), .filter_changed(filter_changed));
+                .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd));
     assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
@@ -199,7 +202,7 @@ module m6_puck_proto #(
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst_sr[3]),
-                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50),
+                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50), .rgb_full(!hdmi_ltd),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B

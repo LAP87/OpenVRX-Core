@@ -11,7 +11,8 @@ sector 1 and goes in its slot 0); a newest record with a bad CRC (the one before
 the slot after it is not erased, so the save moves to the other sector); seq wrapping past
 FFFFh; a restart on the image a run left (its last save loads). An erase of a full sector that
 power loss stopped half-way (150 images, bits set at random): only the newest written record
-loads; a record outside what the menu can set does not load.
+loads; a record outside what the menu can set does not load. The HDMI range bit (2026-10-18):
+saved and loaded, and a record from before it reads as full range.
 
 Negative controls, each disagrees with the model: a copy that does not check the CRC, one that
 checks magic and CRC only (no zero count: a half-erased record loads), one without the range
@@ -207,6 +208,30 @@ def test_interrupted_erase_loads_only_written_records():
     for k, mem in enumerate(fooled[:2]):
         loads, end, out, ready = run(f'tb_flash_store_half_erased{k}', mem, [], end_ms=300)
         assert loads == [newest], loads
+
+
+P_LTD = ref.payload(3, 3, 0, 0, 0, 0xFFFF, 0, 0xFFFF, 0, hdmi_ltd=1)     # P1 with HDMI LTD
+OLD_P2 = bytes.fromhex('9dc00fa02ee012c03200')    # P2 as the payload was laid out before the HDMI bit
+
+
+def test_hdmi_bit_is_saved_and_old_records_read_full():
+    """The HDMI range (2026-10-18) is bit 5 of payload byte 1, one of the six bits that were 0. A record
+    of the layout before it (literal bytes) reads as full range and loads unchanged; a change to LTD is
+    saved where the model puts it (the whole image byte for byte) and loads after a restart. This module
+    stores the payload whole; where the bit goes in it is the M6 top's wiring, checked with negative
+    controls in sim/test_m6_settings.py."""
+    assert P2 == OLD_P2 and ref.settings(OLD_P2)['hdmi_ltd'] == 0, 'old records read as full range'
+    assert P_LTD[1] == 0x20 and ref.settings(P_LTD) == dict(ref.settings(P1), hdmi_ltd=1)
+    loads, end, out, ready = run('tb_flash_store_old_record', image([(0, 41, OLD_P2, True)]), [], end_ms=300)
+    assert loads == [(OLD_P2, 41)] and end[:2] == (0, 0), (loads, end)
+    sched = [(0, P1), (200, P_LTD)]
+    loads, end, out, ready = run('tb_flash_store_hdmi', EMPTY, sched)
+    want_loads, want_mem, writes, erases = model(EMPTY, sched, ready)
+    assert (loads, writes, erases) == ([], 1, 1) and end[:2] == (1, 1) and out == want_mem, (loads, end)
+    assert out[:16] == ref.record(1, P_LTD)
+    loads, end, _, _ = run('tb_flash_store_hdmi_restart', out, [(0, P1)], end_ms=400)
+    assert loads == [(P_LTD, 1)] and end[:2] == (0, 0), (loads, end)
+    assert ref.settings(loads[0][0])['hdmi_ltd'] == 1
 
 
 GOOD = ref.payload(3, 3, 0, 0, 0, 0xFFFF, 0, 0xFFFF, 0)

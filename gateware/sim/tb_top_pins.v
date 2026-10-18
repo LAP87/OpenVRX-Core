@@ -9,6 +9,11 @@
 // only costs the board-clock logic. Every change of RESETB and of the LEDs and
 // every RX5808 frame is printed for sim/test_top_pins.py; the video path has
 // its own tests.
+//
+// M6: the onboard flash reads as erased (FLASH = 0), or is sim/spi_flash_model.v
+// loaded from mem.hex (FLASH = 1, sim/test_m6_settings.py). The flash load, the
+// menu's HDMI range and the transmitter's rgb_full are printed, and the flash's
+// program and erase counts at the end.
 `timescale 1ns/1ps
 `default_nettype none
 module tb_top_pins;
@@ -17,6 +22,7 @@ module tb_top_pins;
     parameter T_B_NS = 300_000;
     parameter T_LOCK_NS = 0;
     parameter T_END_NS = 1_000_000;
+    parameter FLASH = 0;
 
     time stop_ns;
     initial if (!$value$plusargs("pll_stop_ns=%d", stop_ns)) stop_ns = 0;
@@ -77,6 +83,20 @@ module tb_top_pins;
             wire s_oled, txd;
             assign sda_a = s_oled ? 1'b0 : 1'bz;
             i2c_slave_model #(.ADDR(7'h3C)) oled (.scl(scl), .sda(sda_a), .sda_low(s_oled));
+            wire f_cs_n, f_clk, f_mosi, f_miso, f_wp_n;
+            if (FLASH) begin : fl
+                spi_flash_model #(.LOAD(1)) flash (.cs_n(f_cs_n), .clk(f_clk), .mosi(f_mosi), .miso(f_miso),
+                                                   .wp_n(f_wp_n));
+                initial begin
+                    #(T_END_NS - 100);
+                    $display("FLASH programs=%0d erases=%0d", flash.programs, flash.erases);
+                end
+            end else begin : fl
+                assign f_miso = 1'b1;                                                    // erased flash
+            end
+            always @(posedge clk) if (dut.set_load) $display("SETLOAD %0d %020x", $time, dut.saved);
+            always @(dut.hdmi_ltd) $display("HDMI %0d %b", $time, dut.hdmi_ltd);
+            always @(dut.dvi.rgb_full) $display("RGBFULL %0d %b", $time, dut.dvi.rgb_full);
             m6_puck_proto #(.CLK_HZ(CLK_HZ)) dut (
                 .clk(clk), .rst_i(1'b0), .key_i(1'b0),
                 .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n),
@@ -84,7 +104,7 @@ module tb_top_pins;
                 .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led), .uart_txd(txd),
-                .flash_cs_n(), .flash_clk(), .flash_mosi(), .flash_miso(1'b1), .flash_wp_n(),   // erased flash
+                .flash_cs_n(f_cs_n), .flash_clk(f_clk), .flash_mosi(f_mosi), .flash_miso(f_miso), .flash_wp_n(f_wp_n),
                 .O_sdram_clk(), .O_sdram_cke(), .O_sdram_cs_n(), .O_sdram_cas_n(), .O_sdram_ras_n(),
                 .O_sdram_wen_n(), .O_sdram_dqm(), .O_sdram_addr(), .O_sdram_ba(), .IO_sdram_dq(dq));
         end

@@ -26,8 +26,10 @@
 // program or erase, and released otherwise (a design that held WP# high all the time disturbed
 // USB programming of the flash on this board, as reported for the NEORV32 port).
 //
-// Payload (80 bits): {band[2:0], ch[2:0], mode[1:0]}, {low_lat, filter_vcr, 6'b0},
-// RSSI min A, max A, min B, max B (16 bits each, MSB first).
+// Payload (80 bits, as the M6 top assembles it; this module stores it whole):
+// {band[2:0], ch[2:0], mode[1:0]}, {low_lat, filter_vcr, hdmi_ltd, 5'b0},
+// RSSI min A, max A, min B, max B (16 bits each, MSB first). hdmi_ltd (HDMI limited range,
+// 2026-10-18) took one of the bits that were 0, so a record written before it loads as full range.
 `default_nettype none
 module flash_store #(
     parameter CLK_HZ = 27_000_000,
