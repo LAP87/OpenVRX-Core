@@ -1,14 +1,17 @@
 // Puck prototype UI: two buttons, 4 x 21 character OLED text, RX5808 tuning.
 //
-//   OK   (short press) -> select the next field: band, channel, mode, latency, filter, page
+//   OK   (short press) -> select the next field: band, channel, mode, latency, filter, HDMI, page
 //                         (and SCAN on the main page, CAL on the RSSI page)
-//   NEXT (short press) -> step the selected field (filter: TV/VCR; page: main -> meter -> RSSI;
-//                         SCAN: start a channel scan; CAL: calibration on/off)
+//   NEXT (short press) -> step the selected field (filter: TV/VCR; HDMI: FULL/LTD; page: main ->
+//                         meter -> RSSI; SCAN: start a channel scan; CAL: calibration on/off)
+// HDMI chooses the RGB range of the HDMI build (hdmi_ltd -> tmds_link.v rgb_full): FULL (default)
+// sends the pixels as they are, LTD scales them to 16..235 and says so in the AVI InfoFrame. The
+// DVI build (the default) ignores it.
 // SCAN (chan_scan.v) steps through all 48 channels and keeps the one where a decoder locks with
 // the lowest noise; any button aborts it on the channel it started from. Row 2 shows BUSY while
 // it runs and NONE after a scan that found no locked channel (until the next button).
-// Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency
-// and filter in place (the filter as a request to the decoders, like NEXT on FILT).
+// Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency,
+// filter and HDMI range in place (the filter as a request to the decoders, like NEXT on the filter).
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
 // register from vtx_channels.vh. The first write comes 0.5 s after reset, and
@@ -23,8 +26,10 @@
 //   >BAND F   CH 4  5800        (exactly 21 characters per row)
 //    MODE MIX VIEW A  BUF     (BUF / LOW: latency mode)
 //    A LOCK  B NOSIG SCAN
-//    SE BAND OK  FILT TV     (row 3 also shows VCR and the independent page/filter markers)
-// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, FILT, row 3 for the page, SCAN).
+//    SE OK TV   HDMI FULL     (row 3: SE band, filter TV / VCR, HDMI FULL / LTD; "!SE" outside
+//                               5725-5875 MHz)
+// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, TV/VCR, HDMI, column 0 of row 3 for the
+// page, SCAN).
 //
 // Meter page ("snow meter", self-interference / signal check):
 //   >METER   F4  5800
@@ -80,7 +85,7 @@ module puck_ui #(
     input  wire        set_load,
     input  wire [2:0]  set_band, set_ch,
     input  wire [1:0]  set_mode,
-    input  wire        set_low_lat, set_filter,
+    input  wire        set_low_lat, set_filter, set_hdmi,
     output wire        scan_busy,
     // mixer control
     output wire [1:0]  force_bad,         // [0] mark A bad, [1] mark B bad
@@ -103,11 +108,13 @@ module puck_ui #(
     output reg  [2:0]  band,
     output reg  [2:0]  ch,
     output reg  [1:0]  mode,              // 0 MIX, 1 A, 2 B
-    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 page, 6 CAL
+    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 HDMI, 6 page,
+                                          // 7 SCAN (main page) / CAL (RSSI page)
     output reg  [1:0]  page,              // 0 main, 1 meter, 2 RSSI
     output reg         low_lat,           // 1 = low-latency video (no field buffer)
     output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
-    output reg         filter_changed     // one-clock pulse only for NEXT on the filter field
+    output reg         filter_changed,    // one-clock pulse for NEXT on the filter field and for set_load
+    output reg         hdmi_ltd           // 0 FULL (default), 1 LTD: HDMI limited range (tmds_link.v)
 );
     `include "vtx_channels.vh"
     localparam MS = CLK_HZ / 1000;
@@ -170,7 +177,7 @@ module puck_ui #(
     reg        new_na, new_nb;                             // a new noise value is in na / nb
     wire       ui_ok = ev_ok && !scan_busy, ui_next = ev_next && !scan_busy;
     chan_scan #(.CLK_HZ(CLK_HZ)) scan (
-        .clk(clk), .rst(rst), .start(ui_next && field == 3'd6 && page == 2'd0),
+        .clk(clk), .rst(rst), .start(ui_next && field == 3'd7 && page == 2'd0),
         .abort(scan_busy && (ev_ok || ev_next)), .cur_idx({band, ch}),
         .locked({sp1[1] && sl1[1], sp0[1] && sl0[1]}), .new_a(new_na), .new_b(new_nb), .noise_a(na), .noise_b(nb),
         .busy(scan_busy), .idx(scan_idx), .tune(scan_tune), .done(scan_done), .found(scan_found));
@@ -182,27 +189,27 @@ module puck_ui #(
 
     always @(posedge clk) begin
         filter_changed <= 1'b0;
-        if (ui_ok) field <= (field == ((page == 2'd1) ? 3'd5 : 3'd6)) ? 3'd0 : field + 1'b1;
+        if (ui_ok) field <= (field == ((page == 2'd1) ? 3'd6 : 3'd7)) ? 3'd0 : field + 1'b1;
         if (ui_next) case (field)
             3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
             3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
             3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
             3'd3: low_lat <= ~low_lat;
             3'd4: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
-            3'd5: page <= (page == 2'd2) ? 2'd0 : page + 1'b1;
-            3'd6: if (page == 2'd2) rssi_cal <= ~rssi_cal;     // on the main page: SCAN (chan_scan above)
-            default: page <= page;
+            3'd5: hdmi_ltd <= ~hdmi_ltd;
+            3'd6: page <= (page == 2'd2) ? 2'd0 : page + 1'b1;
+            default: if (page == 2'd2) rssi_cal <= ~rssi_cal;  // 7; on the main page: SCAN (chan_scan above)
         endcase
         if (scan_tune) {band, ch} <= scan_idx;
         if (page != 2'd2) rssi_cal <= 1'b0;                // leaving the RSSI page ends a calibration
         if (set_load) begin
             band <= set_band; ch <= set_ch; mode <= (set_mode == 2'd3) ? 2'd0 : set_mode;
-            low_lat <= set_low_lat; filter_vcr <= set_filter; filter_changed <= 1'b1;
+            low_lat <= set_low_lat; filter_vcr <= set_filter; filter_changed <= 1'b1; hdmi_ltd <= set_hdmi;
         end
         if (rst) begin
             band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 2'd0; rssi_cal <= 1'b0;
             low_lat <= DEF_LOW_LAT[0];
-            filter_vcr <= 1'b0; filter_changed <= 1'b0;
+            filter_vcr <= 1'b0; filter_changed <= 1'b0; hdmi_ltd <= 1'b0;
         end
     end
     assign force_bad = {mode == 2'd1, mode == 2'd2};
@@ -342,6 +349,7 @@ module puck_ui #(
     wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
     wire [7:0] m_lat = (field == 3'd3) ? ">" : " ";
     wire [7:0] m_filter = (field == 3'd4) ? ">" : " ";
+    wire [7:0] m_hdmi = (field == 3'd5) ? ">" : " ";
     wire [23:0] mode_s = (mode == 2'd0) ? "MIX" : (mode == 2'd1) ? "A  " : "B  ";
     function [39:0] dec_s(input present, input locked);
         dec_s = !present ? "---- " : locked ? "LOCK " : "NOSIG";
@@ -350,15 +358,13 @@ module puck_ui #(
     wire [167:0] row0 = {m_sel, "BAND ", band_letter, "  ", m_ch, "CH ", dig({1'b0, ch} + 4'd1), "  ",
                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), " "};
     wire [167:0] row1 = {m_mod, "MODE ", mode_s, " VIEW ", sv[1] ? "B" : "A", " ", m_lat, low_lat ? "LOW" : "BUF"};
-    wire [7:0]   m_scan = (field == 3'd6) ? ">" : " ";
+    wire [7:0]   m_scan = (field == 3'd7) ? ">" : " ";
     wire [167:0] row2 = {" A ", dec_s(sp0[1], sl0[1]), " B ", dec_s(sp1[1], sl1[1]), m_scan,
                          scan_busy ? "BUSY" : scan_none ? "NONE" : "SCAN"};
-    wire [7:0] m_pg  = (field == 3'd5) ? ">" : " ";
-    wire [167:0] row3 = legal ?
-        (filter_vcr ? {m_pg, "SE BAND OK ", m_filter, "FILT VCR"} :
-                      {m_pg, "SE BAND OK ", m_filter, "FILT TV "}) :
-        (filter_vcr ? {m_pg, "!SE BAND ", m_filter, "FILT VCR  "} :
-                      {m_pg, "!SE BAND ", m_filter, "FILT TV   "});
+    wire [7:0] m_pg  = (field == 3'd6) ? ">" : " ";
+    // SE band (5 characters), filter (4), HDMI range (9), each value after its field marker
+    wire [167:0] row3 = {m_pg, legal ? "SE OK" : "!SE  ", m_filter, filter_vcr ? "VCR " : "TV  ",
+                         m_hdmi, hdmi_ltd ? "HDMI LTD " : "HDMI FULL"};
     // meter page
     wire [167:0] mrow0 = {m_pg, "METER   ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
                           dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
@@ -366,7 +372,7 @@ module puck_ui #(
     wire [167:0] mrow2 = {"B ", num6(bcd_b, stale_b), " ", bar(stale_b ? 4'd0 : bar_len(vb))};
     wire [167:0] mrow3 = {" USE A", num3(bcd_ua), " B", num3(bcd_ub), " M", num3(bcd_um), "  "};
     // RSSI page
-    wire [7:0]   m_cal = (field == 3'd6) ? ">" : " ";
+    wire [7:0]   m_cal = (field == 3'd7) ? ">" : " ";
     wire [167:0] rrow0 = {m_pg, "RSSI    ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
                           dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
     wire [167:0] rrow1 = {"A ", num5(bcd_ra, !rssi_valid[0]), " ", rssi_cal_ok[0] ? num3(bcd_pa) : "---", "  ",
@@ -402,10 +408,12 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || (page != 2'd0);
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V o ll rrrrr sssss pa_ pb_ ww\r\n"
-    //   (85 bytes incl. CRLF; 62 before the RSSI fields of 2026-10-13)
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V F/L o ll rrrrr sssss pa_ pb_ ww\r\n"
+    //   (87 bytes incl. CRLF; 85 before the HDMI range of 2026-10-18, 62 before the RSSI fields of
+    //   2026-10-13)
     //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
     //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B), filter (T/V),
+    //   HDMI range (F full, L limited: the menu's choice, also in the DVI build, which ignores it),
     //   o = "!" once the mixer has dropped a line because its line slots were full, else "-",
     //   ll = decoder A, decoder B since the previous line: "L" a whole poll round read 88h bit 4
     //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset),
@@ -444,12 +452,12 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 85;
+    localparam LOG_LEN = 87;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
                              dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ",
-                             filter_vcr ? "V" : "T", " ", ovf_s[1] ? "!" : "-", " ",
+                             filter_vcr ? "V" : "T", " ", hdmi_ltd ? "L" : "F", " ", ovf_s[1] ? "!" : "-", " ",
                              ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), " ",
                              z5(bcd_ra, !rssi_valid[0]), " ", z5(bcd_rb, !rssi_valid[1]), " ",
                              rssi_cal_ok[0] ? z3(bcd_pa) : "---", " ", rssi_cal_ok[1] ? z3(bcd_pb) : "---", " ",

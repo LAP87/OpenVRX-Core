@@ -134,13 +134,13 @@ module m6_puck_proto #(
                 .rssi_low(rssi_low), .rssi_warn(rssi_warn), .rssi_pct_a(rssi_pct_a), .rssi_pct_b(rssi_pct_b),
                 .rssi_cal(rssi_cal),
                 .set_load(set_load), .set_band(saved[79:77]), .set_ch(saved[76:74]), .set_mode(saved[73:72]),
-                .set_low_lat(saved[71]), .set_filter(saved[70]), .scan_busy(scan_busy),
+                .set_low_lat(saved[71]), .set_filter(saved[70]), .set_hdmi(1'b0), .scan_busy(scan_busy),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
-                .filter_vcr(filter_vcr), .filter_changed(filter_changed));
+                .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd());
     assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
