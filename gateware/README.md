@@ -12,6 +12,7 @@ Hela sviten: **797 test på `52c2ffe`, alla gröna** med `tools/run_suite.py` (e
 
 | Topp | Byggd ur | Seed | Siffror |
 |---|---|---:|---|
+| M6 med `HDMI=1 VINTERP=1` | `c852cb9` (Opus, 2026-10-18; samma byggindata som `52c2ffe`); med `--mspi_as_gpio` | 2 | 13 997 LUT4, 33 BSRAM; lägsta maxfrekvens 115,41 MHz (`sd_clk`); "M6 med HDMI och VINTERP" under "Bygget av M6". Inte rootaccepterad |
 | M0, M4, M6, var och en med och utan `HDMI=1` | `52c2ffe` (Opus, 2026-10-18, uppgift 35); M6 med `--mspi_as_gpio` | 0, 0, 2 | utan / med `HDMI=1`: 789 / 950, 5 810 / 5 993, 13 190 / 13 544 LUT4; M4 och M6 29 BSRAM; lägsta maxfrekvens 161,16 / 211,10, 115,06 / 123,00, 103,80 / 103,80 MHz; tabellen under "Omfånget i HDMI-läget". Inte rootaccepterade |
 | M4, M6 (standardval) | granskningsgrenen, sammanslagen i `8a71a0a` (Fable, 2026-10-17; samma RTL som `main` nu); M6 med `--mspi_as_gpio` | 0, 2 | 5 810 / 13 259 LUT4, 29 BSRAM var; lägsta maxfrekvens 115,06 / 91,70 MHz. Inte rootaccepterade |
 | M0, M4, M6 (standardval), M4 och M6 med `HDMI=1 VINTERP=1` | `2c64672` (Opus, samma byggindata som `88f5b90`); M6 med `gowin_pack --mspi_as_gpio` | 0, 0, 2 | 789 / 5 831 / 13 113 LUT4; M4 och M6 med båda valen 6 427 / 13 719; lägsta maxfrekvens 152,35 / 129,17 / 112,07 MHz, med båda valen 116,33 / 99,00 MHz. Inte rootaccepterade |
@@ -625,14 +626,22 @@ Iakttagelse: med seed 1 och 3 (och seed 3 före ändringen) når `sd_clk_shift`,
 
 Mot `bf05ac0` är det 2 392 LUT4 färre i M6 och 2 414 färre i M4; M6:s 27 MHz-domän ligger på 112,07 MHz mot 132,28 (placeringen, inte logiken i den domänen).
 
+**Byggt igen** ur `c852cb9` (2026-10-18, efter uppgift 33–35 och omfånget `FULL`/`LTD` i `tmds_link.v`; samma byggindata som `52c2ffe`), i en ren klon: siffror efter routning, krav 75 MHz för alla klockor, inga `ERROR`, manifestet verifierat mot källorna (`tools/build_manifest.py verify --root`, `dirty` false), alla fyra HDMI-par med samma IOB-fuses som i M0 med DVI ur samma klon (`tools/tmds_fuses.py m0_testpattern m6_puck_proto_vinterp_hdmi`):
+
+| Topp | Val | Seed | LUT4 | DFF | BSRAM | Klockor (MHz) | Tid |
+|---|---|---:|---:|---:|---:|---|---:|
+| `m6_puck_proto` | `HDMI=1 VINTERP=1` | 2 | 13 997 | 6 467 | 33 | `sd_clk` 115,41; `clk_pixel` 119,86; `clocks.clk_27` 116,60; `mix.a_clk` 242,72; `mix.b_clk` 195,66 | 604 s |
+
+Mot `2c64672` är det 278 LUT4 fler (det som kommit in sedan dess, bland annat granskningens rättningar i `8a71a0a` och skalningen till 16–235); mot M6 med bara `HDMI=1` ur `52c2ffe` lägger `VINTERP=1` till 453 LUT4 och 4 BSRAM.
+
 Vilka byggval som är byggda tillsammans:
 
 | | standard | `VINTERP=1` | `HDMI=1` | båda |
 |---|---|---|---|---|
-| M4 | `2c64672` | `bf05ac0` (Codex) | `bf05ac0` (Codex) | `2c64672`; före ändringen också `bf05ac0` (Codex) |
-| M6 | `2c64672` | `bf05ac0` (Codex) | `bf05ac0` (Codex) | `2c64672`; föll på `bf05ac0` och `072dbde` |
+| M4 | `52c2ffe` | `bf05ac0` (Codex) | `52c2ffe` | `2c64672`; före ändringen också `bf05ac0` (Codex) |
+| M6 | `52c2ffe` | `bf05ac0` (Codex) | `52c2ffe` | `c852cb9`, `2c64672`; föll på `bf05ac0` och `072dbde` |
 
-`VINTERP=1` och `HDMI=1` var för sig är inte ombyggda efter ändringen, som bara tar bort LUT-RAM.
+`VINTERP=1` ensamt är inte ombyggt efter FIFO-ändringen, som bara tar bort LUT-RAM.
 
 ## Störningskampanjen C3 avslutad, 2026-10-12
 

@@ -29,7 +29,7 @@ M2s, M2a, M3, M1 and M1s builds have no root acceptance.
 | M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
 | M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
 | M4 | `52c2ffe` | 0 | 5 810 LUT4, lowest clock 115.06 MHz; with `HDMI=1` 5 993 LUT4, 123.00 MHz; with `HDMI=1 VINTERP=1` from `2c64672` (6 427 LUT4, 116.33 MHz); each option alone from `bf05ac0` (Codex) |
-| M6 | `52c2ffe` | 2 | with RSSI, SCAN, the flash store (`--mspi_as_gpio`) and the HDMI range field: 13 190 LUT4, lowest clock 103.80 MHz; with `HDMI=1` 13 544 LUT4, 103.80 MHz; with `HDMI=1 VINTERP=1` from `2c64672` (13 719 LUT4, 99.00 MHz); each option alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
+| M6 | `52c2ffe` | 2 | with RSSI, SCAN, the flash store (`--mspi_as_gpio`) and the HDMI range field: 13 190 LUT4, lowest clock 103.80 MHz; with `HDMI=1` 13 544 LUT4, 103.80 MHz; with `HDMI=1 VINTERP=1` from `c852cb9`, the same build inputs (13 997 LUT4, 33 BSRAM, 115.41 MHz); `VINTERP=1` alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
 
 M6 with both `HDMI=1` and `VINTERP=1` did not place until 2026-10-14: LUT positions ran out
 (ALUs, LUT RAM and flip-flops without a LUT of their own share them). The mixer's two input
