@@ -3,7 +3,7 @@ as strict xfail tests: each states what should hold and fails today. A fix makes
 which a strict xfail reports as a failure, so the marker has to be removed with the fix.
 
   RS-2  Core #21  the RSSI warning has no margin between the two receivers
-  SC-1  Core #22  SCAN: on a tie of clean channels the earlier table entry wins
+  SC-1  Core #22  SCAN: on a tie of clean channels the earlier table entry wins (fixed: the start keeps a tie)
   HD-1  Core #23  HDMI: RGB_FULL = 0 changes the InfoFrame's flag, not the pixels
 
 Fixed in the review: RS-1 (sim/test_mixer.py::test_weak_receiver_takes_over_from_a_broken_one) and
@@ -34,7 +34,6 @@ def test_rssi_warning_needs_a_margin():
     assert all(w == (0, 0) for w in warns), warns
 
 
-@pytest.mark.xfail(strict=True, reason='Core #22 (SC-1): a tie of clean channels goes to the earlier one')
 def test_scan_keeps_the_starting_channel_on_a_tie():
     """Started from F4 (index 27): F4 and A1 (index 0) both lock with noise 0. The scan should keep
     F4, the channel the pilot was on; today it keeps A1."""

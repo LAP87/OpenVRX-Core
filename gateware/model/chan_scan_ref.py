@@ -21,7 +21,8 @@ def scan(obs, start_idx):
     best = None
     for i, o in enumerate(obs):
         s = score(o)
-        if s is not None and (best is None or s < best[0]):
+        # the starting channel keeps a tie (Core #22); otherwise the earlier channel
+        if s is not None and (best is None or s < best[0] or (s == best[0] and i == start_idx)):
             best = (s, i)
     return (best[1], True) if best else (start_idx, False)
 

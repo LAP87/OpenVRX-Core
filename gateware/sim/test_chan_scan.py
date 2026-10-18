@@ -37,19 +37,29 @@ def world_main():
     w[10] = (1, 400, 0, 1)                          # A locks, noise 400
     w[17] = (0, 1, 1, 250)                          # B locks, 250
     w[22] = (1, 300, 1, 120)                        # both lock: the lower one counts (120)
-    w[30] = (1, 120, 0, 1)                          # tie with 22: 22 is earlier and wins
+    w[30] = (1, 120, 0, 1)                          # tie with 22: 22 is earlier and wins (neither is the start)
     w[41] = (1, 900, 1, 950)                        # noisy channel after the unlocked clean 40
     return w
 
 
+def world_tie_with_start():
+    """Two clean transmitters: the starting channel (START) and an earlier table entry both lock
+    with noise 0 on receiver A. The scan must keep the starting channel (Core #22)."""
+    w = [(0, 1, 0, 1)] * N
+    w[0] = (1, 0, 0, 1)
+    w[START] = (1, 0, 0, 1)
+    return w
+
+
 MUTANTS = {
+    'tie_to_earlier': [("({1'b0, sc} < best || (idx == start_idx && {1'b0, sc} == best))", "({1'b0, sc} < best)")],
     'first_window': [("wire        ok_a = (wa == 2'd2) && locked[0];", "wire        ok_a = (wa != 2'd0) && locked[0];"),
                      ("wire        ok_b = (wb == 2'd2) && locked[1];", "wire        ok_b = (wb != 2'd0) && locked[1];"),
                      ("if (new_a && wa != 2'd2) begin wa <= wa + 1'b1; sa <= noise_a; end",
                       "if (new_a && wa != 2'd2) begin wa <= wa + 1'b1; if (wa == 2'd0) sa <= noise_a; end"),
                      ("if (new_b && wb != 2'd2) begin wb <= wb + 1'b1; sb <= noise_b; end",
                       "if (new_b && wb != 2'd2) begin wb <= wb + 1'b1; if (wb == 2'd0) sb <= noise_b; end")],
-    'keeps_highest': [("if ((ok_a || ok_b) && {1'b0, sc} < best) begin", "if ((ok_a || ok_b) && (best[20] || {1'b0, sc} > best)) begin")],
+    'keeps_highest': [("({1'b0, sc} < best || (idx == start_idx && {1'b0, sc} == best))", "(best[20] || {1'b0, sc} > best)")],
     'ignores_lock': [("wire        ok_a = (wa == 2'd2) && locked[0];", "wire        ok_a = (wa == 2'd2);"),
                      ("wire        ok_b = (wb == 2'd2) && locked[1];", "wire        ok_b = (wb == 2'd2);")],
 }
@@ -112,6 +122,17 @@ def test_scan_keeps_the_quietest_locked_channel():
     assert ref.score(obs[41]) == 900, 'the second window, not the clean channel before it'
 
 
+def test_scan_keeps_the_start_on_a_tie():
+    """Core #22 (review 2 SC-1): channel 0 and the starting channel both lock clean; the earlier
+    table entry used to win. Negative control: the mutant with the old strict comparison keeps 0."""
+    w = world_tie_with_start()
+    tunes, win, end, tuned = run('tb_chan_scan_tie', w)
+    (want, found), _ = expect(w, tunes, win, end)
+    assert (end[0], end[1]) == (START, 1) and tuned == START and (want, found) == (START, True), (end, want)
+    tunes, win, end, tuned = run('tb_chan_scan_tie_old', w, mutant='tie_to_earlier')
+    assert end[0] == 0 and tuned == 0, 'the old rule keeps the earlier channel'
+
+
 def test_scan_without_lock_keeps_the_start():
     w = [(0, 5, 0, 5)] * N
     tunes, win, end, tuned = run('tb_chan_scan_none', w)
@@ -133,7 +154,7 @@ def test_scan_abort_keeps_the_start():
     assert 5 < len(tunes) < N, len(tunes)
 
 
-@pytest.mark.parametrize('mutant', sorted(MUTANTS))
+@pytest.mark.parametrize('mutant', sorted(k for k in MUTANTS if k != 'tie_to_earlier'))   # tie_to_earlier: its own test
 def test_scan_negative_control(mutant):
     w = world_main()
     tunes, win, end, tuned = run(f'tb_chan_scan_{mutant}', w, mutant=mutant)
