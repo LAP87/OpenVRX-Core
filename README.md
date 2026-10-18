@@ -118,7 +118,9 @@ openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 
 The quick list is chosen from the measured times of a full run (`run_suite.py --pick-quick 300`):
 the fastest test of every file, then the fastest of the rest. `--quick` refuses (exit status 2) when the
-list names a test that is no longer collected; pick a new list after the next full run.
+list names a test that is no longer collected; pick a new list after the next full run. The list of
+2026-10-18 holds 720 of the 797 tests (204 s in a fresh copy); the formal proofs and 76 simulations of
+40-314 s each, `test_puck_ui` among them, run only in the full suite.
 
 Each build uses a frozen source copy and writes a manifest with source and
 artifact hashes, tool versions, options and clock timing. A failed build leaves
