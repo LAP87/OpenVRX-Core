@@ -199,7 +199,7 @@ module m6_puck_proto #(
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst_sr[3]),
-                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50),
+                      .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50), .rgb_full(1'b1),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B

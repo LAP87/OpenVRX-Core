@@ -42,7 +42,7 @@ module m2s_moneagle_color_sync (
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
     dvi_tx_gowin dvi (.clk_pixel(clk_pixel), .clk_serial(clk_serial), .rst(rst_sr[3]),
-                      .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b), .hz50(hz50),
+                      .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b), .hz50(hz50), .rgb_full(1'b1),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
     reg [24:0] sec;

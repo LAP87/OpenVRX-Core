@@ -14,6 +14,7 @@ module dvi_tx_gowin (
     input  wire [7:0] g,
     input  wire [7:0] b,
     input  wire       hz50,          // HDMI = 1: the timing is 720p50 (AVI VIC 19); ignored in DVI mode
+    input  wire       rgb_full,      // HDMI = 1: 1 full range, 0 limited 16..235 (tmds_link.v); ignored in DVI mode
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
@@ -21,7 +22,7 @@ module dvi_tx_gowin (
 );
     wire [9:0] sym [0:2];
     tmds_link link (.clk(clk_pixel), .rst(rst), .de(de), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
-                    .hz50(hz50), .sym0(sym[0]), .sym1(sym[1]), .sym2(sym[2]));
+                    .hz50(hz50), .rgb_full(rgb_full), .sym0(sym[0]), .sym1(sym[1]), .sym2(sym[2]));
 
     wire [2:0] ser;
     genvar c;
