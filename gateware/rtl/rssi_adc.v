@@ -22,9 +22,10 @@
 //
 // Warning (the mixer's health, mixer2 ext_weak): a channel is `low` after N_LOW readings in a
 // row with pct < LOW_PCT. It `warn`s only while it is low and the other channel is calibrated,
-// has a valid reading and is not low: the warning says "the other receiver hears the
-// transmitter better", and two weak receivers do not mark each other. Uncalibrated channels
-// are never low.
+// has a valid reading, is not low and reads at least MARGIN_PCT higher: the warning says "the
+// other receiver hears the transmitter better", two weak receivers do not mark each other, and
+// near the floor one or two points do not decide the picture (review 2026-10-14, RS-2; Core
+// #21). Uncalibrated channels are never low.
 //
 // Shared bus (one master at a time, all on this clock): before each transaction `hold_other`
 // rises, but only while the other holding master (`other_hold`, the OLED) does not hold; the
@@ -39,6 +40,7 @@ module rssi_adc #(
     parameter CONV_US = 2_600,
     parameter LOW_PCT = 20,
     parameter N_LOW = 3,
+    parameter MARGIN_PCT = 10,               // the other receiver must read this much higher (pct) to warn
     parameter MIN_SPAN = 400                 // codes: 50 mV
 ) (
     input  wire        clk,
@@ -189,8 +191,8 @@ module rssi_adc #(
                 nb = !lb ? 3'd0 : (n_b == N_LOW) ? n_b : n_b + 1'b1;
                 n_a <= na; n_b <= nb;
                 low <= {nb == N_LOW, na == N_LOW};
-                warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0],
-                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1]};
+                warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0] && ({1'b0, p_a} >= {1'b0, p_b} + MARGIN_PCT),
+                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1] && ({1'b0, p_b} >= {1'b0, p_a} + MARGIN_PCT)};
             end
             done <= 1'b1;
             st <= S_WAIT;

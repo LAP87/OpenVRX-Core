@@ -2,7 +2,7 @@
 as strict xfail tests: each states what should hold and fails today. A fix makes its test pass,
 which a strict xfail reports as a failure, so the marker has to be removed with the fix.
 
-  RS-2  Core #21  the RSSI warning has no margin between the two receivers
+  RS-2  Core #21  the RSSI warning has no margin between the two receivers (fixed: MARGIN_PCT)
   SC-1  Core #22  SCAN: on a tie of clean channels the earlier table entry wins
   HD-1  Core #23  HDMI: RGB_FULL = 0 changes the InfoFrame's flag, not the pixels
 
@@ -23,7 +23,6 @@ import chan_scan_ref  # noqa: E402
 import rssi_ref  # noqa: E402
 
 
-@pytest.mark.xfail(strict=True, reason='Core #21 (RS-2): no margin between the receivers')
 def test_rssi_warning_needs_a_margin():
     """Both receivers calibrated over the same range; A reads 19 %, B 21 %. Two points near the
     floor say nothing about which picture is better: A must not warn (today it warns from the

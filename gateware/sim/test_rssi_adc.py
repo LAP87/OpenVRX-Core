@@ -41,7 +41,7 @@ SCHED = [
     (0.6 * V, 1.4 * V, 0, 0, None),                 # 6..8 A at 10 %: low and warning in the third round
     (0.6 * V, 1.4 * V, 0, 0, None),
     (0.6 * V, 1.4 * V, 0, 0, None),
-    (0.6 * V, 0.62 * V, 0, 0, None),                # 9..11 B falls too: A warns until B is low as well
+    (0.6 * V, 0.62 * V, 0, 0, None),                # 9..11 B falls to 2 %: A (10 %) is no longer 10 points below, no
     (0.6 * V, 0.62 * V, 0, 0, None),
     (0.6 * V, 0.62 * V, 0, 0, None),
     (1.4 * V, 0.62 * V, 0, 0, None),                # 12 A recovers: B warns
@@ -60,6 +60,9 @@ SCHED = [
     (0.6 * V, 1.4 * V, 0, 0, None),
     (0.6 * V, 1.4 * V, 0, 0, None),
     (-0.1 * V, 4.2 * V, 0, 0, None),                # 27 below ground (0) and above full scale (7FFFh)
+    (0.69 * V, 0.81 * V, 0, 0, None),               # 28..30 A 19 %, B 21 %: A low, but two points are no margin
+    (0.69 * V, 0.81 * V, 0, 0, None),               #        (MARGIN_PCT = 10): nobody warns (Core #21)
+    (0.69 * V, 0.81 * V, 0, 0, None),
 ]
 
 
@@ -79,11 +82,12 @@ def model(sched, n_low=ref.N_LOW, absent_ok=True):
 
 MUTANTS = {
     'warns_without_the_other': [
-        ("warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0],", "warn <= {nb == N_LOW,"),
-        ("                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1]};", "                         na == N_LOW};"),
+        ("warn <= {nb == N_LOW && na != N_LOW && cal_ok[0] && valid[0] && ({1'b0, p_a} >= {1'b0, p_b} + MARGIN_PCT),", "warn <= {nb == N_LOW,"),
+        ("                         na == N_LOW && nb != N_LOW && cal_ok[1] && valid[1] && ({1'b0, p_b} >= {1'b0, p_a} + MARGIN_PCT)};", "                         na == N_LOW};"),
     ],
     'ignores_other_masters': [("if (free_cnt == 2'd2 && !other_active && !busy) begin", "if (!busy) begin")],
     'n_low_1': [("    parameter N_LOW = 3,", "    parameter N_LOW = 1,")],
+    'no_margin': [("    parameter MARGIN_PCT = 10,", "    parameter MARGIN_PCT = 0,")],
 }
 
 
@@ -128,13 +132,14 @@ def test_model_scenario_says_what_it_claims():
     low = [(r[12], r[13]) for r in rows]
     assert [w for w in warn[:6]] == [(0, 0)] * 6 and rows[5][8:10] == (1, 1)
     assert warn[6:9] == [(0, 0), (0, 0), (1, 0)], 'A warns in its third low round'
-    assert warn[9:12] == [(1, 0), (1, 0), (0, 0)] and low[11] == (1, 1), 'both low: neither warns'
+    assert warn[9:12] == [(0, 0), (0, 0), (0, 0)] and low[11] == (1, 1), 'B two points below A: no margin, then both low'
     assert warn[12] == (0, 1) and rows[13][2:4] == (0, 0) and warn[13] == (0, 0)
     assert rows[14][10] == 20 and low[14:17] == [(0, 0)] * 3
     assert rows[17][10] == 19 and low[17:20] == [(0, 0), (0, 0), (1, 0)]
     assert rows[21][8:10] == (0, 0) and warn[21:24] == [(0, 0)] * 3, 'a failed calibration: no warnings'
     assert rows[24][8:10] == (1, 1) and warn[24:27] == [(0, 0), (0, 0), (1, 0)]
     assert rows[27][:2] == (0, 32767)
+    assert low[28:31] == [(1, 0)] * 3 and warn[28:31] == [(0, 0)] * 3, 'A 19 %, B 21 %: low, but no warning without a margin of 10'
 
 
 def test_rssi_adc_matches_model():
@@ -150,7 +155,7 @@ def test_rssi_adc_matches_model():
 
 
 @pytest.mark.parametrize('case', ['conversion_not_awaited', 'warns_without_the_other', 'ignores_other_masters',
-                                  'n_low_1'])
+                                  'n_low_1', 'no_margin'])
 def test_rssi_adc_negative_control(case):
     if case == 'conversion_not_awaited':
         got, coll, _ = run('tb_rssi_adc_early', params={'CONV_US': 500})
@@ -163,5 +168,7 @@ def test_rssi_adc_negative_control(case):
     assert got != want and coll == 0
     if case == 'warns_without_the_other':
         assert got[11][14:16] == (1, 1) and want[11][14:16] == (0, 0)
+    if case == 'no_margin':
+        assert got[30][14:16] == (1, 0) and want[30][14:16] == (0, 0), 'without the margin A warns at 19 % against 21 %'
     if case == 'n_low_1':
         assert got == model(SCHED, n_low=1), 'the copy is the model with N_LOW = 1'
