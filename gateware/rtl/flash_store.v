@@ -21,7 +21,9 @@
 // with it in `loaded`. Without a valid record nothing is loaded (the defaults stay).
 // Saving: when `cur` differs from what was last saved or loaded and has then not changed for
 // SAVE_MS, one record is written (only on change, so the flash wears only when settings
-// change). The write is read back; `err` is set if it does not match.
+// change). The write is read back; `err` is set if it does not match. For the menu: `dirty`
+// from a change until the record is written and read back, `stored` once the flash holds a
+// record (loaded at start or written since; without one the defaults apply).
 // SPI mode 0, SCK = clk / 4. WP# is driven high only from the write enable to the end of a
 // program or erase, and released otherwise (a design that held WP# high all the time disturbed
 // USB programming of the flash on this board, as reported for the NEORV32 port).
@@ -48,6 +50,8 @@ module flash_store #(
     output reg         load,               // one clock, after the start scan found a record
     output reg         ready,              // the start scan is over
     output reg         err,                // a write did not read back
+    output reg         dirty,              // the settings differ from the newest record: a save is pending or running
+    output reg         stored,             // the flash holds a record (loaded at start or written since)
     output reg  [15:0] seq                 // sequence number of the newest record (tests)
 );
     localparam MS = CLK_HZ / 1000;
@@ -248,6 +252,16 @@ module flash_store #(
             st <= S_POWER; t <= 0; flash_cs_n <= 1'b1; flash_wp_drive <= 1'b0; ready <= 1'b0; load <= 1'b0;
             err <= 1'b0; have <= 1'b0; seq <= 0; k <= 0; x_go <= 1'b0; loaded <= 0;
         end
+    end
+
+    // ---- the save status for the menu (puck_ui.v): `saved` is what the newest record holds from
+    //      the end of the start scan on, and it takes `cur` when a write starts, so a write in
+    //      progress counts as dirty until its read-back is over
+    wire writing = (st != S_POWER) && (st != S_SCAN_CMD) && (st != S_SCAN) && (st != S_SCAN_END) && (st != S_IDLE);
+    always @(posedge clk) begin
+        dirty <= ready && (cur != saved || writing);
+        if ((st == S_SCAN_END && have) || st == S_DONE) stored <= 1'b1;
+        if (rst) begin dirty <= 1'b0; stored <= 1'b0; end
     end
 endmodule
 `default_nettype wire

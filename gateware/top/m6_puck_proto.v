@@ -1,8 +1,9 @@
 // M6: puck prototype step 1 = M4 (two TVP5150AM1 + line mixer -> 720p60 HDMI)
 // plus the puck UI: two RX5808 modules tuned over SPI, an SSD1306 128x32 OLED
 // on the I2C bus of decoder A (shared with tvp_ctrl through hold/active), and
-// the two onboard buttons (S1 = OK / field, S2 = NEXT / value). S1 is no
-// longer a reset button; reset comes from the PLLs locking at power-up.
+// the two onboard buttons (S1 = OK, S2 = NEXT: flight view, information pages and a
+// menu with one item per screen, puck_ui.v). S1 is no longer a reset button; reset
+// comes from the PLLs locking at power-up.
 // See puck_ui.v for the screen and design/PUCK_2027_KONCEPT.md for the idea.
 // RSSI: rssi_adc.v reads both receivers' RSSI from the rev A board's ADS1115 (48h) on the
 // same bus once per field; its warning (one receiver low, the other not) makes the mixer
@@ -10,7 +11,8 @@
 // nothing changes. Three masters share SCL + SDA_A: rssi_adc goes first (it raises its hold
 // only between OLED bytes), the OLED waits for it and tvp_ctrl, tvp_ctrl waits for both holds.
 // Saved settings: flash_store.v keeps band, channel, mode, latency, filter, HDMI range and the RSSI
-// calibration in the last two sectors of the onboard SPI flash (pins 57, 59-62) and loads them at start.
+// calibration in the last two sectors of the onboard SPI flash (pins 57, 59-62) and loads them at start;
+// its ready / dirty / stored / err tell the flight view whether the current settings are saved.
 // HDMI range: the menu's FULL / LTD (puck_ui hdmi_ltd, board clock) goes to tmds_link.v as rgb_full,
 // which takes it into the pixel clock domain at each vsync; only the HDMI build (HDMI=1) uses it.
 //
@@ -87,12 +89,13 @@ module m6_puck_proto #(
     // ---- saved settings: band, channel, mode, latency, filter, HDMI range, RSSI calibration
     //      (payload layout in flash_store.v and model/flash_store_ref.py)
     wire [79:0] saved;
-    wire        set_load, flash_ready, flash_err, wp_drive, scan_busy;
+    wire        set_load, flash_ready, flash_err, flash_dirty, flash_stored, wp_drive, scan_busy;
     flash_store #(.CLK_HZ(CLK_HZ)) store (
                    .clk(clk), .rst(rst_c[2]), .flash_cs_n(flash_cs_n), .flash_clk(flash_clk), .flash_mosi(flash_mosi),
                    .flash_miso(flash_miso), .flash_wp_drive(wp_drive),
                    .cur({band, ch, mode, low_lat, filter_vcr, hdmi_ltd, 5'd0, rssi_min_a, rssi_max_a, rssi_min_b, rssi_max_b}),
-                   .loaded(saved), .load(set_load), .ready(flash_ready), .err(flash_err), .seq());
+                   .loaded(saved), .load(set_load), .ready(flash_ready), .err(flash_err), .dirty(flash_dirty),
+                   .stored(flash_stored), .seq());
     assign flash_wp_n = wp_drive ? 1'b1 : 1'bz;
     rssi_adc #(.CLK_HZ(CLK_HZ)) rssi (
                    .clk(clk), .rst(rst_c[2]), .scl_low(rssi_scl_low), .sda_low(rssi_sda_low),
@@ -104,7 +107,7 @@ module m6_puck_proto #(
                    .min_a(rssi_min_a), .max_a(rssi_max_a), .min_b(rssi_min_b), .max_b(rssi_max_b),
                    .cal_ok(rssi_cal_ok), .pct_a(rssi_pct_a), .pct_b(rssi_pct_b), .low(rssi_low), .warn(rssi_warn),
                    .done(rssi_done));
-    wire [1:0] trow, force_bad, sel_n;
+    wire [1:0] trow, tbig, force_bad, sel_n;
     wire [4:0] tcol;
     wire [6:0] tchar;
     wire [2:0] band, ch;
@@ -122,10 +125,15 @@ module m6_puck_proto #(
                        .clk(clk), .rst(rst_c[2]), .scl_low(oled_scl_low), .sda_low(oled_sda_low),
                        .scl_in(i2c_scl), .sda_in(i2c_sda_a), .hold_other(oled_hold),
                        .other_active(tvp_active | rssi_hold | rssi_active), .active(oled_active),
-                       .text_row(trow), .text_col(tcol), .text_char(tchar),
+                       .text_row(trow), .text_col(tcol), .text_char(tchar), .text_big(tbig),
                        .frame_done(frame_done),
                        .nack_error(oled_nack));
-    puck_ui #(.CLK_HZ(CLK_HZ)) ui (
+`ifdef HDMI
+    localparam HDMI_BUILD = 1;             // the menu's HDMI item has an effect (tmds_link.v rgb_full)
+`else
+    localparam HDMI_BUILD = 0;             // DVI: the item says N/A and NEXT leaves it
+`endif
+    puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD)) ui (
                 .clk(clk), .rst(rst_c[2]), .btn_ok(rst_i), .btn_next(key_i), .view_b(cur),
                 .dec_present({init_done & ~dev_err[1], init_done & ~dev_err[0]}),
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
@@ -137,9 +145,11 @@ module m6_puck_proto #(
                 .rssi_low(rssi_low), .rssi_warn(rssi_warn), .rssi_pct_a(rssi_pct_a), .rssi_pct_b(rssi_pct_b),
                 .rssi_cal(rssi_cal),
                 .set_load(set_load), .set_band(saved[79:77]), .set_ch(saved[76:74]), .set_mode(saved[73:72]),
-                .set_low_lat(saved[71]), .set_filter(saved[70]), .set_hdmi(saved[69]), .scan_busy(scan_busy),
+                .set_low_lat(saved[71]), .set_filter(saved[70]), .set_hdmi(saved[69]),
+                .set_ready(flash_ready), .set_dirty(flash_dirty), .set_stored(flash_stored), .set_err(flash_err),
+                .scan_busy(scan_busy), .ch_hold(),
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
-                .text_row(trow), .text_col(tcol), .text_char(tchar),
+                .text_row(trow), .text_col(tcol), .text_char(tchar), .text_big(tbig),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),

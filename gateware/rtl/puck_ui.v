@@ -1,17 +1,30 @@
-// Puck prototype UI: two buttons, 4 x 21 character OLED text, RX5808 tuning.
+// Puck prototype UI: two buttons, a 128 x 32 OLED (4 x 21 characters; the top two rows are drawn as
+// one double-size row of 10 characters on the flight view and in the menu, ssd1306_text.v text_big),
+// RX5808 tuning.
 //
-//   OK   (short press) -> select the next field: band, channel, mode, latency, filter, HDMI, page
-//                         (and SCAN on the main page, CAL on the RSSI page)
-//   NEXT (short press) -> step the selected field (filter: TV/VCR; HDMI: FULL/LTD; page: main ->
-//                         meter -> RSSI; SCAN: start a channel scan; CAL: calibration on/off)
-// HDMI chooses the RGB range of the HDMI build (hdmi_ltd -> tmds_link.v rgb_full): FULL (default)
-// sends the pixels as they are, LTD scales them to 16..235 and says so in the AVI InfoFrame. The
-// DVI build (the default) ignores it.
-// SCAN (chan_scan.v) steps through all 48 channels and keeps the one where a decoder locks with
-// the lowest noise; any button aborts it on the channel it started from. Row 2 shows BUSY while
-// it runs and NONE after a scan that found no locked channel (until the next button).
-// Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency,
-// filter and HDMI range in place (the filter as a request to the decoders, like NEXT on the filter).
+// Pages: the flight view (start), two information pages and the menu.
+//   flight view   OK -> menu, NEXT -> meter page
+//   meter page    OK -> menu, NEXT -> RSSI page
+//   RSSI page     OK -> calibration on / off, NEXT -> flight view (leaving the page ends a calibration)
+//   menu          OK -> next item (after the last one: flight view), NEXT -> change the item; MENU_MS
+//                 after the last button it returns to the flight view by itself (not during a scan)
+// Items, one per screen: BAND, CH, MODE (MIX / A / B), LAT (BUF / LOW), FILT (TV / VCR), HDMI (FULL /
+// LTD; "N/A" in the DVI build, HDMI_BUILD = 0, where NEXT leaves it), SCAN (NEXT starts, any button
+// aborts and leaves the SCAN screen as it was; a scan that found a channel ends on the flight view,
+// one that found none says NONE until the next button), HOLD (ON: BAND, CH and SCAN do not react and the flight view shows a padlock;
+// not saved, OFF after reset).
+//
+// Flight view (row 0 double size: 10 characters; rows 2 and 3: 21 characters):
+//   F4 5800  @              band + channel, MHz, "!" outside 5725-5875 MHz, padlock while HOLD is on
+//   A:LOCK  75 B:NOSIG --   per receiver: decoder LOCK / NOSIG / ---- (absent) and the calibrated
+//                           RSSI (" --" uncalibrated, "  ?" no reading)
+//   MIX BUF TV      SAVED   mode, latency, filter, and the saved settings (flash_store.v): SAVED (the
+//                           flash holds these settings), UNSAVED (changed; written SAVE_MS after the last
+//                           change), SAVE ERR (a write did not read back), DEFAULTS (no record in the
+//                           flash and nothing changed yet), blank until the start scan is over
+// Menu (row 0 double size: item and value; row 2: what the value means; row 3: what the buttons do):
+//   CH F4                   F4 5800 MHZ  SE OK        OK:NEXT  NEXT:CHANGE
+// The OSD shows the same characters in one size (osd_overlay.v).
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
 // register from vtx_channels.vh. The first write comes 0.5 s after reset, and
@@ -21,29 +34,24 @@
 // the other one "bad" (same input the decoder lock status uses).
 // Latency BUF shows the video through the SDRAM field buffer; LOW bypasses it
 // and locks the HDMI output to the input fields (fb_backend.v low-latency mode).
-//
-// Screen (rows 0-3):
-//   >BAND F   CH 4  5800        (exactly 21 characters per row)
-//    MODE MIX VIEW A  BUF     (BUF / LOW: latency mode)
-//    A LOCK  B NOSIG SCAN
-//    SE OK TV   HDMI FULL     (row 3: SE band, filter TV / VCR, HDMI FULL / LTD; "!SE" outside
-//                               5725-5875 MHz)
-// '>' marks the selected field (BAND, CH, MODE, BUF/LOW, TV/VCR, HDMI, column 0 of row 3 for the
-// page, SCAN).
+// SCAN (chan_scan.v) steps through all 48 channels and keeps the one where a decoder locks with
+// the lowest noise; any button aborts it on the channel it started from.
+// Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency,
+// filter and HDMI range in place (the filter as a request to the decoders, like NEXT on the filter).
 //
 // Meter page ("snow meter", self-interference / signal check):
-//   >METER   F4  5800
+//    METER   F4  5800
 //   A  12345 #######          mean line HF energy (snow) of receiver A over 1024 lines,
 //   B   2345 ####             bar = log2 (one block per doubling); "  ----" = no lines
 //    USE A 40 B 35 M 25       % of the last 1024 mixer decisions: A, B, blend
 //
 // RSSI page (rssi_adc.v; values of the last round, "-----" without a reading):
-//   >RSSI    F4  5800
+//    RSSI    F4  5800
 //   A 12345  45               raw code, calibrated % ("---" uncalibrated), LOW (below the
 //   B  4567   3  LOW WEAK     threshold N rounds in a row) and WEAK (the mixer avoids it);
 //                             the font has no % sign
-//   >CAL OFF  A OK  B --      calibration: NEXT turns it on, move the transmitter far and
-//                             near (or tune away and back), NEXT again; OK = range accepted.
+//   OK:CAL OFF  A OK B --     calibration: OK turns it on, move the transmitter far and near
+//                             (or tune away and back), OK again; OK = range accepted.
 //                             Leaving the page ends a calibration.
 `default_nettype none
 module puck_ui #(
@@ -53,6 +61,8 @@ module puck_ui #(
     parameter [2:0] DEF_CH = 3'd3,        // 4th channel -> F4 5800 MHz (legal in Sweden)
     parameter DEF_LOW_LAT = 0,            // start in the low-latency mode
     parameter OSD_MS = 5000,              // OSD visible this long after a button press
+    parameter MENU_MS = 15000,            // the menu returns to the flight view after this without a button
+    parameter HDMI_BUILD = 1,             // 0: the HDMI item says N/A (the DVI build ignores the range)
     parameter BAUD = 115200,
     parameter RX_FIRST_MS = 500,          // RX5808 channel write after reset, and its repeat while
     parameter RX_REPEAT_MS = 2000         // no decoder is locked (rx5808_tune.v)
@@ -80,22 +90,28 @@ module puck_ui #(
     input  wire [15:0] rssi_a, rssi_b,
     input  wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn,
     input  wire [6:0]  rssi_pct_a, rssi_pct_b,
-    output reg         rssi_cal,          // calibration mode (level), CAL field on the RSSI page
-    // saved settings (flash_store.v): one clock at start
+    output reg         rssi_cal,          // calibration mode (level), OK on the RSSI page
+    // saved settings (flash_store.v): one clock at start, and the state of the record for the screen
     input  wire        set_load,
     input  wire [2:0]  set_band, set_ch,
     input  wire [1:0]  set_mode,
     input  wire        set_low_lat, set_filter, set_hdmi,
+    input  wire        set_ready,         // the start scan is over (levels, this clock domain)
+    input  wire        set_dirty,         // the settings differ from the newest record
+    input  wire        set_stored,        // the flash holds a record
+    input  wire        set_err,           // a write did not read back
     output wire        scan_busy,
+    output reg         ch_hold,           // HOLD: band, channel and SCAN do not react (not saved)
     // mixer control
     output wire [1:0]  force_bad,         // [0] mark A bad, [1] mark B bad
     // RX5808
     output wire        rx_spi_clk, rx_spi_data,
     output wire [1:0]  rx_spi_sel_n,
-    // OLED text port
+    // OLED text port (ssd1306_text.v)
     input  wire [1:0]  text_row,
     input  wire [4:0]  text_col,
     output reg  [6:0]  text_char,
+    output wire [1:0]  text_big,          // row pair 0-1 double size (flight view, menu)
     // second text port for the video OSD (same text), and when to show it
     input  wire [1:0]  osd_row,
     input  wire [4:0]  osd_col,
@@ -108,16 +124,18 @@ module puck_ui #(
     output reg  [2:0]  band,
     output reg  [2:0]  ch,
     output reg  [1:0]  mode,              // 0 MIX, 1 A, 2 B
-    output reg  [2:0]  field,             // 0 band, 1 channel, 2 mode, 3 latency, 4 filter, 5 HDMI, 6 page,
-                                          // 7 SCAN (main page) / CAL (RSSI page)
-    output reg  [1:0]  page,              // 0 main, 1 meter, 2 RSSI
+    output reg  [2:0]  field,             // menu item: 0 BAND, 1 CH, 2 MODE, 3 LAT, 4 FILT, 5 HDMI, 6 SCAN, 7 HOLD
+    output reg  [1:0]  page,              // 0 flight view, 1 meter, 2 RSSI, 3 menu
     output reg         low_lat,           // 1 = low-latency video (no field buffer)
     output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
-    output reg         filter_changed,    // one-clock pulse for NEXT on the filter field and for set_load
+    output reg         filter_changed,    // one-clock pulse for NEXT on the filter item and for set_load
     output reg         hdmi_ltd           // 0 FULL (default), 1 LTD: HDMI limited range (tmds_link.v)
 );
     `include "vtx_channels.vh"
     localparam MS = CLK_HZ / 1000;
+    localparam [1:0] P_FLY = 2'd0, P_MET = 2'd1, P_RSSI = 2'd2, P_MENU = 2'd3;
+    localparam [2:0] F_BAND = 3'd0, F_CH = 3'd1, F_MODE = 3'd2, F_LAT = 3'd3, F_FILT = 3'd4, F_HDMI = 3'd5,
+                     F_SCAN = 3'd6, F_HOLD = 3'd7;
 
     // ---- buttons: sample every ms, accept a level after DEBOUNCE_MS equal samples
     reg [$clog2(MS+1)-1:0] tick_cnt;
@@ -170,45 +188,68 @@ module puck_ui #(
     wire [7:0]  band_letter = chan[40:33];
     wire [19:0] synth = chan[19:0];
 
-    // ---- channel scan (SCAN on the main page); any button during a scan aborts it
+    // ---- channel scan (SCAN in the menu); any button during a scan aborts it
     wire       scan_tune, scan_done, scan_found;
     wire [5:0] scan_idx;
     reg        scan_none;                                  // the last scan found nothing (until a button)
+    reg        scan_abort_d;                               // an abort was issued the clock before (its done)
     reg        new_na, new_nb;                             // a new noise value is in na / nb
     wire       ui_ok = ev_ok && !scan_busy, ui_next = ev_next && !scan_busy;
+    wire       item_blocked = ch_hold && (field == F_BAND || field == F_CH || field == F_SCAN);
     chan_scan #(.CLK_HZ(CLK_HZ)) scan (
-        .clk(clk), .rst(rst), .start(ui_next && field == 3'd7 && page == 2'd0),
+        .clk(clk), .rst(rst), .start(ui_next && page == P_MENU && field == F_SCAN && !ch_hold),
         .abort(scan_busy && (ev_ok || ev_next)), .cur_idx({band, ch}),
         .locked({sp1[1] && sl1[1], sp0[1] && sl0[1]}), .new_a(new_na), .new_b(new_nb), .noise_a(na), .noise_b(nb),
         .busy(scan_busy), .idx(scan_idx), .tune(scan_tune), .done(scan_done), .found(scan_found));
     always @(posedge clk) begin
-        if (scan_done && !scan_found) scan_none <= 1'b1;
+        scan_abort_d <= scan_busy && (ev_ok || ev_next);
+        if (scan_done && !scan_found && !scan_abort_d) scan_none <= 1'b1;
         else if (ev_ok || ev_next) scan_none <= 1'b0;
-        if (rst) scan_none <= 1'b0;
+        if (rst) begin scan_none <= 1'b0; scan_abort_d <= 1'b0; end
     end
+
+    // the menu returns to the flight view MENU_MS after the last button (a scan holds it)
+    reg [$clog2(MENU_MS+1)-1:0] menu_ms;
+    always @(posedge clk) begin
+        if (page != P_MENU || scan_busy || ev_ok || ev_next) menu_ms <= MENU_MS;
+        else if (tick && menu_ms != 0) menu_ms <= menu_ms - 1'b1;
+        if (rst) menu_ms <= MENU_MS;
+    end
+    wire menu_timeout = (page == P_MENU) && (menu_ms == 0) && !scan_busy;
 
     always @(posedge clk) begin
         filter_changed <= 1'b0;
-        if (ui_ok) field <= (field == ((page == 2'd1) ? 3'd6 : 3'd7)) ? 3'd0 : field + 1'b1;
-        if (ui_next) case (field)
-            3'd0: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
-            3'd1: ch <= ch + 1'b1;                                              // 3 bits wrap 8 -> 1
-            3'd2: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
-            3'd3: low_lat <= ~low_lat;
-            3'd4: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
-            3'd5: hdmi_ltd <= ~hdmi_ltd;
-            3'd6: page <= (page == 2'd2) ? 2'd0 : page + 1'b1;
-            default: if (page == 2'd2) rssi_cal <= ~rssi_cal;  // 7; on the main page: SCAN (chan_scan above)
+        if (menu_timeout) page <= P_FLY;
+        if (ui_ok) case (page)
+            P_FLY, P_MET: begin page <= P_MENU; field <= F_BAND; end
+            P_RSSI:       rssi_cal <= ~rssi_cal;
+            default:      if (field == F_HOLD) page <= P_FLY; else field <= field + 1'b1;
+        endcase
+        if (ui_next) case (page)
+            P_FLY:  page <= P_MET;
+            P_MET:  page <= P_RSSI;
+            P_RSSI: page <= P_FLY;
+            default: if (!item_blocked) case (field)
+                F_BAND: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
+                F_CH:   ch <= ch + 1'b1;                                        // 3 bits wrap 8 -> 1
+                F_MODE: mode <= (mode == 2'd2) ? 2'd0 : mode + 1'b1;
+                F_LAT:  low_lat <= ~low_lat;
+                F_FILT: begin filter_vcr <= ~filter_vcr; filter_changed <= 1'b1; end
+                F_HDMI: if (HDMI_BUILD != 0) hdmi_ltd <= ~hdmi_ltd;
+                F_HOLD: ch_hold <= ~ch_hold;
+                default: ;                                                      // SCAN: chan_scan above
+            endcase
         endcase
         if (scan_tune) {band, ch} <= scan_idx;
-        if (page != 2'd2) rssi_cal <= 1'b0;                // leaving the RSSI page ends a calibration
+        if (scan_done && scan_found) page <= P_FLY;        // the picture on the channel it found
+        if (page != P_RSSI) rssi_cal <= 1'b0;              // leaving the RSSI page ends a calibration
         if (set_load) begin
             band <= set_band; ch <= set_ch; mode <= (set_mode == 2'd3) ? 2'd0 : set_mode;
             low_lat <= set_low_lat; filter_vcr <= set_filter; filter_changed <= 1'b1; hdmi_ltd <= set_hdmi;
         end
         if (rst) begin
-            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= 3'd0; page <= 2'd0; rssi_cal <= 1'b0;
-            low_lat <= DEF_LOW_LAT[0];
+            band <= DEF_BAND; ch <= DEF_CH; mode <= 2'd0; field <= F_BAND; page <= P_FLY; rssi_cal <= 1'b0;
+            low_lat <= DEF_LOW_LAT[0]; ch_hold <= 1'b0;
             filter_vcr <= 1'b0; filter_changed <= 1'b0; hdmi_ltd <= 1'b0;
         end
     end
@@ -226,7 +267,7 @@ module puck_ui #(
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
     //      (band/ch change on the clock after ev_next, chan one clock later: write_now is delayed one
     //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
-    wire chan_step  = (ui_next && (field == 3'd0 || field == 3'd1)) || scan_tune;
+    wire chan_step  = (ui_next && page == P_MENU && !item_blocked && (field == F_BAND || field == F_CH)) || scan_tune;
     reg  chan_step_d;
     always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
@@ -341,71 +382,106 @@ module puck_ui #(
         end
     endfunction
 
-    // ---- text
+    // ---- text: 21 characters per row, leftmost character in the top byte; a double-size row has 10
+    //      and the row under it is not drawn (the OSD shows its blank row)
     function [7:0] dig(input [3:0] d); dig = 8'h30 + d; endfunction
-    wire [3:0] f_th = fbcd[15:12], f_h = fbcd[11:8], f_t = fbcd[7:4], f_u = fbcd[3:0];   // see "state"
-    wire [7:0] m_sel = (field == 3'd0) ? ">" : " ";
-    wire [7:0] m_ch  = (field == 3'd1) ? ">" : " ";
-    wire [7:0] m_mod = (field == 3'd2) ? ">" : " ";
-    wire [7:0] m_lat = (field == 3'd3) ? ">" : " ";
-    wire [7:0] m_filter = (field == 3'd4) ? ">" : " ";
-    wire [7:0] m_hdmi = (field == 3'd5) ? ">" : " ";
+    wire [3:0]  f_th = fbcd[15:12], f_h = fbcd[11:8], f_t = fbcd[7:4], f_u = fbcd[3:0];   // see "state"
+    wire [31:0] mhz = {dig(f_th), dig(f_h), dig(f_t), dig(f_u)};
+    wire [7:0]  ch_dig = dig({1'b0, ch} + 4'd1);
     wire [23:0] mode_s = (mode == 2'd0) ? "MIX" : (mode == 2'd1) ? "A  " : "B  ";
     function [39:0] dec_s(input present, input locked);
         dec_s = !present ? "---- " : locked ? "LOCK " : "NOSIG";
     endfunction
-    // 21 characters per row, leftmost character in the top byte
-    wire [167:0] row0 = {m_sel, "BAND ", band_letter, "  ", m_ch, "CH ", dig({1'b0, ch} + 4'd1), "  ",
-                         dig(f_th), dig(f_h), dig(f_t), dig(f_u), " "};
-    wire [167:0] row1 = {m_mod, "MODE ", mode_s, " VIEW ", sv[1] ? "B" : "A", " ", m_lat, low_lat ? "LOW" : "BUF"};
-    wire [7:0]   m_scan = (field == 3'd7) ? ">" : " ";
-    wire [167:0] row2 = {" A ", dec_s(sp0[1], sl0[1]), " B ", dec_s(sp1[1], sl1[1]), m_scan,
-                         scan_busy ? "BUSY" : scan_none ? "NONE" : "SCAN"};
-    wire [7:0] m_pg  = (field == 3'd6) ? ">" : " ";
-    // SE band (5 characters), filter (4), HDMI range (9), each value after its field marker
-    wire [167:0] row3 = {m_pg, legal ? "SE OK" : "!SE  ", m_filter, filter_vcr ? "VCR " : "TV  ",
-                         m_hdmi, hdmi_ltd ? "HDMI LTD " : "HDMI FULL"};
+    function [23:0] pct3(input valid, input cal_ok, input [11:0] b);   // calibrated RSSI, 3 characters
+        pct3 = !valid ? "  ?" : !cal_ok ? " --" : num3(b);
+    endfunction
+    // the saved settings (flash_store.v), 9 characters, right-aligned
+    wire [71:0] save_s = !set_ready ? "         " : set_err ? " SAVE ERR" : set_dirty ? "  UNSAVED"
+                       : set_stored ? "    SAVED" : " DEFAULTS";
+    // flight view
+    wire [167:0] frow0 = {band_letter, ch_dig, " ", mhz, " ", legal ? " " : "!", ch_hold ? "@" : " ", {11{8'h20}}};
+    wire [167:0] blank = {21{8'h20}};
+    wire [167:0] frow2 = {"A:", dec_s(sp0[1], sl0[1]), pct3(rssi_valid[0], rssi_cal_ok[0], bcd_pa), " ",
+                          "B:", dec_s(sp1[1], sl1[1]), pct3(rssi_valid[1], rssi_cal_ok[1], bcd_pb)};
+    wire [167:0] frow3 = {mode_s, " ", low_lat ? "LOW" : "BUF", " ", filter_vcr ? "VCR" : "TV ", " ", save_s};
+    // menu: one item per screen
+    wire [167:0] chan_s = {band_letter, ch_dig, " ", mhz, " MHZ  ", legal ? "SE OK" : "!SE  ", "   "};
+    reg  [79:0]  mbig;
+    reg  [167:0] mrow2, mrow3;
+    always @* begin
+        mrow3 = (field == F_HOLD) ? "OK:EXIT  NEXT:CHANGE " : "OK:NEXT  NEXT:CHANGE ";
+        case (field)
+            F_BAND: begin mbig = {"BAND ", band_letter, "    "}; mrow2 = chan_s; end
+            F_CH:   begin mbig = {"CH ", band_letter, ch_dig, "     "}; mrow2 = chan_s; end
+            F_MODE: begin
+                mbig = {"MODE ", mode_s, "  "};
+                mrow2 = (mode == 2'd0) ? "MIX: BOTH RECEIVERS  " : (mode == 2'd1) ? "A: RECEIVER A ONLY   "
+                      : "B: RECEIVER B ONLY   ";
+            end
+            F_LAT:  begin
+                mbig = {"LAT ", low_lat ? "LOW" : "BUF", "   "};
+                mrow2 = low_lat ? "LOW: FOLLOWS INPUT   " : "BUF: STEADY TIMING   ";
+            end
+            F_FILT: begin mbig = {"FILT ", filter_vcr ? "VCR" : "TV ", "  "}; mrow2 = "DECODER MODE REQUEST "; end
+            F_HDMI: begin
+                mbig = {"HDMI ", (HDMI_BUILD == 0) ? "N/A  " : hdmi_ltd ? "LTD  " : "FULL "};
+                mrow2 = (HDMI_BUILD == 0) ? "DVI BUILD: NO EFFECT " : hdmi_ltd ? "RGB 16-235 LIMITED   "
+                      : "RGB 0-255 FULL       ";
+                if (HDMI_BUILD == 0) mrow3 = "OK:NEXT  DVI BUILD   ";
+            end
+            F_SCAN: begin
+                mbig = scan_busy ? "SCANNING  " : scan_none ? "SCAN NONE " : "SCAN      ";
+                mrow2 = scan_busy ? {"TRYING ", band_letter, ch_dig, " ", mhz, " MHZ   "}
+                      : scan_none ? "NO LOCKED CHANNEL    " : "SEARCH 48 CHANNELS   ";
+                mrow3 = scan_busy ? "ANY BUTTON ABORTS    " : "OK:NEXT  NEXT:START  ";
+            end
+            default: begin mbig = {"HOLD ", ch_hold ? "ON " : "OFF", "  "}; mrow2 = "ON: LOCKS CH AND SCAN"; end
+        endcase
+        if (item_blocked && !scan_busy) mrow3 = "OK:NEXT  HOLD IS ON  ";
+    end
+    wire [167:0] mrow0 = {mbig, {11{8'h20}}};
     // meter page
-    wire [167:0] mrow0 = {m_pg, "METER   ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
-                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
-    wire [167:0] mrow1 = {"A ", num6(bcd_a, stale_a), " ", bar(stale_a ? 4'd0 : bar_len(va))};
-    wire [167:0] mrow2 = {"B ", num6(bcd_b, stale_b), " ", bar(stale_b ? 4'd0 : bar_len(vb))};
-    wire [167:0] mrow3 = {" USE A", num3(bcd_ua), " B", num3(bcd_ub), " M", num3(bcd_um), "  "};
+    wire [167:0] trow0 = {" METER   ", band_letter, ch_dig, "  ", mhz, "    "};
+    wire [167:0] trow1 = {"A ", num6(bcd_a, stale_a), " ", bar(stale_a ? 4'd0 : bar_len(va))};
+    wire [167:0] trow2 = {"B ", num6(bcd_b, stale_b), " ", bar(stale_b ? 4'd0 : bar_len(vb))};
+    wire [167:0] trow3 = {" USE A", num3(bcd_ua), " B", num3(bcd_ub), " M", num3(bcd_um), "  "};
     // RSSI page
-    wire [7:0]   m_cal = (field == 3'd7) ? ">" : " ";
-    wire [167:0] rrow0 = {m_pg, "RSSI    ", band_letter, dig({1'b0, ch} + 4'd1), "  ",
-                          dig(f_th), dig(f_h), dig(f_t), dig(f_u), "    "};
+    wire [167:0] rrow0 = {" RSSI    ", band_letter, ch_dig, "  ", mhz, "    "};
     wire [167:0] rrow1 = {"A ", num5(bcd_ra, !rssi_valid[0]), " ", rssi_cal_ok[0] ? num3(bcd_pa) : "---", "  ",
                           rssi_low[0] ? "LOW " : "    ", rssi_warn[0] ? "WEAK" : "    "};
     wire [167:0] rrow2 = {"B ", num5(bcd_rb, !rssi_valid[1]), " ", rssi_cal_ok[1] ? num3(bcd_pb) : "---", "  ",
                           rssi_low[1] ? "LOW " : "    ", rssi_warn[1] ? "WEAK" : "    "};
-    wire [167:0] rrow3 = {m_cal, "CAL ", rssi_cal ? "ON " : "OFF", "  A ", rssi_cal_ok[0] ? "OK" : "--",
-                          "  B ", rssi_cal_ok[1] ? "OK" : "--", " "};
-    reg [167:0] row_sel;
+    wire [167:0] rrow3 = {"OK:CAL ", rssi_cal ? "ON " : "OFF", "  A ", rssi_cal_ok[0] ? "OK" : "--",
+                          " B ", rssi_cal_ok[1] ? "OK" : "--"};
+    // (two always blocks, not a function: a function reading the row wires would only be re-evaluated
+    // in simulation when its arguments change, and the OSD port's row changes rarely)
+    reg [167:0] row_sel, osd_sel;
     always @* case ({page, text_row})
-        4'd0: row_sel = row0; 4'd1: row_sel = row1; 4'd2: row_sel = row2; 4'd3: row_sel = row3;
-        4'd4: row_sel = mrow0; 4'd5: row_sel = mrow1; 4'd6: row_sel = mrow2; 4'd7: row_sel = mrow3;
-        4'd8: row_sel = rrow0; 4'd9: row_sel = rrow1; 4'd10: row_sel = rrow2; default: row_sel = rrow3;
+        4'd0: row_sel = frow0; 4'd1: row_sel = blank; 4'd2: row_sel = frow2; 4'd3: row_sel = frow3;
+        4'd4: row_sel = trow0; 4'd5: row_sel = trow1; 4'd6: row_sel = trow2; 4'd7: row_sel = trow3;
+        4'd8: row_sel = rrow0; 4'd9: row_sel = rrow1; 4'd10: row_sel = rrow2; 4'd11: row_sel = rrow3;
+        4'd12: row_sel = mrow0; 4'd13: row_sel = blank; 4'd14: row_sel = mrow2; default: row_sel = mrow3;
     endcase
-    always @(posedge clk)
-        text_char <= (text_col < 5'd21) ? row_sel[(20 - text_col) * 8 +: 7] : 7'h20;
-    reg [167:0] osd_sel;
     always @* case ({page, osd_row})
-        4'd0: osd_sel = row0; 4'd1: osd_sel = row1; 4'd2: osd_sel = row2; 4'd3: osd_sel = row3;
-        4'd4: osd_sel = mrow0; 4'd5: osd_sel = mrow1; 4'd6: osd_sel = mrow2; 4'd7: osd_sel = mrow3;
-        4'd8: osd_sel = rrow0; 4'd9: osd_sel = rrow1; 4'd10: osd_sel = rrow2; default: osd_sel = rrow3;
+        4'd0: osd_sel = frow0; 4'd1: osd_sel = blank; 4'd2: osd_sel = frow2; 4'd3: osd_sel = frow3;
+        4'd4: osd_sel = trow0; 4'd5: osd_sel = trow1; 4'd6: osd_sel = trow2; 4'd7: osd_sel = trow3;
+        4'd8: osd_sel = rrow0; 4'd9: osd_sel = rrow1; 4'd10: osd_sel = rrow2; 4'd11: osd_sel = rrow3;
+        4'd12: osd_sel = mrow0; 4'd13: osd_sel = blank; 4'd14: osd_sel = mrow2; default: osd_sel = mrow3;
     endcase
-    always @(posedge clk)
+    always @(posedge clk) begin
+        text_char <= (text_col < 5'd21) ? row_sel[(20 - text_col) * 8 +: 7] : 7'h20;
         osd_char <= (osd_col < 5'd21) ? osd_sel[(20 - osd_col) * 8 +: 7] : 7'h20;
+    end
+    assign text_big = {1'b0, (page == P_FLY) || (page == P_MENU)};
 
-    // ---- OSD visibility: OSD_MS after any button event, always on the meter and RSSI pages
+    // ---- OSD visibility: OSD_MS after any button event, always on the information pages and in the menu
     reg [$clog2(OSD_MS+1)-1:0] osd_ms;
     always @(posedge clk) begin
         if (ev_ok || ev_next) osd_ms <= OSD_MS;
         else if (tick && osd_ms != 0) osd_ms <= osd_ms - 1'b1;
         if (rst) osd_ms <= OSD_MS;                         // show briefly after power-up
     end
-    assign osd_show = (osd_ms != 0) || (page != 2'd0);
+    assign osd_show = (osd_ms != 0) || (page != P_FLY);
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
     //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V F/L o ll rrrrr sssss pa_ pb_ ww\r\n"
@@ -455,8 +531,7 @@ module puck_ui #(
     localparam LOG_LEN = 87;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
-                             z3(bcd_um), " ", band_letter, dig({1'b0, ch} + 4'd1), " ",
-                             dig(f_th), dig(f_h), dig(f_t), dig(f_u), " ", mode_s, " ",
+                             z3(bcd_um), " ", band_letter, ch_dig, " ", mhz, " ", mode_s, " ",
                              filter_vcr ? "V" : "T", " ", hdmi_ltd ? "L" : "F", " ", ovf_s[1] ? "!" : "-", " ",
                              ll_char(ll_round[0], ll_lost[0]), ll_char(ll_round[1], ll_lost[1]), " ",
                              z5(bcd_ra, !rssi_valid[0]), " ", z5(bcd_rb, !rssi_valid[1]), " ",

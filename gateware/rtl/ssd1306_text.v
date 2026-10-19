@@ -2,6 +2,10 @@
 // 6-pixel cells). No frame buffer: each column byte is generated from the
 // character at (row, col) supplied by the user through text_row/text_col ->
 // text_char (read one clock after the address is presented).
+// text_big[k] draws row pair k (rows 0-1, 2-3) as one double-size row: 10 cells of
+// 12 pixels, every glyph column and row twice, the top page with glyph rows 0-3 and
+// the bottom page with rows 4-6; both pages ask for the pair's top row (text_row
+// 0 or 2, text_col 0..9). Reference: model/oled_ref.py.
 //
 // Sequence: wait POWER_MS, send the init commands, then refresh forever
 // (column 0-127, page 0-3, 512 data bytes in horizontal addressing mode).
@@ -29,6 +33,7 @@ module ssd1306_text #(
     output reg  [1:0] text_row,
     output reg  [4:0] text_col,
     input  wire [6:0] text_char,
+    input  wire [1:0] text_big,          // row pair 0-1 / 2-3 drawn double size
     output reg        frame_done,         // pulse after each full refresh
     output reg        nack_error,         // sticky: display did not acknowledge
     output wire       active              // a transfer is starting or running (other masters wait)
@@ -74,9 +79,17 @@ module ssd1306_text #(
     reg [31:0] t;
     reg [1:0]  phase;                     // 0 init, 1 window setup, 2 data
     reg [4:0]  idx;
-    reg [2:0]  cx;                        // column inside the 6-pixel cell
+    reg [1:0]  pg;                        // page 0..3 being drawn (text_row is its text row)
+    reg [3:0]  cx;                        // column inside the cell (6 pixels, 12 double size)
     reg [6:0]  px;                        // pixel column 0..127
     reg [1:0]  free_cnt;
+    wire       big  = text_big[pg[1]];
+    wire [2:0] gcol = big ? cx[3:1] : cx[2:0];
+    wire [1:0] pg_n = pg + 1'b1;
+    wire [7:0] glyph = (gcol < 3'd5 && text_col < (big ? 5'd10 : 5'd21)) ? font5x7(text_char, gcol) : 8'h00;
+    wire [7:0] gbyte = !big ? glyph
+                     : !pg[0] ? {glyph[3], glyph[3], glyph[2], glyph[2], glyph[1], glyph[1], glyph[0], glyph[0]}
+                     : {2'b00, glyph[6], glyph[6], glyph[5], glyph[5], glyph[4], glyph[4]};
 
     always @(posedge clk) begin
         start <= 1'b0;
@@ -92,7 +105,7 @@ module ssd1306_text #(
             else begin ctrl <= 8'h40; st <= S_FONT; end            // text_row/col already set
         end
         S_FONT: begin                     // text_char valid one clock after the address
-            byte_out <= (cx < 3'd5 && text_col < 5'd21) ? font5x7(text_char, cx) : 8'h00;
+            byte_out <= gbyte;
             st <= S_REQ;
         end
         S_REQ: begin hold_other <= 1'b1; free_cnt <= 0; st <= S_GO; end
@@ -109,16 +122,16 @@ module ssd1306_text #(
                 if (idx == N_INIT - 1) begin phase <= 2'd1; idx <= 0; end else idx <= idx + 1'b1;
             end else if (phase == 2'd1) begin
                 if (idx == N_SETUP - 1) begin
-                    phase <= 2'd2; px <= 0; cx <= 0; text_row <= 0; text_col <= 0;
+                    phase <= 2'd2; px <= 0; cx <= 0; pg <= 0; text_row <= 0; text_col <= 0;
                 end else idx <= idx + 1'b1;
             end else begin
                 if (px == 7'd127) begin
                     px <= 0; cx <= 0; text_col <= 0;
-                    if (text_row == 2'd3) begin text_row <= 0; frame_done <= 1'b1; phase <= 2'd1; idx <= 0; end
-                    else text_row <= text_row + 1'b1;
+                    if (pg == 2'd3) begin pg <= 0; text_row <= 0; frame_done <= 1'b1; phase <= 2'd1; idx <= 0; end
+                    else begin pg <= pg_n; text_row <= text_big[pg_n[1]] ? {pg_n[1], 1'b0} : pg_n; end
                 end else begin
                     px <= px + 1'b1;
-                    if (cx == 3'd5) begin cx <= 0; text_col <= text_col + 1'b1; end
+                    if (cx == (big ? 4'd11 : 4'd5)) begin cx <= 0; text_col <= text_col + 1'b1; end
                     else cx <= cx + 1'b1;
                 end
             end
@@ -131,7 +144,7 @@ module ssd1306_text #(
         endcase
         if (rst) begin
             st <= S_POWER; t <= 0; hold_other <= 1'b0; start <= 1'b0; nack_error <= 1'b0;
-            text_row <= 0; text_col <= 0; cx <= 0; px <= 0; phase <= 0; idx <= 0; frame_done <= 1'b0;
+            text_row <= 0; text_col <= 0; cx <= 0; px <= 0; pg <= 0; phase <= 0; idx <= 0; frame_done <= 1'b0;
         end
     end
 endmodule

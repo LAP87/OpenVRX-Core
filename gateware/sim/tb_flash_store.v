@@ -3,6 +3,7 @@
 // t_ms; a loaded record replaces them, as in the menu. The run ends END_MS after start; the flash is dumped to mem_out.hex. Prints
 //   LOAD <payload> <seq>   when the start scan loads a record
 //   READY <t_ms>           when the start scan is over
+//   STATUS <t_us> <dirty> <stored>   when either changes (the menu's save status)
 //   END <programs> <erases> <dirty programs> <blocked> <err> <seq>
 // Driven by sim/test_flash_store.py.
 `timescale 1ns/1ps
@@ -14,19 +15,24 @@ module tb_flash_store;
 
     reg clk = 0, rst = 1;
     always #125 clk = ~clk;
-    wire cs_n, sck, mosi, miso, wp_drive, load, ready, err;
+    wire cs_n, sck, mosi, miso, wp_drive, load, ready, err, dirty, stored;
     wire [79:0] loaded;
     wire [15:0] seq;
     reg  [79:0] cur = 80'h0;
     wire wp_n = wp_drive ? 1'b1 : 1'bz;
     flash_store #(.CLK_HZ(CLK_HZ), .SAVE_MS(SAVE_MS)) dut (
         .clk(clk), .rst(rst), .flash_cs_n(cs_n), .flash_clk(sck), .flash_mosi(mosi), .flash_miso(miso),
-        .flash_wp_drive(wp_drive), .cur(cur), .loaded(loaded), .load(load), .ready(ready), .err(err), .seq(seq));
+        .flash_wp_drive(wp_drive), .cur(cur), .loaded(loaded), .load(load), .ready(ready), .err(err), .dirty(dirty), .stored(stored),
+        .seq(seq));
     spi_flash_model #(.LOAD(1)) flash (.cs_n(cs_n), .clk(sck), .mosi(mosi), .miso(miso), .wp_n(wp_n));
 
     always @(posedge clk) if (load) begin $display("LOAD %020x %0d", loaded, seq); cur <= loaded; end   // the menu takes it
-    reg ready_d = 0;
-    always @(posedge clk) begin ready_d <= ready; if (ready && !ready_d) $display("READY %0d", $time / 1_000_000); end
+    reg ready_d = 0, dirty_d = 0, stored_d = 0;
+    always @(posedge clk) begin
+        ready_d <= ready; dirty_d <= dirty; stored_d <= stored;
+        if (ready && !ready_d) $display("READY %0d", $time / 1_000_000);
+        if (!rst && (dirty !== dirty_d || stored !== stored_d)) $display("STATUS %0d %0d %0d", $time / 1_000, dirty, stored);
+    end
 
     integer fs, n, t_ms;
     reg [79:0] v;

@@ -49,10 +49,15 @@ MUTANTS = {
     'no_erase': [("prog_phase <= !need_erase; st <= S_CRC;", "prog_phase <= 1'b1; st <= S_CRC;")],
     'no_wait': [("            else if (t != SAVE_MS * MS) t <= t + 1;\n", "")],
     'no_wp': [("if (pos[3:0] == 4'd15) begin pos <= 0; flash_wp_drive <= 1'b1;", "if (pos[3:0] == 4'd15) begin pos <= 0;")],
+    # the save status (2026-10-19): dirty only while writing, dirty without the write in progress, stored never
+    'dirty_late': [("dirty <= ready && (cur != saved || writing);", "dirty <= ready && writing;")],
+    'dirty_not_writing': [("dirty <= ready && (cur != saved || writing);", "dirty <= ready && (cur != saved);")],
+    'stored_never': [("if ((st == S_SCAN_END && have) || st == S_DONE) stored <= 1'b1;", "")],
 }
+STATUS_MUTANTS = ('dirty_late', 'dirty_not_writing', 'stored_never')
 
 
-def run(name, mem, sched, end_ms=1500, mutant=None):
+def run(name, mem, sched, end_ms=1500, mutant=None, status=False):
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
@@ -74,6 +79,10 @@ def run(name, mem, sched, end_ms=1500, mutant=None):
     ready = next(int(l.split()[1]) for l in log.splitlines() if l.startswith('READY'))
     end = next(tuple(int(x) for x in l.split()[1:]) for l in log.splitlines() if l.startswith('END'))
     out = bytes(int(x, 16) for x in (work / 'mem_out.hex').read_text().split())
+    if status:
+        st = [tuple(int(x) for x in l.split()[1:]) for l in log.splitlines()
+              if l.startswith('STATUS') and 'x' not in l]
+        return loads, end, out, ready, st
     return loads, end, out, ready
 
 
@@ -247,7 +256,74 @@ def test_record_outside_the_menu_is_not_loaded():
     assert loads == [(GOOD, 19)], loads
 
 
-@pytest.mark.parametrize('mutant', sorted(MUTANTS))
+def status_states(st):
+    """The (t_us, dirty, stored) states that last at least 50 us (the clocks between a load and the
+    menu taking it, and the clock between stored rising and dirty falling, are dropped), merged."""
+    kept = [(t, d, s) for k, (t, d, s) in enumerate(st) if k + 1 == len(st) or st[k + 1][0] - t >= 50]
+    out, state = [], (0, 0)
+    for t, d, s in kept:
+        if (d, s) != state:
+            out.append((t, d, s))
+            state = (d, s)
+    return out
+
+
+def check_status(st, sched, ready, loaded):
+    """The save status against the schedule: stored from the start when a record loaded, else from
+    the first write (and then while the write still counts as dirty); dirty within 2 ms of every
+    standing change and for at least SAVE_MS, never otherwise."""
+    rises, falls, stored_at, d_prev = [], [], None, 0
+    for t, d, s in status_states(st):
+        if d and not d_prev:
+            rises.append(t)
+        if d_prev and not d:
+            falls.append(t)
+        d_prev = d
+        if s and stored_at is None:
+            stored_at = t
+    changes = [t for t, _ in sched if t > ready]
+    assert len(rises) == len(changes) == len(falls), (rises, falls, changes)
+    for t_ms, rise, fall in zip(changes, rises, falls):
+        assert 0 <= rise - t_ms * 1000 <= 2000, (t_ms, rise)
+        assert fall - rise >= SAVE_MS * 1000, (rise, fall)
+    if loaded:
+        assert stored_at is not None and stored_at <= (ready + 1) * 1000, (stored_at, ready)
+    else:
+        assert (stored_at is None) == (not changes), (stored_at, changes)
+        if changes:
+            assert stored_at > rises[0]
+            first = next(c for c in st if c[2] == 1)                      # the raw print: the S_DONE clock
+            assert first[1] == 1, 'stored rises while the write still counts as dirty'
+
+
+STATUS_CASES = {
+    'empty': (EMPTY, [(0, P1), (300, P2), (700, P3)], False),
+    'record': (image([(0, 7, P2, True)]), [(0, P1), (300, P3)], True),
+    'unchanged': (image([(0, 7, P2, True)]), [(0, P1)], True),
+}
+
+
+@pytest.mark.parametrize('case', sorted(STATUS_CASES))
+def test_save_status_follows_the_record(case):
+    """dirty / stored (2026-10-19, the menu's SAVED / UNSAVED / DEFAULTS): with an empty flash
+    nothing is stored until the first write; a change makes the settings dirty at once and the
+    write SAVE_MS later clears it only after the read-back; a loaded record is stored from the start."""
+    mem, sched, loaded = STATUS_CASES[case]
+    loads, end, out, ready, st = run(f'tb_flash_store_status_{case}', mem, sched, end_ms=1100, status=True)
+    assert end[4] == 0 and (len(loads) == 1) == loaded
+    check_status(st, sched, ready, loaded)
+
+
+@pytest.mark.parametrize('mutant', STATUS_MUTANTS)
+def test_save_status_negative_control(mutant):
+    case = 'record' if mutant == 'stored_never' else 'empty'
+    mem, sched, loaded = STATUS_CASES[case]
+    loads, end, out, ready, st = run(f'tb_flash_store_{mutant}', mem, sched, end_ms=1100, mutant=mutant, status=True)
+    with pytest.raises(AssertionError):
+        check_status(st, sched, ready, loaded)
+
+
+@pytest.mark.parametrize('mutant', sorted(set(MUTANTS) - set(STATUS_MUTANTS)))
 def test_flash_store_negative_control(mutant):
     if mutant == 'no_zero_count':
         full, images = interrupted_erase_images()

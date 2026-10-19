@@ -46,7 +46,7 @@ module tb_rssi_adc;
     ssd1306_text #(.CLK_HZ(CLK_HZ), .POWER_MS(1)) oled (
         .clk(clk), .rst(rst), .scl_low(scl_o), .sda_low(sda_o), .scl_in(scl), .sda_in(sda),
         .hold_other(oled_hold), .other_active(tvp_active | rssi_hold | rssi_active),
-        .text_row(trow), .text_col(tcol), .text_char(7'h41), .frame_done(frame_done), .nack_error(),
+        .text_row(trow), .text_col(tcol), .text_big(2'b00), .text_char(7'h41), .frame_done(frame_done), .nack_error(),
         .active(oled_active));
     rssi_adc #(.CLK_HZ(CLK_HZ), .PERIOD_US(PERIOD_US), .CONV_US(CONV_US)) dut (
         .clk(clk), .rst(rst), .scl_low(scl_r), .sda_low(sda_r), .scl_in(scl), .sda_in(sda),

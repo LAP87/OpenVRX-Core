@@ -73,7 +73,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
 | M2a | `m2a_memtest` | bara Tang + USB | en ren läspunkt `rs=5` (avsnitt 2.1) |
 | M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
-| M6 | `m6_puck_proto` | + OLED, knappar | menyn på OLED och OSD, kanalbyte fungerar, filterfältet växlar `TV`/`VCR` och HDMI-fältet `FULL`/`LTD`, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott (2.3) |
+| M6 | `m6_puck_proto` | + OLED, knappar | flygvyn och menyn på OLED och OSD, kanalbyte fungerar, posten `FILT` växlar `TV`/`VCR` och `HDMI` `FULL`/`LTD`, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott och flygvyn säger `SAVED` (2.3) |
 
 ```bash
 gateware/build.sh m3_probe
@@ -119,14 +119,16 @@ python gateware/tools/snowlog.py --summary filt.csv
 
 Allt här är simulerat (`sim/test_chan_scan.py`, `sim/test_rssi_adc.py`, `sim/test_flash_store.py`, `sim/test_puck_ui.py`); inget är provat på kortet. **Första hårdvaruprovet är de sparade inställningarna med bara Tang-kortet** (navets `docs/MATPROTOKOLL.md`, blad 19): M6 i flash och en HDMI-skärm eller OLED:en, inga dekodrar. `SCAN` (blad 18) kräver mottagare, dekodrar och en sändare; `CAL` (blad 17) dessutom rev A-kortets ADS1115.
 
-**Menyn.** OK flyttar markeringen `>` ett fält, NEXT ändrar det markerade fältet.
+**Menyn** (sedan 2026-10-19, navets `docs/UI_FLYGVY_2026-10-19.md`). Skärmen startar i flygvyn: kanalen dubbelhögt, dekoderstatus och RSSI per mottagare, mixläge/latens/filter och sparstatus. OK öppnar menyn, som visar en post per skärm: OK går till nästa post (efter `HOLD` tillbaka till flygvyn), NEXT ändrar posten, 15 s utan knapp ger flygvyn igen. NEXT i flygvyn bläddrar mätare → RSSI → flygvy.
 
 | Funktion | Var | Gör så här | Vad som händer |
 |---|---|---|---|
-| Filtret | huvudsidan, femte fältet | OK tills `>` står före `TV` eller `VCR`, NEXT växlar | avsnitt 2.2 |
-| `HDMI` | huvudsidan, sjätte fältet | OK tills `>` står före `HDMI`, NEXT växlar `FULL`/`LTD` | avsnitt 2.2; gör något bara i HDMI-bygget |
-| `SCAN` | huvudsidan, åttonde fältet | OK tills `>` står före `SCAN`, NEXT startar | Rad 2 visar `BUSY` och rad 1 kanalen som provas, 100–160 ms per kanal, 5–8 s för alla 48. Sedan står den kanal där en dekoder låste med lägst brus. Låste ingen står startkanalen kvar och rad 2 visar `NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen |
-| `CAL` | RSSI-sidan (sidfältet: huvud → mätare → RSSI), åttonde fältet | OK tills `>` står före `CAL`, NEXT slår på; flytta sändaren nära och långt bort, eller stäng av den; NEXT stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan avslutar kalibreringen |
+| Filtret | menyn, femte posten `FILT` | OK från flygvyn fem gånger (`BAND`, `CH`, `MODE`, `LAT`, `FILT`), NEXT växlar `TV`/`VCR` | avsnitt 2.2 |
+| `HDMI` | menyn, sjätte posten | OK en gång till, NEXT växlar `FULL`/`LTD` | avsnitt 2.2; i DVI-bygget står `HDMI N/A` och NEXT gör inget |
+| `SCAN` | menyn, sjunde posten | OK en gång till, NEXT startar | Skärmen visar `SCANNING`, kanalen som provas och `ANY BUTTON ABORTS`; 100–160 ms per kanal, 5–8 s för alla 48. Hittas en kanal där en dekoder låste med lägst brus slutar menyn i flygvyn med den. Låste ingen står startkanalen kvar och skärmen visar `SCAN NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen. Med `HOLD` på startar ingen skanning |
+| `HOLD` | menyn, åttonde posten | OK en gång till, NEXT växlar OFF/ON; OK igen ger flygvyn | ON: `BAND`, `CH` och `SCAN` reagerar inte, flygvyn visar ett hänglås. Sparas inte; av efter start |
+| `CAL` | RSSI-sidan (NEXT två gånger i flygvyn) | OK slår på; flytta sändaren nära och långt bort, eller stäng av den; OK stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan (NEXT) avslutar kalibreringen |
+| Sparstatus | flygvyn, rad 4 | | `SAVED` när flashen har en post med just de här inställningarna, `UNSAVED` från en ändring tills posten är skriven och återläst (3 s efter sista ändringen), `SAVE ERR` om återläsningen inte stämde, `DEFAULTS` när flashen saknar post och inget är ändrat |
 
 **Loggraden, 87 byte** (115200 8N1, ungefär 15 rader per sekund):
 
@@ -155,7 +157,7 @@ Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En 
 
 1. Programmera M6 i flash (`openFPGALoader -b tangnano20k -f gateware/build/m6_puck_proto.fs`). `build.sh` packar M6 med `--mspi_as_gpio`, och manifestet ska säga `mspi` 1; utan det når M6 inte flashen.
 2. Byt kanal, till exempel till `A1 5865`, filtret till `VCR` och HDMI till `LTD`. Rör sedan ingen knapp på minst 3 s: en post skrivs när inställningarna har legat stilla i 3 s, inte vid varje knapptryck.
-3. Bryt strömmen (dra ur USB) och slå på. OSD:n visas 5 s efter start; den, OLED:n och första loggraden ska visa `A1 5865`, `VCR` och `HDMI LTD` (i loggen `V` och `L`).
+3. Flygvyn ska gå från `UNSAVED` till `SAVED` inom cirka 3 s efter sista knapptrycket. Bryt strömmen (dra ur USB) och slå på. OSD:n visas 5 s efter start; den, OLED:n och första loggraden ska visa `A1 5865`, `VCR` och (i menyposten `HDMI`) `LTD` (i loggen `V` och `L`), och flygvyn `SAVED`.
 4. Samma för RSSI-kalibreringen: efter `CAL` av och 3 s, starta om; RSSI-sidan ska visa `OK` och värden, och loggens kalibrerade fält ska vara tal.
 5. Posterna kan läsas direkt ur flashen (8380416 = 7FE000h):
 
