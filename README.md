@@ -10,7 +10,7 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-18, main after task 35, tested on `52c2ffe`):** 797 tests collected, all pass, run one
+**Status (2026-10-20, main after task 46, tested on `a169638`, merged as `61ec85b`):** 799 tests collected, all pass (1654 s); M0 built from it. The first hardware run (home bench 2026-10-20) found the bouncing square wrapping at the left edge; fixed here with a regression test. Before it (main after task 35, tested on `52c2ffe`): 797 tests collected, all pass, run one
 process per simulation test; the three strict xfail tests of the second review (Core #21-#23) are plain
 tests now. M0, M4 and M6 built from `52c2ffe` with and without `HDMI=1`, all clocks over 75 MHz after
 routing, the HDMI pairs packed as in M0 (M6 13190 LUT4, with `HDMI=1` 13544; 29 BSRAM). Nothing has
