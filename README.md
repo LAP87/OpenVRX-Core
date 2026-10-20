@@ -10,7 +10,7 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-20, branch `ui/flight-view`, task 42, tested on `24a104a`):** 808 tests collected, all pass (2141 s, one process per simulation test); M6 built from `24a104a` without and with `HDMI=1`. The branch is not merged: the flight view's look is the owner's decision (hub `docs/UI_FLYGVY_2026-10-19.md`). Before it (main after task 35, tested on `52c2ffe`): 797 tests collected, all pass, run one
+**Status (2026-10-20, branch `ui/flight-view`, task 42, tested on `24a104a`):** 808 tests collected, all pass (2141 s, one process per simulation test); M6 built from `24a104a` without and with `HDMI=1`. The buttons became arrows in `dd7af89` (2026-10-20; the UI tests and the quick suite green on it). The branch is not merged: the flight view's look is the owner's decision (hub `docs/UI_FLYGVY_2026-10-19.md`). Before it (main after task 35, tested on `52c2ffe`): 797 tests collected, all pass, run one
 process per simulation test; the three strict xfail tests of the second review (Core #21-#23) are plain
 tests now. M0, M4 and M6 built from `52c2ffe` with and without `HDMI=1`, all clocks over 75 MHz after
 routing, the HDMI pairs packed as in M0 (M6 13190 LUT4, with `HDMI=1` 13544; 29 BSRAM). Nothing has
