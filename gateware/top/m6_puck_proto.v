@@ -1,7 +1,7 @@
 // M6: puck prototype step 1 = M4 (two TVP5150AM1 + line mixer -> 720p60 HDMI)
 // plus the puck UI: two RX5808 modules tuned over SPI, an SSD1306 128x32 OLED
 // on the I2C bus of decoder A (shared with tvp_ctrl through hold/active), and
-// the two onboard buttons (S1 = OK, S2 = NEXT: flight view, information pages and a
+// the two onboard buttons (S1 = "v" next item or page, S2 = "^" change or menu; flight view, information pages and a
 // menu with one item per screen, puck_ui.v). S1 is no longer a reset button; reset
 // comes from the PLLs locking at power-up.
 // See puck_ui.v for the screen and design/PUCK_2027_KONCEPT.md for the idea.
@@ -30,8 +30,8 @@ module m6_puck_proto #(
     parameter CLK_HZ = 27_000_000         // board clock; a testbench shortens the millisecond timers with it
 ) (
     input  wire        clk,
-    input  wire        rst_i,             // S1: OK button
-    input  wire        key_i,             // S2: NEXT button
+    input  wire        rst_i,             // S1: the "v" button (next)
+    input  wire        key_i,             // S2: the "^" button (change)
     output wire        rx_spi_clk,        // both RX5808 modules (same channel)
     output wire        rx_spi_data,       // PIN19 = J6-17 (LED4's pin)
     output wire        rx_spi_sel_n,      // PIN20 = J6-16 (LED5's pin)
@@ -131,10 +131,10 @@ module m6_puck_proto #(
 `ifdef HDMI
     localparam HDMI_BUILD = 1;             // the menu's HDMI item has an effect (tmds_link.v rgb_full)
 `else
-    localparam HDMI_BUILD = 0;             // DVI: the item says N/A and NEXT leaves it
+    localparam HDMI_BUILD = 0;             // DVI: the item says N/A and ^ leaves it
 `endif
     puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD)) ui (
-                .clk(clk), .rst(rst_c[2]), .btn_ok(rst_i), .btn_next(key_i), .view_b(cur),
+                .clk(clk), .rst(rst_c[2]), .btn_down(rst_i), .btn_up(key_i), .view_b(cur),
                 .dec_present({init_done & ~dev_err[1], init_done & ~dev_err[0]}),
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
                 .dec_round(round_ok), .dec_lost(lost_lock),                 // 88h bit 4, see tvp_ctrl.v

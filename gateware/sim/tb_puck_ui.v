@@ -64,7 +64,7 @@ module tb_puck_ui;
     // RX5808: first write 5 ms after reset, repeats every 40 ms while no decoder is locked
     puck_ui #(.CLK_HZ(1_000_000), .DEBOUNCE_MS(3), .OSD_MS(150), .MENU_MS(MENU_MS), .HDMI_BUILD(HDMI_BUILD),
               .BAUD(50_000), .RX_FIRST_MS(5), .RX_REPEAT_MS(40)) ui (
-        .clk(clk), .rst(rst), .btn_ok(btn_ok), .btn_next(btn_next), .view_b(view_b),
+        .clk(clk), .rst(rst), .btn_down(btn_ok), .btn_up(btn_next), .view_b(view_b),
         .dec_present(2'b11), .dec_locked(dec_locked), .dec_round(dec_round), .dec_lost(dec_lost),
         .rssi_a(16'd12000), .rssi_b(16'd4567), .rssi_valid(2'b11), .rssi_cal_ok(2'b11), .rssi_low(2'b10),
         .rssi_warn(2'b10), .rssi_pct_a(7'd75), .rssi_pct_b(7'd3), .rssi_cal(rssi_cal),
@@ -131,7 +131,7 @@ module tb_puck_ui;
     integer frames = 0;
     always @(posedge clk) if (frame_done) begin frames <= frames + 1; $display("FRAME %0d", frames + 1); end
 
-    task press(input which);                      // 0 = OK, 1 = NEXT
+    task press(input which);                      // 0 = v (S1, next), 1 = ^ (S2, change)
         begin
             if (which) btn_next = 1; else btn_ok = 1;
             #8_000_000;                           // 8 ms > 3 ms debounce
@@ -169,7 +169,7 @@ module tb_puck_ui;
         set_ready = 1;                            // start scan over, no record: DEFAULTS
         wait_frames(2);
         $display("MARK defaults");
-        press(0);                                 // OK: the menu, BAND
+        press(1);                                 // ^ in the flight view: the menu, BAND
         wait_frames(2);
         $display("MARK menu page=%0d field=%0d", page, field);
         sample_osd(1);
@@ -200,7 +200,7 @@ module tb_puck_ui;
         wait_frames(2);
         $display("MARK exit page=%0d", page);
         set_stored = 1;                           // as if the flash held a record from here on
-        press(0);                                 // the menu, BAND
+        press(1);                                 // ^: the menu, BAND
         press(1);                                 // L -> A (A4 5805)
         press(0);                                 // CH
         press(1); press(1);                       // A5, A6 (5765)
@@ -238,7 +238,7 @@ module tb_puck_ui;
         $display("MARK fly_hold page=%0d hold=%0d", page, ch_hold);
         sample_osd(6);
         // HOLD: band, channel and the scan do not react
-        press(0);                                 // the menu, BAND
+        press(1);                                 // ^: the menu, BAND
         press(1);
         wait_frames(2);
         $display("MARK hold_band band=%0d ch=%0d field=%0d", band, ch, field);
@@ -257,14 +257,14 @@ module tb_puck_ui;
         set_err = 0;
         if ($test$plusargs("hold_only")) begin $display("RESULT hold_only"); $finish; end
         // the menu returns to the flight view by itself
-        press(0);
+        press(1);
         wait_frames(1);
         $display("MARK menu_again page=%0d", page);
         #(MENU_MS * 1_000_000 + 20_000_000);
         $display("MARK timeout page=%0d", page);
         if ($test$plusargs("timeout_only")) begin $display("RESULT timeout_only"); $finish; end
         // information pages
-        press(1);                                 // the meter page
+        press(0);                                 // v in the flight view: the meter page
         wait_frames(2);
         $display("MARK meter page=%0d", page);
         dec_locked = 2'b00;                       // both decoders lose lock: the channel is written again
@@ -274,20 +274,20 @@ module tb_puck_ui;
         dec_locked = 2'b10;                       // B locks: no more repeats (the next was due after 30 ms)
         $display("MARK relock %0d", $time);
         #70_000_000;
-        press(1);                                 // the RSSI page
+        press(0);                                 // v: the RSSI page
         wait_frames(2);
         $display("MARK rssi page=%0d cal=%0d", page, rssi_cal);
-        press(0);                                 // calibration on
+        press(1);                                 // ^ on the RSSI page: calibration on
         wait_frames(2);
         $display("MARK cal_on cal=%0d", rssi_cal);
-        press(0);                                 // and off
+        press(1);                                 // and off
         $display("MARK cal_off cal=%0d", rssi_cal);
-        press(0);                                 // on again, then leave the page: it ends
-        press(1);                                 // the flight view
+        press(1);                                 // on again, then leave the page: it ends
+        press(0);                                 // v: the flight view
         wait_frames(2);
         $display("MARK left page=%0d cal=%0d", page, rssi_cal);
         // SCAN: start it, let it step a few channels, abort it with OK
-        press(0);                                 // the menu
+        press(1);                                 // ^: the menu
         repeat (6) press(0);                      // SCAN
         wait_frames(2);
         $display("MARK scan_selected field=%0d page=%0d", field, page);

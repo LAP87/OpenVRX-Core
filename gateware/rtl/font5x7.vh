@@ -216,6 +216,16 @@ function [7:0] font5x7(input [6:0] code, input [2:0] col);
         {7'd90, 3'd2}: font5x7 = 8'h49;
         {7'd90, 3'd3}: font5x7 = 8'h45;
         {7'd90, 3'd4}: font5x7 = 8'h43;
+        {7'd94, 3'd0}: font5x7 = 8'h30;
+        {7'd94, 3'd1}: font5x7 = 8'h3c;
+        {7'd94, 3'd2}: font5x7 = 8'h3f;
+        {7'd94, 3'd3}: font5x7 = 8'h3c;
+        {7'd94, 3'd4}: font5x7 = 8'h30;
+        {7'd118, 3'd0}: font5x7 = 8'h06;
+        {7'd118, 3'd1}: font5x7 = 8'h1e;
+        {7'd118, 3'd2}: font5x7 = 8'h7e;
+        {7'd118, 3'd3}: font5x7 = 8'h1e;
+        {7'd118, 3'd4}: font5x7 = 8'h06;
         {7'd124, 3'd2}: font5x7 = 8'h7f;
         default: font5x7 = 8'h00;
     endcase

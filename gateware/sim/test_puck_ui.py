@@ -28,7 +28,7 @@ import vtx_channels as vc  # noqa: E402
 SRC = ('i2c_master.v', 'rx5808_spi.v', 'rx5808_tune.v', 'bin2bcd.v', 'uart_tx.v', 'chan_scan.v')
 BIG = (True, False)
 SMALL = (False, False)
-HINT = 'OK:NEXT  NEXT:CHANGE '
+HINT = '^ CHANGE  v NEXT ITEM'
 ROW2 = 'A:LOCK  75 B:NOSIG  3'                     # decoder A locked, B not; RSSI 75 % and 3 %
 ROW2_B = 'A:NOSIG 75 B:LOCK   3'                   # after the relock: B locked, A not
 
@@ -165,7 +165,7 @@ def check_hdmi_field(ev, log, until=None, dvi=False):
     assert m['hdmi_selected'] == {'field': '5', 'ltd': '0'}, m['hdmi_selected']
     rows = rows_before(ev, 'hdmi_selected')
     if dvi:
-        assert rows == big_rows('HDMI N/A', 'DVI BUILD: NO EFFECT ', 'OK:NEXT  DVI BUILD   '), rows
+        assert rows == big_rows('HDMI N/A', 'DVI BUILD: NO EFFECT ', '^ N/A     v NEXT ITEM'), rows
         assert rows_before(ev, 'hdmi_ltd') == rows and m['hdmi_ltd']['ltd'] == '0'
         toks = hdmi_tokens(log, None, None)
         assert toks and set(toks) == {'F'}, toks
@@ -183,15 +183,15 @@ def check_hold(ev, log):
     save status UNSAVED and SAVE ERR on the flight view."""
     m = marks(log)
     assert m['hold_on'] == {'hold': '1', 'field': '7'}, m['hold_on']
-    assert rows_before(ev, 'hold_on') == big_rows('HOLD ON', 'ON: LOCKS CH AND SCAN', 'OK:EXIT  NEXT:CHANGE ')
+    assert rows_before(ev, 'hold_on') == big_rows('HOLD ON', 'ON: LOCKS CH AND SCAN', '^ CHANGE  v EXIT     ')
     assert m['fly_hold'] == {'page': '0', 'hold': '1'}, m['fly_hold']
     rows, big, _ = screen_before(ev, 'fly_hold')
     assert (rows, big) == (big_rows('A6 5765  @', ROW2, 'A   LOW TV    UNSAVED'), BIG), rows
     assert m['hold_band'] == {'band': '0', 'ch': '5', 'field': '0'}, m['hold_band']
-    assert rows_before(ev, 'hold_band') == big_rows('BAND A', 'A6 5765 MHZ  SE OK   ', 'OK:NEXT  HOLD IS ON  ')
+    assert rows_before(ev, 'hold_band') == big_rows('BAND A', 'A6 5765 MHZ  SE OK   ', 'HOLD ON   v NEXT ITEM')
     assert m['hold_ch'] == {'band': '0', 'ch': '5'}, m['hold_ch']
     assert m['hold_scan'] == {'busy': '0', 'field': '6'}, m['hold_scan']
-    assert rows_before(ev, 'hold_scan') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', 'OK:NEXT  HOLD IS ON  ')
+    assert rows_before(ev, 'hold_scan') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', 'HOLD ON   v NEXT ITEM')
     assert m['save_err'] == {'page': '0', 'hold': '0'}, m['save_err']
     assert rows_before(ev, 'save_err') == big_rows('A6 5765', ROW2, 'A   LOW TV   SAVE ERR')
 
@@ -271,9 +271,9 @@ def test_puck_ui():
                             ' USE A 40 B 34 M 25  '], SMALL), rows
     assert m['rssi'] == {'page': '2', 'cal': '0'}
     assert rows_before(ev, 'rssi') == [' RSSI    A6  5765    ', 'A 12000  75          ', 'B  4567   3  LOW WEAK',
-                                       'OK:CAL OFF  A OK B OK'], rows_before(ev, 'rssi')
+                                       '^ CAL OFF   A OK B OK'], rows_before(ev, 'rssi')
     assert m['cal_on'] == {'cal': '1'} and m['cal_off'] == {'cal': '0'}
-    assert rows_before(ev, 'cal_on')[3] == 'OK:CAL ON   A OK B OK'
+    assert rows_before(ev, 'cal_on')[3] == '^ CAL ON    A OK B OK'
     assert m['left'] == {'page': '0', 'cal': '0'}, 'leaving the page ends CAL'
     assert rows_before(ev, 'left') == big_rows('A6 5765', ROW2_B, 'A   LOW TV      SAVED'), rows_before(ev, 'left')
 
@@ -287,13 +287,13 @@ def test_puck_ui():
     assert order[:-1] == want_bits[:len(order) - 1], 'channels 0, 1, 2, ... in table order'
     assert order[-1] == want_bits[keys.index(('A', 6))], 'the abort retunes the starting channel'
     assert m['scan_selected'] == {'field': '6', 'page': '3'}
-    assert rows_before(ev, 'scan_selected') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', 'OK:NEXT  NEXT:START  ')
+    assert rows_before(ev, 'scan_selected') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', '^ START   v NEXT ITEM')
     assert m['scan_busy'] == {'busy': '1'}
     rows = rows_before(ev, 'scan_busy')
     assert rows[0] == 'SCANNING' + ' ' * 13 and rows[3] == 'ANY BUTTON ABORTS    ', rows
     assert re.fullmatch(r'TRYING [A-L][1-8] \d{4} MHZ   ', rows[2]), rows
     assert m['scan_aborted'] == {'busy': '0', 'band': '0', 'ch': '5', 'field': '6', 'page': '3'}, m['scan_aborted']
-    assert rows_before(ev, 'scan_aborted') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', 'OK:NEXT  NEXT:START  ')
+    assert rows_before(ev, 'scan_aborted') == big_rows('SCAN', 'SEARCH 48 CHANNELS   ', '^ START   v NEXT ITEM')
     # a whole scan: decoder B locked with the same noise on every channel, the tie keeps A6 (Core #22),
     # all 48 channels written and A6 again, and the menu ends on the flight view
     order2 = [int(bits, 16) for _, bits, _ in scan2_frames]

@@ -119,15 +119,15 @@ python gateware/tools/snowlog.py --summary filt.csv
 
 Allt här är simulerat (`sim/test_chan_scan.py`, `sim/test_rssi_adc.py`, `sim/test_flash_store.py`, `sim/test_puck_ui.py`); inget är provat på kortet. **Första hårdvaruprovet är de sparade inställningarna med bara Tang-kortet** (navets `docs/MATPROTOKOLL.md`, blad 19): M6 i flash och en HDMI-skärm eller OLED:en, inga dekodrar. `SCAN` (blad 18) kräver mottagare, dekodrar och en sändare; `CAL` (blad 17) dessutom rev A-kortets ADS1115.
 
-**Menyn** (sedan 2026-10-19, navets `docs/UI_FLYGVY_2026-10-19.md`). Skärmen startar i flygvyn: kanalen dubbelhögt, dekoderstatus och RSSI per mottagare, mixläge/latens/filter och sparstatus. OK öppnar menyn, som visar en post per skärm: OK går till nästa post (efter `HOLD` tillbaka till flygvyn), NEXT ändrar posten, 15 s utan knapp ger flygvyn igen. NEXT i flygvyn bläddrar mätare → RSSI → flygvy.
+**Menyn** (sedan 2026-10-19, navets `docs/UI_FLYGVY_2026-10-19.md`). Skärmen startar i flygvyn: kanalen dubbelhögt, dekoderstatus och RSSI per mottagare, mixläge/latens/filter och sparstatus. Knapparna har inga namn, skärmen visar dem som pilar: ▼ = S1, ▲ = S2. ▲ öppnar menyn, som visar en post per skärm: ▼ går till nästa post (efter `HOLD` tillbaka till flygvyn), ▲ ändrar posten, 15 s utan knapp ger flygvyn igen. ▼ i flygvyn bläddrar mätare → RSSI → flygvy.
 
 | Funktion | Var | Gör så här | Vad som händer |
 |---|---|---|---|
-| Filtret | menyn, femte posten `FILT` | OK från flygvyn fem gånger (`BAND`, `CH`, `MODE`, `LAT`, `FILT`), NEXT växlar `TV`/`VCR` | avsnitt 2.2 |
-| `HDMI` | menyn, sjätte posten | OK en gång till, NEXT växlar `FULL`/`LTD` | avsnitt 2.2; i DVI-bygget står `HDMI N/A` och NEXT gör inget |
-| `SCAN` | menyn, sjunde posten | OK en gång till, NEXT startar | Skärmen visar `SCANNING`, kanalen som provas och `ANY BUTTON ABORTS`; 100–160 ms per kanal, 5–8 s för alla 48. Hittas en kanal där en dekoder låste med lägst brus slutar menyn i flygvyn med den. Låste ingen står startkanalen kvar och skärmen visar `SCAN NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen. Med `HOLD` på startar ingen skanning |
-| `HOLD` | menyn, åttonde posten | OK en gång till, NEXT växlar OFF/ON; OK igen ger flygvyn | ON: `BAND`, `CH` och `SCAN` reagerar inte, flygvyn visar ett hänglås. Sparas inte; av efter start |
-| `CAL` | RSSI-sidan (NEXT två gånger i flygvyn) | OK slår på; flytta sändaren nära och långt bort, eller stäng av den; OK stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan (NEXT) avslutar kalibreringen |
+| Filtret | menyn, femte posten `FILT` | ▲ i flygvyn öppnar menyn på `BAND`, ▼ fyra gånger (`CH`, `MODE`, `LAT`, `FILT`), ▲ växlar `TV`/`VCR` | avsnitt 2.2 |
+| `HDMI` | menyn, sjätte posten | ▼ en gång till, ▲ växlar `FULL`/`LTD` | avsnitt 2.2; i DVI-bygget står `HDMI N/A` och ▲ gör inget |
+| `SCAN` | menyn, sjunde posten | ▼ en gång till, ▲ startar | Skärmen visar `SCANNING`, kanalen som provas och `ANY BUTTON ABORTS`; 100–160 ms per kanal, 5–8 s för alla 48. Hittas en kanal där en dekoder låste med lägst brus slutar menyn i flygvyn med den. Låste ingen står startkanalen kvar och skärmen visar `SCAN NONE` till nästa knapptryck. Varje knapp under skanningen avbryter och ställer tillbaka startkanalen. Med `HOLD` på startar ingen skanning |
+| `HOLD` | menyn, åttonde posten | ▼ en gång till, ▲ växlar OFF/ON; ▼ igen ger flygvyn | ON: `BAND`, `CH` och `SCAN` reagerar inte, flygvyn visar ett hänglås. Sparas inte; av efter start |
+| `CAL` | RSSI-sidan (▼ två gånger i flygvyn) | ▲ slår på; flytta sändaren nära och långt bort, eller stäng av den; ▲ stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan (▼) avslutar kalibreringen |
 | Sparstatus | flygvyn, rad 4 | | `SAVED` när flashen har en post med just de här inställningarna, `UNSAVED` från en ändring tills posten är skriven och återläst (3 s efter sista ändringen), `SAVE ERR` om återläsningen inte stämde, `DEFAULTS` när flashen saknar post och inget är ändrat |
 
 **Loggraden, 87 byte** (115200 8N1, ungefär 15 rader per sekund):

@@ -2,14 +2,16 @@
 // one double-size row of 10 characters on the flight view and in the menu, ssd1306_text.v text_big),
 // RX5808 tuning.
 //
-// Pages: the flight view (start), two information pages and the menu.
-//   flight view   OK -> menu, NEXT -> meter page
-//   meter page    OK -> menu, NEXT -> RSSI page
-//   RSSI page     OK -> calibration on / off, NEXT -> flight view (leaving the page ends a calibration)
-//   menu          OK -> next item (after the last one: flight view), NEXT -> change the item; MENU_MS
+// Pages: the flight view (start), two information pages and the menu. The two buttons have no
+// names: the screen shows them as arrows (font5x7.py "v" and "^"): v = S1 on the Tang Nano 20K,
+// ^ = S2 (owner, 2026-10-20).
+//   flight view   ^ -> menu, v -> meter page
+//   meter page    ^ -> menu, v -> RSSI page
+//   RSSI page     ^ -> calibration on / off, v -> flight view (leaving the page ends a calibration)
+//   menu          v -> next item (after the last one: flight view), ^ -> change the item; MENU_MS
 //                 after the last button it returns to the flight view by itself (not during a scan)
 // Items, one per screen: BAND, CH, MODE (MIX / A / B), LAT (BUF / LOW), FILT (TV / VCR), HDMI (FULL /
-// LTD; "N/A" in the DVI build, HDMI_BUILD = 0, where NEXT leaves it), SCAN (NEXT starts, any button
+// LTD; "N/A" in the DVI build, HDMI_BUILD = 0, where ^ leaves it), SCAN (^ starts, any button
 // aborts and leaves the SCAN screen as it was; a scan that found a channel ends on the flight view,
 // one that found none says NONE until the next button), HOLD (ON: BAND, CH and SCAN do not react and the flight view shows a padlock;
 // not saved, OFF after reset).
@@ -23,7 +25,7 @@
 //                           change), SAVE ERR (a write did not read back), DEFAULTS (no record in the
 //                           flash and nothing changed yet), blank until the start scan is over
 // Menu (row 0 double size: item and value; row 2: what the value means; row 3: what the buttons do):
-//   CH F4                   F4 5800 MHZ  SE OK        OK:NEXT  NEXT:CHANGE
+//   CH F4                   F4 5800 MHZ  SE OK        ^ CHANGE  v NEXT ITEM
 // The OSD shows the same characters in one size (osd_overlay.v).
 //
 // Band/channel changes reprogram both RX5808 modules at once with the synth
@@ -37,7 +39,7 @@
 // SCAN (chan_scan.v) steps through all 48 channels and keeps the one where a decoder locks with
 // the lowest noise; any button aborts it on the channel it started from.
 // Saved settings (flash_store.v): `set_load` at start puts the saved band, channel, mode, latency,
-// filter and HDMI range in place (the filter as a request to the decoders, like NEXT on the filter).
+// filter and HDMI range in place (the filter as a request to the decoders, like ^ on the filter).
 //
 // Meter page ("snow meter", self-interference / signal check):
 //    METER   F4  5800
@@ -50,8 +52,8 @@
 //   A 12345  45               raw code, calibrated % ("---" uncalibrated), LOW (below the
 //   B  4567   3  LOW WEAK     threshold N rounds in a row) and WEAK (the mixer avoids it);
 //                             the font has no % sign
-//   OK:CAL OFF  A OK B --     calibration: OK turns it on, move the transmitter far and near
-//                             (or tune away and back), OK again; OK = range accepted.
+//   ^ CAL OFF   A OK B --     calibration: ^ turns it on, move the transmitter far and near
+//                             (or tune away and back), ^ again; OK = range accepted.
 //                             Leaving the page ends a calibration.
 `default_nettype none
 module puck_ui #(
@@ -69,8 +71,8 @@ module puck_ui #(
 ) (
     input  wire        clk,
     input  wire        rst,
-    input  wire        btn_ok,            // active high, raw
-    input  wire        btn_next,
+    input  wire        btn_down,          // S1, "v": next item / next page (active high, raw)
+    input  wire        btn_up,            // S2, "^": change the value / open the menu / calibration
     // status for the screen (any clock domain; synchronised here)
     input  wire        view_b,            // mixer currently prefers B
     input  wire [1:0]  dec_present,       // decoder answered on I2C
@@ -90,7 +92,7 @@ module puck_ui #(
     input  wire [15:0] rssi_a, rssi_b,
     input  wire [1:0]  rssi_valid, rssi_cal_ok, rssi_low, rssi_warn,
     input  wire [6:0]  rssi_pct_a, rssi_pct_b,
-    output reg         rssi_cal,          // calibration mode (level), OK on the RSSI page
+    output reg         rssi_cal,          // calibration mode (level), ^ on the RSSI page
     // saved settings (flash_store.v): one clock at start, and the state of the record for the screen
     input  wire        set_load,
     input  wire [2:0]  set_band, set_ch,
@@ -128,7 +130,7 @@ module puck_ui #(
     output reg  [1:0]  page,              // 0 flight view, 1 meter, 2 RSSI, 3 menu
     output reg         low_lat,           // 1 = low-latency video (no field buffer)
     output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
-    output reg         filter_changed,    // one-clock pulse for NEXT on the filter item and for set_load
+    output reg         filter_changed,    // one-clock pulse for ^ on the filter item and for set_load
     output reg         hdmi_ltd           // 0 FULL (default), 1 LTD: HDMI limited range (tmds_link.v)
 );
     `include "vtx_channels.vh"
@@ -142,21 +144,21 @@ module puck_ui #(
     wire tick = (tick_cnt == MS - 1);
     always @(posedge clk) tick_cnt <= (rst || tick) ? 0 : tick_cnt + 1'b1;
 
-    reg [1:0] s_ok, s_next;
-    always @(posedge clk) begin s_ok <= {s_ok[0], btn_ok}; s_next <= {s_next[0], btn_next}; end
-    reg [7:0] c_ok, c_next;
-    reg       d_ok, d_next, ev_ok, ev_next;
+    reg [1:0] s_down, s_up;
+    always @(posedge clk) begin s_down <= {s_down[0], btn_down}; s_up <= {s_up[0], btn_up}; end
+    reg [7:0] c_down, c_up;
+    reg       d_down, d_up, ev_down, ev_up;
     always @(posedge clk) begin
-        ev_ok <= 1'b0; ev_next <= 1'b0;
+        ev_down <= 1'b0; ev_up <= 1'b0;
         if (tick) begin
-            if (s_ok[1] == d_ok) c_ok <= 0;
-            else if (c_ok == DEBOUNCE_MS - 1) begin d_ok <= s_ok[1]; c_ok <= 0; ev_ok <= s_ok[1]; end
-            else c_ok <= c_ok + 1'b1;
-            if (s_next[1] == d_next) c_next <= 0;
-            else if (c_next == DEBOUNCE_MS - 1) begin d_next <= s_next[1]; c_next <= 0; ev_next <= s_next[1]; end
-            else c_next <= c_next + 1'b1;
+            if (s_down[1] == d_down) c_down <= 0;
+            else if (c_down == DEBOUNCE_MS - 1) begin d_down <= s_down[1]; c_down <= 0; ev_down <= s_down[1]; end
+            else c_down <= c_down + 1'b1;
+            if (s_up[1] == d_up) c_up <= 0;
+            else if (c_up == DEBOUNCE_MS - 1) begin d_up <= s_up[1]; c_up <= 0; ev_up <= s_up[1]; end
+            else c_up <= c_up + 1'b1;
         end
-        if (rst) begin c_ok <= 0; c_next <= 0; d_ok <= 0; d_next <= 0; end
+        if (rst) begin c_down <= 0; c_up <= 0; d_down <= 0; d_up <= 0; end
     end
 
     // ---- state
@@ -194,24 +196,24 @@ module puck_ui #(
     reg        scan_none;                                  // the last scan found nothing (until a button)
     reg        scan_abort_d;                               // an abort was issued the clock before (its done)
     reg        new_na, new_nb;                             // a new noise value is in na / nb
-    wire       ui_ok = ev_ok && !scan_busy, ui_next = ev_next && !scan_busy;
+    wire       ui_down = ev_down && !scan_busy, ui_up = ev_up && !scan_busy;
     wire       item_blocked = ch_hold && (field == F_BAND || field == F_CH || field == F_SCAN);
     chan_scan #(.CLK_HZ(CLK_HZ)) scan (
-        .clk(clk), .rst(rst), .start(ui_next && page == P_MENU && field == F_SCAN && !ch_hold),
-        .abort(scan_busy && (ev_ok || ev_next)), .cur_idx({band, ch}),
+        .clk(clk), .rst(rst), .start(ui_up && page == P_MENU && field == F_SCAN && !ch_hold),
+        .abort(scan_busy && (ev_down || ev_up)), .cur_idx({band, ch}),
         .locked({sp1[1] && sl1[1], sp0[1] && sl0[1]}), .new_a(new_na), .new_b(new_nb), .noise_a(na), .noise_b(nb),
         .busy(scan_busy), .idx(scan_idx), .tune(scan_tune), .done(scan_done), .found(scan_found));
     always @(posedge clk) begin
-        scan_abort_d <= scan_busy && (ev_ok || ev_next);
+        scan_abort_d <= scan_busy && (ev_down || ev_up);
         if (scan_done && !scan_found && !scan_abort_d) scan_none <= 1'b1;
-        else if (ev_ok || ev_next) scan_none <= 1'b0;
+        else if (ev_down || ev_up) scan_none <= 1'b0;
         if (rst) begin scan_none <= 1'b0; scan_abort_d <= 1'b0; end
     end
 
     // the menu returns to the flight view MENU_MS after the last button (a scan holds it)
     reg [$clog2(MENU_MS+1)-1:0] menu_ms;
     always @(posedge clk) begin
-        if (page != P_MENU || scan_busy || ev_ok || ev_next) menu_ms <= MENU_MS;
+        if (page != P_MENU || scan_busy || ev_down || ev_up) menu_ms <= MENU_MS;
         else if (tick && menu_ms != 0) menu_ms <= menu_ms - 1'b1;
         if (rst) menu_ms <= MENU_MS;
     end
@@ -220,15 +222,15 @@ module puck_ui #(
     always @(posedge clk) begin
         filter_changed <= 1'b0;
         if (menu_timeout) page <= P_FLY;
-        if (ui_ok) case (page)
-            P_FLY, P_MET: begin page <= P_MENU; field <= F_BAND; end
-            P_RSSI:       rssi_cal <= ~rssi_cal;
-            default:      if (field == F_HOLD) page <= P_FLY; else field <= field + 1'b1;
-        endcase
-        if (ui_next) case (page)
+        if (ui_down) case (page)                       // v: next page, next item
             P_FLY:  page <= P_MET;
             P_MET:  page <= P_RSSI;
             P_RSSI: page <= P_FLY;
+            default: if (field == F_HOLD) page <= P_FLY; else field <= field + 1'b1;
+        endcase
+        if (ui_up) case (page)                         // ^: the menu, the calibration, the value
+            P_FLY, P_MET: begin page <= P_MENU; field <= F_BAND; end
+            P_RSSI:       rssi_cal <= ~rssi_cal;
             default: if (!item_blocked) case (field)
                 F_BAND: band <= (band == 3'd5) ? 3'd0 : band + 1'b1;
                 F_CH:   ch <= ch + 1'b1;                                        // 3 bits wrap 8 -> 1
@@ -265,9 +267,9 @@ module puck_ui #(
 
     // ---- RX5808: both modules get the channel RX_FIRST_MS after reset, at once when the band or
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
-    //      (band/ch change on the clock after ev_next, chan one clock later: write_now is delayed one
+    //      (band/ch change on the clock after ev_up, chan one clock later: write_now is delayed one
     //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
-    wire chan_step  = (ui_next && page == P_MENU && !item_blocked && (field == F_BAND || field == F_CH)) || scan_tune;
+    wire chan_step  = (ui_up && page == P_MENU && !item_blocked && (field == F_BAND || field == F_CH)) || scan_tune;
     reg  chan_step_d;
     always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
@@ -409,7 +411,7 @@ module puck_ui #(
     reg  [79:0]  mbig;
     reg  [167:0] mrow2, mrow3;
     always @* begin
-        mrow3 = (field == F_HOLD) ? "OK:EXIT  NEXT:CHANGE " : "OK:NEXT  NEXT:CHANGE ";
+        mrow3 = (field == F_HOLD) ? "^ CHANGE  v EXIT     " : "^ CHANGE  v NEXT ITEM";
         case (field)
             F_BAND: begin mbig = {"BAND ", band_letter, "    "}; mrow2 = chan_s; end
             F_CH:   begin mbig = {"CH ", band_letter, ch_dig, "     "}; mrow2 = chan_s; end
@@ -427,17 +429,17 @@ module puck_ui #(
                 mbig = {"HDMI ", (HDMI_BUILD == 0) ? "N/A  " : hdmi_ltd ? "LTD  " : "FULL "};
                 mrow2 = (HDMI_BUILD == 0) ? "DVI BUILD: NO EFFECT " : hdmi_ltd ? "RGB 16-235 LIMITED   "
                       : "RGB 0-255 FULL       ";
-                if (HDMI_BUILD == 0) mrow3 = "OK:NEXT  DVI BUILD   ";
+                if (HDMI_BUILD == 0) mrow3 = "^ N/A     v NEXT ITEM";
             end
             F_SCAN: begin
                 mbig = scan_busy ? "SCANNING  " : scan_none ? "SCAN NONE " : "SCAN      ";
                 mrow2 = scan_busy ? {"TRYING ", band_letter, ch_dig, " ", mhz, " MHZ   "}
                       : scan_none ? "NO LOCKED CHANNEL    " : "SEARCH 48 CHANNELS   ";
-                mrow3 = scan_busy ? "ANY BUTTON ABORTS    " : "OK:NEXT  NEXT:START  ";
+                mrow3 = scan_busy ? "ANY BUTTON ABORTS    " : "^ START   v NEXT ITEM";
             end
             default: begin mbig = {"HOLD ", ch_hold ? "ON " : "OFF", "  "}; mrow2 = "ON: LOCKS CH AND SCAN"; end
         endcase
-        if (item_blocked && !scan_busy) mrow3 = "OK:NEXT  HOLD IS ON  ";
+        if (item_blocked && !scan_busy) mrow3 = "HOLD ON   v NEXT ITEM";
     end
     wire [167:0] mrow0 = {mbig, {11{8'h20}}};
     // meter page
@@ -451,7 +453,7 @@ module puck_ui #(
                           rssi_low[0] ? "LOW " : "    ", rssi_warn[0] ? "WEAK" : "    "};
     wire [167:0] rrow2 = {"B ", num5(bcd_rb, !rssi_valid[1]), " ", rssi_cal_ok[1] ? num3(bcd_pb) : "---", "  ",
                           rssi_low[1] ? "LOW " : "    ", rssi_warn[1] ? "WEAK" : "    "};
-    wire [167:0] rrow3 = {"OK:CAL ", rssi_cal ? "ON " : "OFF", "  A ", rssi_cal_ok[0] ? "OK" : "--",
+    wire [167:0] rrow3 = {"^ CAL ", rssi_cal ? "ON " : "OFF", "   A ", rssi_cal_ok[0] ? "OK" : "--",
                           " B ", rssi_cal_ok[1] ? "OK" : "--"};
     // (two always blocks, not a function: a function reading the row wires would only be re-evaluated
     // in simulation when its arguments change, and the OSD port's row changes rarely)
@@ -477,7 +479,7 @@ module puck_ui #(
     // ---- OSD visibility: OSD_MS after any button event, always on the information pages and in the menu
     reg [$clog2(OSD_MS+1)-1:0] osd_ms;
     always @(posedge clk) begin
-        if (ev_ok || ev_next) osd_ms <= OSD_MS;
+        if (ev_down || ev_up) osd_ms <= OSD_MS;
         else if (tick && osd_ms != 0) osd_ms <= osd_ms - 1'b1;
         if (rst) osd_ms <= OSD_MS;                         // show briefly after power-up
     end

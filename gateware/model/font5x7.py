@@ -4,7 +4,8 @@
 
 Each glyph is 7 rows of 5 characters ('#' = lit). In the ROM a glyph is 5
 column bytes, bit 0 = top row (SSD1306 page format). Codes are ASCII; glyphs
-that are not defined render blank.
+that are not defined render blank. '^' and 'v' are the two buttons, drawn as arrows (the font
+has no lowercase otherwise).
 """
 from pathlib import Path
 
@@ -57,6 +58,8 @@ GLYPHS = {
     '|': ['..#..', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
     '?': ['.###.', '#...#', '....#', '...#.', '..#..', '.....', '..#..'],
     '@': ['.###.', '#...#', '#...#', '#####', '##.##', '##.##', '#####'],   # padlock: channel hold
+    '^': ['..#..', '..#..', '.###.', '.###.', '#####', '#####', '.....'],   # up arrow: the S2 button (change)
+    'v': ['.....', '#####', '#####', '.###.', '.###.', '..#..', '..#..'],   # down arrow: the S1 button (next)
 }
 
 
