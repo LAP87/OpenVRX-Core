@@ -25,10 +25,20 @@ module m0_testpattern (
     reg [10:0] bx = 100, by = 100;
     reg        dx = 1, dy = 1;
     always @(posedge clk_pixel) if (fs) begin
-        bx <= dx ? bx + 3 : bx - 3;
-        by <= dy ? by + 2 : by - 2;
-        if (bx >= 1280 - 64 - 3) dx <= 0; else if (bx <= 3) dx <= 1;
-        if (by >= 720 - 64 - 2)  dy <= 0; else if (by <= 2) dy <= 1;
+        if (dx) begin
+            if (bx >= 1280 - 64 - 3) begin bx <= 1280 - 64; dx <= 0; end
+            else bx <= bx + 11'd3;
+        end else begin
+            if (bx <= 3) begin bx <= 0; dx <= 1; end
+            else bx <= bx - 11'd3;
+        end
+        if (dy) begin
+            if (by >= 720 - 64 - 2) begin by <= 720 - 64; dy <= 0; end
+            else by <= by + 11'd2;
+        end else begin
+            if (by <= 2) begin by <= 0; dy <= 1; end
+            else by <= by - 11'd2;
+        end
     end
 
     // 4:3 window 960x720 centred: x 160..1119
