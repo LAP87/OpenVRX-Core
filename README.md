@@ -12,3 +12,4 @@ Built with gateware/build.sh (yowasp yosys / nextpnr-himbaechel-gowin 0.11.1, Ap
 
 This branch holds build outputs only; it is not part of main.
 | m2a_memtest_ioreg0.fs | main b440ece, IOREG=0 | the memory test without the I/O-cell registers: the discriminator for the scrambled report (task 47) |
+| m2u_uart64_ioreg1.fs | bench/uart-check, IOREG=1 | the SDRAM-PLL UART check built with the I/O-cell registers, as M2a is (task 47) |
