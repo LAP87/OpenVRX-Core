@@ -87,6 +87,67 @@ async def ntsc_run_on_lines(dut):
     assert sum(e['active_count'] == 2047 for e in expected) == 3      # the vector tests what it claims
 
 
+def xy_burst_stream(n):
+    """A whole line, n undecodable timing codes (each followed by 4 bytes), 200 bytes, two more lines: the
+    record of the first line after the burst carries the burst's count (LOGIKGRANSKNING F7)."""
+    import sys
+    sys.path.insert(0, str(GW / 'model'))
+    import bt656
+    act = bytes(b for x in range(720) for b in (0x80, 0x50))
+    bad = next(b for b, v in bt656.XY_TABLE.items() if v[3] == 'bad' and b not in (0, 255))
+    return (bt656.line_bytes('ntsc', 20, act) + (bytes([0xFF, 0, 0, bad]) + bytes([0x80, 0x10] * 2)) * n
+            + bytes([0x80, 0x10] * 100) + bt656.line_bytes('ntsc', 21, act) + bt656.line_bytes('ntsc', 22, act))
+
+
+@cocotb.test()
+async def xy_bad_burst(dut):
+    """255, 256 and 257 undecodable timing codes between two lines: the count saturates at 255 (the model does
+    the same). XY_EXPECT=wrap is the negative control's expectation for the 8-bit counter before 2026-10-21."""
+    import sys
+    sys.path.insert(0, str(GW / 'model'))
+    import bt656
+    cocotb.start_soon(Clock(dut.clk, 37, unit='ns').start())
+    for n in (255, 256, 257):
+        dut.rst.value = 1
+        dut.d.value = 0x80
+        for _ in range(3):
+            await RisingEdge(dut.clk)
+        dut.rst.value = 0
+        got = []
+        for b in list(xy_burst_stream(n)) + [0x80] * 4:
+            dut.d.value = b
+            await RisingEdge(dut.clk)
+            if dut.rec_valid.value:
+                got.append(int(dut.rec_xy_bad.value))
+        model = [r.xy_bad for r in bt656.Receiver().feed(xy_burst_stream(n))]
+        want = n % 256 if os.environ.get('XY_EXPECT') == 'wrap' else min(n, 255)
+        assert got[-1] == want, (n, got)
+        if os.environ.get('XY_EXPECT') != 'wrap':
+            assert got == model, (n, got, model)
+
+
+def test_bt656_rx_xy_bad_saturates_and_check_is_tested(tmp_path):
+    """The burst test above on bt656_rx.v, and on a copy with the counter as it was (8 bits, wrapping):
+    there the record after 256 bad codes says 0, which the test expects only in that run."""
+    from cocotb_tools.runner import get_runner
+    iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
+    if iverilog_bin.exists():
+        os.environ['PATH'] = f'{iverilog_bin}{os.pathsep}' + os.environ['PATH']
+    src = (GW / 'rtl' / 'bt656_rx.v').read_text()
+    fix = "if (xy_bad_cnt != 8'hFF) xy_bad_cnt <= xy_bad_cnt + 8'd1;"
+    assert src.count(fix) == 1
+    old = HERE / 'build' / 'bt656_rx_xy_wrap'
+    old.mkdir(parents=True, exist_ok=True)
+    (old / 'bt656_rx.v').write_text(src.replace(fix, "xy_bad_cnt <= xy_bad_cnt + 8'd1;"))
+    for name, source, expect in (('bt656_rx_xy', GW / 'rtl' / 'bt656_rx.v', 'saturate'),
+                                 ('bt656_rx_xy_wrap', old / 'bt656_rx.v', 'wrap')):
+        runner = get_runner('icarus')
+        runner.build(sources=[source], hdl_toplevel='bt656_rx', build_dir=HERE / 'build' / name, always=True,
+                     timescale=('1ns', '1ps'))
+        runner.test(hdl_toplevel='bt656_rx', test_module='test_bt656_rx', test_dir=HERE,
+                    build_dir=HERE / 'build' / name, test_filter=r'\.xy_bad_burst$', extra_env={'XY_EXPECT': expect})
+
+
 def test_bt656_rx_matches_model():
     """pytest entry point: build with Icarus and run the cocotb tests above."""
     from cocotb_tools.runner import get_runner
@@ -98,4 +159,4 @@ def test_bt656_rx_matches_model():
                  build_dir=HERE / 'build' / 'bt656_rx', always=True, timescale=('1ns', '1ps'))
     # raises if any cocotb test fails
     runner.test(hdl_toplevel='bt656_rx', test_module='test_bt656_rx',
-                test_dir=HERE, build_dir=HERE / 'build' / 'bt656_rx')
+                test_dir=HERE, build_dir=HERE / 'build' / 'bt656_rx', test_filter=r'^(?!.*xy_bad_burst)')

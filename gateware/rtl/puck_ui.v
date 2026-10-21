@@ -67,7 +67,8 @@ module puck_ui #(
     parameter HDMI_BUILD = 1,             // 0: the HDMI item says N/A (the DVI build ignores the range)
     parameter BAUD = 115200,
     parameter RX_FIRST_MS = 500,          // RX5808 channel write after reset, and its repeat while
-    parameter RX_REPEAT_MS = 2000         // no decoder is locked (rx5808_tune.v)
+    parameter RX_REPEAT_MS = 2000,        // no decoder is locked (rx5808_tune.v)
+    parameter HEARTBEAT_MS = 1000         // a log line also when no mixer window came for this long (0: off)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -486,7 +487,10 @@ module puck_ui #(
     end
     assign osd_show = (osd_ms != 0) || (page != P_FLY);
 
-    // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
+    // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line, and
+    //   HEARTBEAT_MS after the last line when no window has come (no lines from any decoder: the
+    //   snow and noise values then read "------", the usage values are the last window's; hub
+    //   LOGIKGRANSKNING F10, 2026-10-21)
     //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V F/L o ll rrrrr sssss pa_ pb_ ww t\r\n"
     //   (89 bytes incl. CRLF; 87 before the SDRAM self-test of 2026-10-21, 85 before the HDMI range of
     //   2026-10-18, 62 before the RSSI fields of 2026-10-13)
@@ -552,9 +556,14 @@ module puck_ui #(
     assign log_take = (log_wait == 9'd400);
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));
+    reg [$clog2(HEARTBEAT_MS + 2)-1:0] hb_ms;                        // ms since the last line was taken
     always @(posedge clk) begin
         u_send <= 1'b0;
+        if (log_take) hb_ms <= 0;
+        else if (tick && hb_ms != HEARTBEAT_MS) hb_ms <= hb_ms + 1'b1;
         if (tgu[2] != tgu[1] && !log_active) log_wait <= 9'd1;          // new window: wait for the decimal values
+        else if (HEARTBEAT_MS != 0 && hb_ms == HEARTBEAT_MS && log_wait == 0 && !log_active)
+            log_wait <= 9'd1;                                            // no window for HEARTBEAT_MS: a line anyway
         else if (log_wait != 0) begin
             log_wait <= log_wait + 1'b1;
             if (log_wait == 9'd400) begin log_wait <= 0; log_buf <= log_line; log_i <= 0; log_active <= 1'b1; end
@@ -565,7 +574,7 @@ module puck_ui #(
         if (u_send) begin
             if (log_i == LOG_LEN - 1) log_active <= 1'b0; else log_i <= log_i + 1'b1;
         end
-        if (rst) begin log_wait <= 0; log_active <= 1'b0; log_i <= 0; end
+        if (rst) begin log_wait <= 0; log_active <= 1'b0; log_i <= 0; hb_ms <= 0; end
     end
 endmodule
 `default_nettype wire

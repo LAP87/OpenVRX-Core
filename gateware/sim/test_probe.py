@@ -137,3 +137,45 @@ def test_probe_reports():
     assert len(before) == 1 and abs(before[0] - 2_000_000) < 100_000, frames
     assert 1 <= len(after) <= 3 and 8_000_000 < after[0] - unlock < 15_000_000, (unlock, frames)
     assert all(abs((b2 - b1) - 8_000_000) < 100_000 for b1, b2 in zip(after, after[1:])), frames
+
+
+def run_fields(source, tag):
+    env = dict(os.environ)
+    iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
+    if iverilog_bin.exists():
+        env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
+    work = HERE / 'build' / f'tb_probe_fields{tag}'
+    work.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_probe_fields', str(GW / 'rtl' / 'bt656_rx.v'),
+                    str(source), str(HERE / 'tb_probe_fields.v')], cwd=work, env=env, check=True)
+    out = subprocess.run(['vvp', '-n', 'sim.vvp', f'+vec={GW / "vectors" / "f_stuck_fields.hex"}'], cwd=work, env=env,
+                         check=True, capture_output=True, text=True).stdout
+    m = re.search(r'^FIELDS (\d+) LINES (\d+)$', out, re.M)
+    assert m, out[-500:]
+    return int(m[1]), int(m[2])
+
+
+OLD_FIELDS = ("                if (rec_line == 10'd0 && a_fields != 10'h3FF) a_fields <= a_fields + 1'b1;",
+              "                if (have_field && rec_field != last_field && a_fields != 10'h3FF) a_fields <= a_fields + 1'b1;\n"
+              "                last_field <= rec_field; have_field <= 1'b1;")
+
+
+def test_probe_counts_fields_of_a_progressive_source():
+    """F held at 1 (vectors/f_stuck_fields.hex, four times): the probe counts every field from the line
+    numbering, as many as the model's records with line 0 (LOGIKGRANSKNING F8). Negative control: the count
+    of F-bit changes it used until 2026-10-21 gives 0."""
+    sys.path.insert(0, str(GW / 'model'))
+    import bt656
+    data = bytes(int(x, 16) for x in (GW / 'vectors' / 'f_stuck_fields.hex').read_text().split())
+    recs = bt656.Receiver().feed(data * 4)
+    want = sum(r.line_in_field == 0 for r in recs)
+    assert want == 12 and all(r.field == 1 for r in recs), want
+    fields, lines = run_fields(GW / 'rtl' / 'bt656_probe.v', '')
+    assert (fields, lines) == (want, len(recs)), (fields, lines)
+    src = (GW / 'rtl' / 'bt656_probe.v').read_text()
+    assert src.count(OLD_FIELDS[0]) == 1
+    old = HERE / 'build' / 'tb_probe_fields_old'
+    old.mkdir(parents=True, exist_ok=True)
+    (old / 'bt656_probe.v').write_text(src.replace(OLD_FIELDS[0], OLD_FIELDS[1]).replace(
+        '    wire        len_ok', '    reg         last_field = 1\'b0, have_field = 1\'b0;\n    wire        len_ok'))
+    assert run_fields(old / 'bt656_probe.v', '_old')[0] == 0

@@ -84,8 +84,8 @@ class LineRecord:
     line_in_field: int          # active line number since vertical blanking, counted on line starts (see Receiver)
     length: int                 # bytes from the EAV before this line to the EAV ending it (0 if unknown)
     active_count: int           # bytes between SAV and EAV, saturating at ACTIVE_MAX
-    xy_corrected: int           # timing codes fixed by the protection bits
-    xy_bad: int                 # timing codes that could not be decoded
+    xy_corrected: int           # timing codes fixed by the protection bits (at most 255, as bt656_rx.v)
+    xy_bad: int                 # timing codes that could not be decoded (at most 255)
     hf_energy: int              # sum |Y[n] - Y[n-1]| over the active luma samples
     luma: list = field(default_factory=list, repr=False)
     active: bytes = field(default=b'', repr=False)   # the line's active bytes (Cb Y Cr Y ...)
@@ -156,9 +156,9 @@ class Receiver:
             self.state = 0
             f, v, h, status = XY_TABLE[byte]
             if status == 'corrected':
-                self.xy_corrected += 1
+                self.xy_corrected = min(255, self.xy_corrected + 1)
             elif status == 'bad':
-                self.xy_bad += 1
+                self.xy_bad = min(255, self.xy_bad + 1)
                 self.in_active = False      # cannot trust this line any more
                 return
             if self.in_active:

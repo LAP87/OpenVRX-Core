@@ -55,9 +55,11 @@ MUTANTS = {
     'stored_never': [("if ((st == S_SCAN_END && have) || st == S_DONE) stored <= 1'b1;", "")],
 }
 STATUS_MUTANTS = ('dirty_late', 'dirty_not_writing', 'stored_never')
+# the busy wait without its time limit (before 2026-10-21); kept apart from MUTANTS, whose controls compare images
+NO_TIMEOUT = [("if (x_rx[0] && busy_t >= BUSY_MS * MS) begin", "if (1'b0) begin")]
 
 
-def run(name, mem, sched, end_ms=1500, mutant=None, status=False):
+def run(name, mem, sched, end_ms=1500, mutant=None, status=False, miso_high=0):
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
@@ -65,20 +67,22 @@ def run(name, mem, sched, end_ms=1500, mutant=None, status=False):
     work = HERE / 'build' / name
     work.mkdir(parents=True, exist_ok=True)
     src = (GW / 'rtl' / 'flash_store.v').read_text()
-    for old, new in MUTANTS.get(mutant, []):
+    for old, new in MUTANTS.get(mutant, []) + (NO_TIMEOUT if mutant == 'no_timeout' else []):
         assert src.count(old) == 1, (mutant, old)
         src = src.replace(old, new)
     (work / 'flash_store.v').write_text(src)
     (work / 'mem.hex').write_text(''.join(f'{b:02x}\n' for b in mem))
     (work / 'sched.txt').write_text(''.join(f'{t} {p.hex()}\n' for t, p in sched))
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_flash_store', f'-Ptb_flash_store.SAVE_MS={SAVE_MS}',
-                    f'-Ptb_flash_store.END_MS={end_ms}', str(work / 'flash_store.v'), str(HERE / 'spi_flash_model.v'),
+                    f'-Ptb_flash_store.END_MS={end_ms}', f'-Ptb_flash_store.MISO_HIGH={miso_high}', str(work / 'flash_store.v'), str(HERE / 'spi_flash_model.v'),
                     str(HERE / 'tb_flash_store.v')], cwd=work, env=env, check=True)
     log = subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True, text=True).stdout
     loads = [(bytes.fromhex(q[1]), int(q[2])) for q in (l.split() for l in log.splitlines()) if q and q[0] == 'LOAD']
     ready = next(int(l.split()[1]) for l in log.splitlines() if l.startswith('READY'))
     end = next(tuple(int(x) for x in l.split()[1:]) for l in log.splitlines() if l.startswith('END'))
     out = bytes(int(x, 16) for x in (work / 'mem_out.hex').read_text().split())
+    if miso_high:
+        return [tuple(int(x) for x in l.split()[1:]) for l in log.splitlines() if l.startswith('WP')], end
     if status:
         st = [tuple(int(x) for x in l.split()[1:]) for l in log.splitlines()
               if l.startswith('STATUS') and 'x' not in l]
@@ -340,3 +344,21 @@ def test_flash_store_negative_control(mutant):
     loads, end, out, ready = run(f'tb_flash_store_{mutant}', mem, sched, mutant=mutant)
     want_loads, want_mem, _, _ = model(mem, sched, ready)
     assert (loads, out) != (want_loads, want_mem), mutant
+
+
+@pytest.mark.parametrize('mutant', [None, 'no_timeout'])
+def test_flash_that_does_not_answer(mutant):
+    """MISO held high (no flash, or one asleep): the start scan finds nothing, a change of the settings starts
+    a write, and every status read says busy. After BUSY_MS (1 s) the write is given up: err set and WP#
+    released (LOGIKGRANSKNING F9). Negative control: without the time limit WP# stays driven to the end and
+    err stays clear."""
+    wp, end = run(f'tb_flash_store_miso_high{"_" + mutant if mutant else ""}', bytes([0xFF]) * 8192,
+                  [(150, P1)], end_ms=1600, mutant=mutant, miso_high=1)
+    err = end[4]
+    if mutant:
+        assert err == 0 and wp and wp[-1][1] == 1, (wp, end)
+        return
+    assert err == 1 and [v for _, v in wp] == [1, 0], (wp, end)
+    held_ms = (wp[1][0] - wp[0][0]) / 1000
+    assert 1000 <= held_ms < 1050, held_ms
+
