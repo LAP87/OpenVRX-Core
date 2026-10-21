@@ -4,7 +4,8 @@
 
 Each glyph is 7 rows of 5 characters ('#' = lit). In the ROM a glyph is 5
 column bytes, bit 0 = top row (SSD1306 page format). Codes are ASCII; glyphs
-that are not defined render blank.
+that are not defined render blank. '^' and 'v' are the two buttons, drawn as arrows (the font
+has no lowercase otherwise).
 """
 from pathlib import Path
 
@@ -29,12 +30,14 @@ GLYPHS = {
     'G': ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.####'],
     'H': ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
     'I': ['.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+    'J': ['..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
     'K': ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
     'L': ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
     'M': ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
     'N': ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'],
     'O': ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
     'P': ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+    'Q': ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
     'R': ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
     'S': ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
     'T': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
@@ -53,6 +56,10 @@ GLYPHS = {
     '*': ['.....', '..#..', '#.#.#', '.###.', '#.#.#', '..#..', '.....'],
     '#': ['#####', '#####', '#####', '#####', '#####', '#####', '#####'],   # bar graph block
     '|': ['..#..', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+    '?': ['.###.', '#...#', '....#', '...#.', '..#..', '.....', '..#..'],
+    '@': ['.###.', '#...#', '#...#', '#####', '##.##', '##.##', '#####'],   # padlock: channel hold
+    '^': ['..#..', '..#..', '.###.', '.###.', '#####', '#####', '.....'],   # up arrow: the S2 button (change)
+    'v': ['.....', '#####', '#####', '.###.', '.###.', '..#..', '..#..'],   # down arrow: the S1 button (next)
 }
 
 
@@ -76,12 +83,13 @@ def write_vh(path):
 
 
 def render_text(page_bytes):
-    """Inverse for tests: 128 column bytes of one page -> 21 characters."""
+    """Inverse for tests: 128 column bytes of one page -> 21 characters (~ = no glyph has these
+    columns; a double-size row decodes through model/oled_ref.py)."""
     lookup = {tuple(columns(c)): c for c in GLYPHS}
     out = []
     for i in range(21):
         cols = tuple(page_bytes[6 * i:6 * i + 5])
-        out.append(lookup.get(cols, '?'))
+        out.append(lookup.get(cols, '~'))
     return ''.join(out)
 
 
