@@ -108,7 +108,7 @@ def run(name, params=None, mutant=None, sched=SCHED):
         lmin = ld or (0, 0, 0, 0)
         lines.append(f'{int(uva)} {int(uvb)} {absent} {cal} {1 if ld else 0} {" ".join(map(str, lmin))}')
     (work / 'sched.txt').write_text('\n'.join(lines) + '\n')
-    rtl = [GW / 'rtl' / n for n in ('i2c_master.v', 'tvp_ctrl.v', 'ssd1306_text.v')]
+    rtl = [GW / 'rtl' / n for n in ('i2c_master.v', 'tvp_ctrl.v', 'ssd1306_text.v')] + [HERE / 'i2c_slave_model.v']
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_rssi_adc', f'-I{GW / "rtl"}',
                     *[f'-Ptb_rssi_adc.{k}={v}' for k, v in (params or {}).items()],
                     *map(str, rtl), str(work / 'rssi_adc.v'), str(HERE / 'ads1115_model.v'), str(HERE / 'tb_rssi_adc.v')],
@@ -149,9 +149,29 @@ def test_rssi_adc_matches_model():
     for i, (g, w) in enumerate(zip(got, want)):
         assert g == w, f'round {i}: rtl {g}\nmodel {w}'
     assert coll == 0, f'{coll} clocks with two masters on the bus'
-    frames, init_done, conversions = act
+    frames, init_done, conversions, _, _ = act
     assert frames > 0 and init_done == 1, 'the OLED and tvp_ctrl used the bus too'
     assert conversions == 2 * sum(1 for s in SCHED if not s[2])
+
+
+def test_faster_decoder_polls_leave_the_bus_to_the_others():
+    """M4/M6 poll the decoders with a 2 ms pause (TVP_POLL_MS, task 51; 20 ms before). With both decoders
+    answering, decoder A's status is read at least every 6 ms (5.4 ms here, with the OLED and the ADC on the
+    bus; 26 ms with the 20 ms pause), the RSSI rounds still equal the model, no two masters collide, and the
+    OLED keeps at least 90 % of the frames it got with the 20 ms pause. Negative control: with no pause at
+    all the OLED starves (1 frame instead of 5)."""
+    res = {}
+    for poll in (0, 2, 20):
+        got, coll, act = run(f'tb_rssi_adc_tvp_poll{poll}', params={'TVP': 1, 'POLL_MS': poll})
+        assert got == model(SCHED) and coll == 0, poll
+        frames, init_done, conversions, rounds, t_ns = act
+        assert init_done == 1 and conversions == 2 * sum(1 for s in SCHED if not s[2])
+        res[poll] = (frames, rounds, t_ns)
+    frames, rounds, t_ns = res[2]
+    assert rounds > 0 and t_ns / rounds < 6_000_000, (rounds, t_ns)
+    assert frames >= 0.9 * res[20][0], res
+    assert rounds > 3 * res[20][1], res
+    assert res[0][0] < 0.9 * res[20][0], ('no pause should starve the OLED', res)
 
 
 @pytest.mark.parametrize('case', ['conversion_not_awaited', 'warns_without_the_other', 'ignores_other_masters',

@@ -6,23 +6,35 @@
 //   R raw_a raw_b valid_a valid_b min_a max_a min_b max_b cal_ok_a cal_ok_b pct_a pct_b
 //     low_a low_b warn_a warn_b
 // At the end: COLL <clocks with more than one master active>, then the masters' activity:
-// OLED frames, tvp_ctrl init_done, ADC conversions. Driven by sim/test_rssi_adc.py.
+// OLED frames, tvp_ctrl init_done, ADC conversions, decoder A's whole poll rounds, the time in ns.
+// TVP = 1 puts two decoder models at 5Ch (decoder A on SDA_A, decoder B on its own SDA), so that
+// every poll round is whole, as on the board; POLL_MS is tvp_ctrl's pause (M4/M6: TVP_POLL_MS).
+// Driven by sim/test_rssi_adc.py.
 `timescale 1ns/1ps
 `default_nettype none
 module tb_rssi_adc;
     parameter CLK_HZ = 27_000_000;
     parameter PERIOD_US = 8_000;
     parameter CONV_US = 2_600;
+    parameter POLL_MS = 2;
+    parameter TVP = 0;
 
     reg clk = 0, rst = 1;
     always #(500.0e3 / (CLK_HZ / 1000)) clk = ~clk;
 
     // ---- the bus: SCL shared, SDA_A (OLED, decoder A, ADC)
-    wire scl_r, sda_r, scl_o, sda_o, scl_t, adc_sda;
+    wire scl_r, sda_r, scl_o, sda_o, scl_t, adc_sda, tvpa_sda, tvpb_sda;
     wire [1:0] sda_t;
     wire scl = (scl_r | scl_o | scl_t) ? 1'b0 : 1'b1;
-    wire sda = (sda_r | sda_o | sda_t[0] | adc_sda) ? 1'b0 : 1'b1;
+    wire sda = (sda_r | sda_o | sda_t[0] | adc_sda | tvpa_sda) ? 1'b0 : 1'b1;
+    wire sda_b = (sda_t[1] | tvpb_sda) ? 1'b0 : 1'b1;
     ads1115_model #(.ADDR(7'h48)) adc (.scl(scl), .sda(sda), .sda_low(adc_sda));
+    generate if (TVP) begin : tvp
+        i2c_slave_model #(.ADDR(7'h5C)) dec_a (.scl(scl), .sda(sda), .sda_low(tvpa_sda));
+        i2c_slave_model #(.ADDR(7'h5C)) dec_b (.scl(scl), .sda(sda_b), .sda_low(tvpb_sda));
+    end else begin : no_tvp
+        assign tvpa_sda = 1'b0; assign tvpb_sda = 1'b0;
+    end endgenerate
 
     // ---- the three masters, arbitration as in m6_puck_proto.v
     wire oled_hold, rssi_hold, tvp_active, oled_active, rssi_active, init_done;
@@ -33,14 +45,16 @@ module tb_rssi_adc;
     wire [6:0]  pct_a, pct_b;
     wire        done;
     tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C), .POWER_MS(1), .RESET_MS(1),
-               .BOOT_MS(1), .POLL_MS(2)) ctrl (
-        .clk(clk), .rst(rst), .tvp_resetb(), .scl_low(scl_t), .sda_low(sda_t), .scl_in(scl), .sda_in({1'b1, sda}),
+               .BOOT_MS(1), .POLL_MS(POLL_MS)) ctrl (
+        .clk(clk), .rst(rst), .tvp_resetb(), .scl_low(scl_t), .sda_low(sda_t), .scl_in(scl), .sda_in({sda_b, sda}),
         .init_done(init_done), .dev_err(), .status0(), .status1(), .status_valid(), .reinit0(), .reinit1(),
-        .round_ok(), .lost_lock(), .hold(oled_hold | rssi_hold), .op_mode_req(1'b0), .op_mode_vcr(1'b0),
+        .round_ok(round_ok), .lost_lock(), .hold(oled_hold | rssi_hold), .op_mode_req(1'b0), .op_mode_vcr(1'b0),
         .active(tvp_active));
     wire [1:0] trow;
     wire [4:0] tcol;
-    integer frames = 0;
+    integer frames = 0, rounds = 0;
+    wire [1:0] round_ok;
+    always @(posedge clk) if (round_ok[0]) rounds = rounds + 1;
     wire frame_done;
     always @(posedge clk) if (frame_done) frames = frames + 1;
     ssd1306_text #(.CLK_HZ(CLK_HZ), .POWER_MS(1)) oled (
@@ -82,7 +96,7 @@ module tb_rssi_adc;
                     pct_a, pct_b, low[0], low[1], warn[0], warn[1]);
         end
         $fwrite(fo, "COLL %0d\n", coll);
-        $fwrite(fo, "ACT %0d %0d %0d\n", frames, init_done, adc.conversions);
+        $fwrite(fo, "ACT %0d %0d %0d %0d %0d\n", frames, init_done, adc.conversions, rounds, $time);
         $fclose(fo);
         $finish;
     end
