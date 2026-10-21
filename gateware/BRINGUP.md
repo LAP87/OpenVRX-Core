@@ -97,6 +97,8 @@ openFPGALoader -b tangnano20k gateware/build/m2a_memtest.fs
 
 Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar `err=00000000` varv efter varv, och `err=00000001` medan S2 hålls intryckt. Visar en annan rad nollorna, eller ingen, står det i README ("M2a — minnestest av SDRAM") hur fasen och läspunkten byts. Bygg sedan M4 med den fas som gav ren rad.
 
+**Kört på kortet 2026-10-21** (rev 3923, Fable över usbipd/WSL; navets `docs/bench/`): med standardbygget (utan I/O-cellregister) `rs=5 err=00000000` varv efter varv, `rs=4 err=00400000` (alla ord fel: ordet före) och `rs=6 err=00380000 pos=FFFFFFF0` (sju av åtta ord fel: ordet efter), vid fas 9, 10 och 11. Standardfasen 225° och läspunkten 5 står alltså med en marginal på minst ett steg åt vardera hållet. Byggt med `IOREG=1`, standarden fram till 2026-10-21, är raden oläsbar (README "I/O-register i I/O-cellerna"); en sådan logg är inget minnesresultat.
+
 ### 2.2 M6: filterfältet, HDMI-fältet och mätloggen
 
 Filterfältet står på rad 4 som `TV` eller `VCR` (före 2026-10-18 `FILT TV`) och gäller båda dekodrarna (register 02h, 30h respektive 20h). Efter reset står det på `TV`. Det skrivs till dekodrarna mellan pollrundorna och igen efter en dekoderomstart. Vilket läge som håller låset och bilden bäst är inte avgjort; prova båda med samma kamera och kanal och logga varje läge för sig.
