@@ -1,0 +1,106 @@
+{
+  "artifacts": {
+    "m3_probe_tvp5d.cst": "cc513f73515b3ff6f6934c40864bb775ae1e162f41eb54783b68a109163d2875",
+    "m3_probe_tvp5d.fs": "30a6567213a51c489dff437bde7bedbc5ef22a869d828c81549ac00b0dcbc384",
+    "m3_probe_tvp5d.pnr.json": "534ae3cfacfd43a9bf8ea06a7236b3c2eca441356d2ef034684d7764c2b121c3",
+    "m3_probe_tvp5d.pnr.log": "7810be14de91f2a10af6cb76632e2d88afa7761a5ef4e40102247cf83e27ecfe",
+    "m3_probe_tvp5d.stat.txt": "bebeea91dc053a291d36e1a0f69b57eab9b352f6b342b45aff3fadffa057c2ba",
+    "m3_probe_tvp5d.synth.json": "c07026e7a14dd064e505f7a31ddbace7b3bdb4520d372ef96c2463a33cc0c344",
+    "m3_probe_tvp5d.yosys.log": "e316e9198c74b6e3f4492e9f9dbf82a3574b9aa004908abcab2b4bb31867d1a0"
+  },
+  "bitstream": "m3_probe_tvp5d.fs",
+  "completed_utc": "2026-10-21T12:28:25.872910+00:00",
+  "format_version": 1,
+  "git": {
+    "commit": null,
+    "dirty": null
+  },
+  "inputs": {
+    "gateware/boards/m3_probe.cst": "a699ee910001fb14189ae7cc31290b1e39172fe02c73f9c6c89e4432535ca6a9",
+    "gateware/boards/tangnano20k.cst": "5e0c2e23cfed522933a02451ee566d555f03ebb6b3cb9cd849879238c0b7c596",
+    "gateware/build.sh": "83210ed80cbae1d4534be972c495c7a7b11aa8544d696ea2489563131caa4065",
+    "gateware/rtl/async_fifo.v": "5e4d92a5005177e9bc18d7ac672d23e5df4adab74be8a4788b7cb9a065941ecd",
+    "gateware/rtl/bin2bcd.v": "cbb8af29f77726b0ab8d5cf2d1361de411722e53dc7025572fcb1d6b8c6ccefc",
+    "gateware/rtl/bt1120_tx.v": "250a17749ae1518544ba9b134b3075fa608694ab518438b4c90519a8e4c27628",
+    "gateware/rtl/bt656_probe.v": "0f82e30f16eea583390b5475fabe1a19cfd572fe180c30b21dc5aef34d2100c9",
+    "gateware/rtl/bt656_rx.v": "5118486625892f424a01b3c994dd799521da819c54b90397523e9b5181f9df35",
+    "gateware/rtl/cdc_sync.v": "eaaf9f7ab7d9004320ee611c11a0d148a5aa2fe3daad9c2ee320ccdc310a4e92",
+    "gateware/rtl/chan_capture.v": "501fbf113628154450f3843bdaeb460f6688c372d20dc5de9e30432495a329f2",
+    "gateware/rtl/chan_scan.v": "c2db611fc25acf02d3a019ef2f1310c0ef9206bcef6bb627c78371ebecafe469",
+    "gateware/rtl/clocks_1080p.v": "8b458c7020b933ab6a3b7a65a382261a74fd4984c9ed1b070407a11b4881c22a",
+    "gateware/rtl/clocks_720p.v": "99fe1ccb8a74acd6e624a6a2888b48bb13627c1e6ed33cad330afeb91d5cb489",
+    "gateware/rtl/clocks_sdram.v": "42303ca80439b16bbedb79ddc752cca05f7c7c1c04451c7661087fae7d6a3953",
+    "gateware/rtl/dual_clock_ram.v": "e7b5974eeff4cd2f782bfbbfea7f4127a95e808cee2b9eb2f5a73f09f79a2478",
+    "gateware/rtl/dvi_tx_gowin.v": "e0c25cf9a70cbd31b2392a87b7f88e4344ae31d3f2326104b91e2b6da87790ad",
+    "gateware/rtl/fb_backend.v": "282688511fef06df64b54afa287aaaae9e45e16b3766f2b726ec6abe6ece706a",
+    "gateware/rtl/fb_display.v": "82679cfa22c66acc77653366cc8a549a8b03064d2d41852433dfb9e7e5afb74f",
+    "gateware/rtl/fb_sdram.v": "9b61181b332274b85df88eb8f14f9ff41549ad0166c8c8498adb2fed292a3d44",
+    "gateware/rtl/field_phase.v": "08b563aa5dada0dbd3163b91e7694784e01133ce2c68a64fe3c9d98ec09230e1",
+    "gateware/rtl/flash_store.v": "9ef7ea88a30b59c68affc309d37647723c9390211a4b2e56d47de5276352fd48",
+    "gateware/rtl/font5x7.vh": "b2ffa85ec66f89017bd6f299f4b855f3c9124d752c027a0a026501ee290fd310",
+    "gateware/rtl/genlock_timing.v": "c45f1ea19c527d59bf944db0d066d1fd891900d0c293c41d2f6544c869bb9db9",
+    "gateware/rtl/i2c_master.v": "d25604da76fcf40c8eb26e86e37252d69e806ad2229c26f8e2df852e0e63b6cb",
+    "gateware/rtl/line_mixer.v": "04f803e726c4633d08456e4360a5d305fe3b1973a8095c48474e81db33143aec",
+    "gateware/rtl/luma_writer.v": "34997337986ad198f0fedccb80564fd5a520e2cb434e1dbf0d206aeda02cade2",
+    "gateware/rtl/m2_core.v": "19f07c6a2d3da76646a38ccb83f047084a279ac5976f1872c7a5cb2beab67481",
+    "gateware/rtl/memtest_core.v": "b3fb79ce1c0d788847cca51a0e6e0edc0a6c5f0739419e75f6f094d0473ed601",
+    "gateware/rtl/mix_chan.v": "4279a7e8e6707798c1c229d708389aff786b988a892c771d40f56a720fbc7993",
+    "gateware/rtl/mixer2.v": "a2183f1641ad65446aa5c7faac73aaa6ca166d1f50ba25d3096b4b074a22b5c9",
+    "gateware/rtl/noise_stats.v": "6ab5ebc913bc72a9de2d30af5ce6df88def74144f2d0d1b0a5d2f682781838a2",
+    "gateware/rtl/osd_overlay.v": "aa26f4c73e787ac9adbba1eb718a41a39f8e87eb770c6abd2efde4cd705b9728",
+    "gateware/rtl/puck_ui.v": "e2e42e980ea6cb66f98ca188a1498d9cfd0d5109149bbcc5d321d75ac2354451",
+    "gateware/rtl/rssi_adc.v": "bbfb60caaed3e6822b22af358748facfe40e091f677084b99fd850f3604ecb60",
+    "gateware/rtl/rx5808_spi.v": "aed1f5222c5d56d84535ffce745c4f5caf43767e730d3f5806d0eb0f82516a26",
+    "gateware/rtl/rx5808_tune.v": "4fce0aa47ea52862012cc67295f0647e4e78d03c9ca14d678522e6c4192b8a70",
+    "gateware/rtl/sdram_burst.v": "122c2d89514d9903378e4519d8365d0ff7567e2a949229f2d59aec6849f3aa6c",
+    "gateware/rtl/snow_stats.v": "c7043dcef628fc519d8a7755bc8d60a3195d7f743360e8e4f1c9fc3bc12cfa7d",
+    "gateware/rtl/ssd1306_text.v": "b3b04e507ee2ca95cff01d178aaadd4730e76d7dd8aae6079fdc1192dfe76ff9",
+    "gateware/rtl/tmds_encoder.v": "0f39a10cceff8f6b6879ac8fb83c5a05b8854f2dc54bf1536e0c73a8464af127",
+    "gateware/rtl/tmds_link.v": "aaa05cb9a6daa939c0a8fd1aad2208a8052bb687983b9938adecfe28eb045119",
+    "gateware/rtl/tvp_ctrl.v": "f06981991965c7f859291ec9a55900fc654dd21b0a05fe26bb1e8f69fd854491",
+    "gateware/rtl/tvp_sync_rx.v": "ee7a04fdc2d25681b851709b01dc2ecded370d6f38ae422740e2fac4c745e4eb",
+    "gateware/rtl/uart_line_check.v": "f3efe17acf868d52ec8a6cc7d2581bd0b8075a1652e5ba1b26ef41ad92441933",
+    "gateware/rtl/uart_tx.v": "797457775e813bc6fd2e4571ea4e4457a3ccce07ef43bce959b705738d92d69c",
+    "gateware/rtl/vblend.v": "cdfb6a2b18fe7f0b9147d1a8b344fbe547849b71b699a5dc9cb1bce6b64329ef",
+    "gateware/rtl/video_timing.v": "b4f611a6778150de587ffdee9a526e3fdc8d19c21a168d88a9dc7f565ac9bb49",
+    "gateware/rtl/vtx_channels.vh": "8c788b7c47e68504a07e5eaecbff1be3f326a52929a2faf83338235ebe723e3b",
+    "gateware/rtl/word_packer.v": "abfd93acdb9f45791e8140c30311faae72e52c75881d9e8265dbc515a33e99c6",
+    "gateware/rtl/ycbcr2rgb.v": "b10d2c6a79bd63150b19e12ac148fc874a6330ec0968946eed77f4cf8b9528f5",
+    "gateware/tools/build_manifest.py": "6f51c6621debb8fc5136023bc45d3bc8ee8bf4ef6ffcb108a510e3fa834ddc3b",
+    "gateware/top/m3_probe.v": "27059114bb5f62284a2b7b556f3a09961685cf0730dbf9d285643f9fe1825e04"
+  },
+  "options": {
+    "freq_mhz": "75",
+    "hdmi": "0",
+    "ioreg": "0",
+    "mspi": "0",
+    "pull": "",
+    "sdram_phase": "",
+    "seed": "0",
+    "tvp_addr": "5D",
+    "vinterp": "0"
+  },
+  "timing": {
+    "conv.clk": {
+      "max_mhz": 201.13,
+      "passed": true,
+      "required_mhz": 75.0
+    },
+    "pa.clk": {
+      "max_mhz": 130.58,
+      "passed": true,
+      "required_mhz": 75.0
+    },
+    "pb.clk": {
+      "max_mhz": 163.77,
+      "passed": true,
+      "required_mhz": 75.0
+    }
+  },
+  "tool_versions": {
+    "apycula": "0.32",
+    "yowasp-nextpnr-himbaechel-gowin": "0.11.1.0.post826",
+    "yowasp-yosys": "0.69.0.0.post1233"
+  },
+  "top": "m3_probe"
+}

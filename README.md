@@ -18,3 +18,5 @@ This branch holds build outputs only; it is not part of main.
 | m6_puck_proto.fs | build/ioreg-default-off | puck prototype (old menu), no I/O-cell registers, seed 2 |
 
 The earlier m2a_memtest_ioreg0.fs equals the new m2a_memtest.fs in options; m2u_uart64_ioreg1.fs and the old IOREG=1 builds are kept as the evidence of the scrambled output.
+| m3_probe_tvp5d.fs | build/tvp-addr | the probe for decoders at I2C address 5D (the red CP803A module): i2c OK, 27 MHz, NTSC timing on the board 2026-10-21 |
+| m4_dual_mix_tvp5d.fs | build/tvp-addr | M4 for decoders at 5D |
