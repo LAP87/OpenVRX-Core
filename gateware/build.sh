@@ -8,6 +8,7 @@
 #   IOREG=1 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default 0 since 2026-10-21, see below)
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
 #   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
+#   TVP_ADDR=5D gateware/build.sh m3_probe     # the decoders answer at I2C address 5D instead of 5C (tvp_ctrl.v)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI /
 # an IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
@@ -46,6 +47,15 @@ case "$hdmi" in 0|1) ;; *) echo "HDMI must be 0 or 1" >&2; exit 1 ;; esac
 if [ "$hdmi" = 1 ]; then
   defs="$defs -DHDMI=1"
   out_fs="${out_fs%.fs}_hdmi.fs"
+fi
+# optional: the decoders' I2C address. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module may be
+# strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. M3, M4 and M6
+# read the define; the output gets the suffix _tvp5d and the manifest records tvp_addr.
+tvp="${TVP_ADDR:-5C}"
+case "$tvp" in 5C|5c) tvp=5C ;; 5D|5d) tvp=5D ;; *) echo "TVP_ADDR must be 5C or 5D" >&2; exit 1 ;; esac
+if [ "$tvp" = 5D ]; then
+  defs="$defs -DTVP_DEV_5D=1"
+  out_fs="${out_fs%.fs}_tvp5d.fs"
 fi
 # I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob). They were the
 # default for the SDRAM tops from 2026-10-12 (owner's decision 2) so that the SDRAM timing would not depend
@@ -101,7 +111,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.

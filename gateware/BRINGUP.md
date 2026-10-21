@@ -80,6 +80,8 @@ gateware/build.sh m3_probe
 openFPGALoader -b tangnano20k gateware/build/m3_probe.fs
 ```
 
+**Dekoderns I2C-adress.** TVP5150AM1 tar adressen (5C eller 5D) från YOUT7:s nivå när den startar, och en modul kan ha den fast dragen åt endera hållet. Den röda modulen CP803A svarar på 5D (bänken 2026-10-21: `i2c NA` med frisk klocka på 5C, `i2c OK` på 5D). Bygg då med `TVP_ADDR=5D gateware/build.sh m3_probe` (samma för M4 och M6; filen får suffixet `_tvp5d`, manifestet bokför `tvp_addr`). Rev A-kortet drar båda dekodrarna till 5C.
+
 Loggen läses från kortets andra USB-serieport (BL616 visar två; UART:en är oftast den andra):
 
 ```bash
