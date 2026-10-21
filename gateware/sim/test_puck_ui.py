@@ -88,7 +88,7 @@ def hdmi_tokens(log, start, end=None):
         elif on and ln.startswith('U '):
             text += chr(int(ln[2:], 16))
     whole = text.split('\r\n')[1:-1]                 # drop the line in flight at each end
-    return [l[56] for l in whole if len(l) == 85]
+    return [l[56] for l in whole if len(l) == 87]
 
 
 def screens(log):
@@ -316,17 +316,19 @@ def test_puck_ui():
     # UART log: fixed-width lines, the last one reflects the final state
     text = ''.join(chr(int(h, 16)) for h in re.findall(r'^U (\w\w)$', log, re.M))
     lines = [l for l in text.split('\r\n') if l]
-    assert lines and all(len(l) == 85 for l in lines), lines[:3]
-    assert all(l[62:] == ' 12000 04567 075 003 -W' for l in lines), lines[:3]
+    assert lines and all(len(l) == 87 for l in lines), lines[:3]
+    assert all(l[62:85] == ' 12000 04567 075 003 -W' for l in lines), lines[:3]
+    # the SDRAM self-test: "-" until it has run, then the digit of its ok bits (set after the "final" mark)
+    assert all(l[85:] in (' -', ' 2') for l in lines) and lines[0][85:] == ' -', [l[85:] for l in lines]
     assert all(l[50:53] in ('MIX', 'A  ', 'B  ') and l[53] == ' ' and l[54] in 'TV'
                and l[55] == ' ' and l[56] in 'FL' and l[57] == ' ' and l[58] in '-!' and l[59] == ' '
                and len(l[60:62]) == 2 and all(c in '-L?' for c in l[60:62]) for l in lines), lines[:3]
     assert any(l[54] == 'T' for l in lines) and any(l[54] == 'V' for l in lines), lines[:5]
     assert any(l[56] == 'F' for l in lines) and any(l[56] == 'L' for l in lines), [l[54:57] for l in lines]
-    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W' in lines, lines[:5]
+    assert 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W -' in lines, lines[:5]
     # the mixer dropped a line; decoder B has had no whole poll round since "unlock" (its stale bit 4 is ignored);
     # LTD from the flash load
-    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   T L ! -? 12000 04567 075 003 -W', lines[-3:]
+    assert lines[-1] == 'S 012345 002345 000017 654321 040 034 025 A6 5765 A   T L ! -? 12000 04567 075 003 -W 2', lines[-3:]
     # decoder A read 88h bit 4 ("lost lock") in one poll round: exactly one line says so
     lost = [l for l in lines if l[60] == 'L']
     assert len(lost) == 1 and lost[0][59:62] == ' L-', [l[58:62] for l in lines]

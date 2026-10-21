@@ -1,5 +1,6 @@
 // Benches for test_sdram.py:
 //   tb_sdram        sdram_burst + the SDRAM model, SDRAM clock = controller clock shifted 225 degrees
+//   tb_sdram_selftest  the same with sdram_selftest.v driving the controller
 //   tb_sdram_model  the model alone with its pins driven by the test (negative controls of its checks)
 `timescale 1ns/1ps
 `default_nettype none
@@ -37,6 +38,44 @@ module tb_sdram #(
         .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
         .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid), .init_done(init_done));
     // REF_WINDOW 8: the refresh check looks at 8 refreshes (125 us) instead of 4096 (64 ms)
+    sdram_model #(.AW(21), .T_CLK_DLY_PS(T_CLK_DLY_PS), .T_DQ_DLY_PS(T_DQ_DLY_PS), .T_OUT_DLY_PS(T_OUT_DLY_PS),
+                  .REF_WINDOW(8)) mem (
+        .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),
+        .ba(ba), .a(a), .dqm(dqm), .dq(dq));
+endmodule
+
+// sdram_selftest.v on the controller, against the model with the given board delays and clock phase.
+module tb_sdram_selftest #(
+    parameter T_CLK_DLY_PS = 3000,
+    parameter T_DQ_DLY_PS  = 3000,
+    parameter T_OUT_DLY_PS = 3000,
+    parameter CLK_PS       = 15432,
+    parameter PHASE16      = 10
+) (
+    input  wire       clk,
+    input  wire       resetn,
+    output wire       done,
+    output wire [2:0] ok
+);
+    wire [31:0] dq, rdata, wdata;
+    wire [10:0] a;
+    wire [1:0]  ba;
+    wire [3:0]  dqm;
+    wire [20:0] req_addr;
+    wire [4:0]  rd_sample;
+    wire ncs, nwe, nras, ncas, sclk, cke, req_valid, req_write, req_ready, wdata_take, rdata_valid, init_done;
+    reg  clk_shift = 1'b0;
+    always @(clk) clk_shift <= #(PHASE16 * CLK_PS / 16000.0) clk;
+    sdram_burst ctrl (
+        .SDRAM_DQ(dq), .SDRAM_A(a), .SDRAM_BA(ba), .SDRAM_nCS(ncs), .SDRAM_nWE(nwe),
+        .SDRAM_nRAS(nras), .SDRAM_nCAS(ncas), .SDRAM_CLK(sclk), .SDRAM_CKE(cke), .SDRAM_DQM(dqm),
+        .clk(clk), .clk_sdram(clk_shift), .resetn(resetn), .rd_sample(rd_sample),
+        .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
+        .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid), .init_done(init_done));
+    sdram_selftest test (.clk(clk), .rst(!resetn), .init_done(init_done),
+        .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .rd_sample(rd_sample),
+        .req_ready(req_ready), .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid),
+        .done(done), .ok(ok));
     sdram_model #(.AW(21), .T_CLK_DLY_PS(T_CLK_DLY_PS), .T_DQ_DLY_PS(T_DQ_DLY_PS), .T_OUT_DLY_PS(T_OUT_DLY_PS),
                   .REF_WINDOW(8)) mem (
         .clk(sclk), .cke(cke), .ncs(ncs), .nras(nras), .ncas(ncas), .nwe(nwe),

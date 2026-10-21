@@ -7,6 +7,9 @@ tb_sdram (controller + model, SDRAM clock 225 degrees late):
                        window and of the command timing, each from both sides.
   sample_point_sweep   the run-time sample point: one clock early reads the word before, the default
                        reads the burst, one clock late reads the word after.
+tb_sdram_selftest (sdram_selftest.v on the controller):
+  selftest             which of the sample points 4, 5 and 6 the self-test finds right, for the board
+                       delays of the M2a table in README; outside the read window none.
 tb_sdram_model (the model alone, pins driven from here):
   model_*              its read timing, a legal command sequence with no error, and one negative
                        control per rule: every deliberate violation must be counted, and nothing else.
@@ -165,6 +168,29 @@ async def sample_point_sweep(dut):
     for other in (0, 3, 8, 31):                           # not usable: the default is taken
         assert await read_at(other) == words, other
     assert model_errors(dut.mem) == {}
+
+
+@cocotb.test()
+async def selftest(dut):
+    """sdram_selftest.v after the controller's start-up: done within 400 clocks, ok as SDRAM_EXPECT says
+    (bit 0/1/2 = sample point 4/5/6), and no protocol error in the model."""
+    cocotb.start_soon(Clock(dut.clk, CLK_PS, unit='ps').start())
+    dut.resetn.value = 0
+    for _ in range(4):
+        await RisingEdge(dut.clk)
+    dut.resetn.value = 1
+    await RisingEdge(dut.ctrl.init_done)
+    for n in range(400):
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        if dut.done.value == 1:
+            break
+    assert dut.done.value == 1, 'self-test not done after 400 clocks'
+    ok = dut.ok.value
+    assert ok.is_resolvable, ok
+    assert f'{int(ok):03b}' == os.environ['SDRAM_EXPECT'], (str(ok), os.environ['SDRAM_EXPECT'])
+    assert model_errors(dut.mem) == {}
+    dut._log.info(f'self-test done after {n} clocks, ok {int(ok):03b}')
 
 
 # ---------------------------------------------------------------- the model alone
@@ -645,7 +671,8 @@ def _run(toplevel, test_filter, parameters=None, tag='', expect=''):
         os.environ['PATH'] = f'{iverilog_bin}{os.pathsep}' + os.environ['PATH']
     r = get_runner('icarus')
     build = HERE / 'build' / (toplevel + tag)
-    r.build(sources=[GW / 'rtl' / 'sdram_burst.v', HERE / 'sdram_model.v', HERE / 'tb_sdram.v'],
+    r.build(sources=[GW / 'rtl' / 'sdram_burst.v', GW / 'rtl' / 'sdram_selftest.v', HERE / 'sdram_model.v',
+                     HERE / 'tb_sdram.v'],
             hdl_toplevel=toplevel, build_dir=build, always=True, timescale=('1ns', '1ps'),
             parameters=parameters or {})
     r.test(hdl_toplevel=toplevel, test_module='test_sdram', test_dir=HERE, build_dir=build,
@@ -687,6 +714,21 @@ def test_sdram_command_window():
                                      (hold_limit - 100, 0, 'clean'), (hold_limit + 100, 0, 'e_hold')):
         _run('tb_sdram', r'\.one_burst$', {'T_CLK_DLY_PS': clk_dly, 'T_OUT_DLY_PS': out_dly, 'T_DQ_DLY_PS': 6000 - clk_dly},
              f'_c{clk_dly}_o{out_dly}', expect)
+
+
+@pytest.mark.parametrize('clk_dly, dq_dly, phase, expect', [
+    (3000, 3000, 10, '010'),      # the model's assumed delays, 225 degrees: the default point 5
+    (3000, 17000, 10, '100'),     # long round trip: point 6
+    (0, 0, 8, '001'),             # no delay at 180 degrees: point 4
+    (1000, 1000, 12, '010'),      # short round trip, 270 degrees: point 5 again
+    (0, 3187, 10, '000'),         # negative control: 0.1 ns below the read window, no point is right
+    (1000, 1000, 10, '000')])     # negative control: the README's 1 + 1 ns at 225 degrees, none
+def test_sdram_selftest(clk_dly, dq_dly, phase, expect):
+    """The self-test of M4 and M6 finds the same sample point as the M2a sweep for the delays of the README
+    table (gateware/README.md, M2a), and none when the round trip lies outside every point's window."""
+    _run('tb_sdram_selftest', r'\.selftest$',
+         {'T_CLK_DLY_PS': clk_dly, 'T_DQ_DLY_PS': dq_dly, 'T_OUT_DLY_PS': clk_dly, 'PHASE16': phase},
+         f'_c{clk_dly}_d{dq_dly}_p{phase}', expect)
 
 
 def test_sdram_model_checks():

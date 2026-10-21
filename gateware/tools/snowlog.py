@@ -6,8 +6,8 @@
     python gateware/tools/snowlog.py --summary emi.csv
 On Windows the port is COM5 and the like (set up with the `mode` command; not tried on a real port yet).
 
-Line format from the FPGA (puck_ui.v, 87 bytes with CR LF):
-    S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD T/V F/L o ll rrrrr sssss paa pbb ww
+Line format from the FPGA (puck_ui.v, 89 bytes with CR LF):
+    S aaaaaa bbbbbb nnnnnn mmmmmm uaa ubb umm Bc ffff MOD T/V F/L o ll rrrrr sssss paa pbb ww t
 snow A, snow B (mean line HF energy over 1024 lines, ------ = no lines), noise A, noise B
 (luma samples outside 16..235 in the last 1024 lines), % of mixer decisions from A / B /
 blended, band+channel, MHz, mode, filter (T=TV, V=VCR), HDMI range (F=full, L=limited; the
@@ -15,8 +15,10 @@ menu's choice), "!" once the mixer has dropped a line since reset
 (else "-"), and per decoder A, B since the previous line: "L" a poll round read the
 "lost lock" bit (88h bit 4), "-" it did not, "?" no whole poll round; then RSSI A and B
 (raw ADS1115 codes, ----- = no reading), calibrated % A and B (--- = not calibrated) and per
-receiver W (weak: the mixer avoids it), L (low, not weak), - or ? (no reading). Lines from
-older bitstreams (no HDMI range: 85 bytes; no RSSI, no lost-lock field, no noise values,
+receiver W (weak: the mixer avoids it), L (low, not weak), - or ? (no reading), and the SDRAM
+self-test (sdram_selftest.v): "-" not run yet, else a digit whose bits 0/1/2 say that read point
+4/5/6 read the test bursts right ("2" on a working board). Lines from older bitstreams (no
+self-test: 87 bytes; no HDMI range: 85 bytes; no RSSI, no lost-lock field, no noise values,
 possibly no "!"/"-") are read too; the missing columns stay empty. The Tang Nano 20K's BL616
 shows up as two ttyUSB ports; the UART is usually the second one.
 
@@ -36,7 +38,7 @@ from collections import defaultdict
 
 FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
           'mhz', 'mode', 'filter', 'hdmi', 'dropped', 'lost_a', 'lost_b',
-          'rssi_a', 'rssi_b', 'rssi_pct_a', 'rssi_pct_b', 'rssi_state_a', 'rssi_state_b']
+          'rssi_a', 'rssi_b', 'rssi_pct_a', 'rssi_pct_b', 'rssi_state_a', 'rssi_state_b', 'sdram']
 
 
 def parse_rssi(tail):
@@ -56,6 +58,11 @@ def parse(line):
     p = line.split()
     rssi = None
     hdmi = None
+    sdram = None
+    if len(p) == 21:                                   # with the SDRAM self-test at the end (2026-10-21)
+        if len(p[20]) != 1 or p[20] not in '-01234567':
+            return None
+        sdram, p = p[20], p[:20]
     if len(p) == 20:                                   # with the HDMI range after the filter (2026-10-18)
         if p[0] != 'S' or p[11] not in ('T', 'V') or p[12] not in ('F', 'L'):
             return None
@@ -137,6 +144,8 @@ def parse(line):
         rec.update(rssi)
     if hdmi is not None:
         rec['hdmi'] = hdmi
+    if sdram is not None:
+        rec['sdram'] = None if sdram == '-' else int(sdram)
     return rec
 
 

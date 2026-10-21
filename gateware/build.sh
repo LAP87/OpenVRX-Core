@@ -5,7 +5,7 @@
 #   PULL=UP gateware/build.sh m3_probe      # weak pull-ups (or DOWN) on the decoder data pins: pull test
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
-#   IOREG=1 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default 0 since 2026-10-21, see below)
+#   IOREG=1 gateware/build.sh m4_dual_mix   # input flops in the I/O cells: 1 or 0 (default 0 since 2026-10-21, see below)
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
 #   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
 #   TVP_ADDR=5D gateware/build.sh m3_probe     # the decoders answer at I2C address 5D instead of 5C (tvp_ctrl.v)
@@ -57,17 +57,18 @@ if [ "$tvp" = 5D ]; then
   defs="$defs -DTVP_DEV_5D=1"
   out_fs="${out_fs%.fs}_tvp5d.fs"
 fi
-# I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob). They were the
-# default for the SDRAM tops from 2026-10-12 (owner's decision 2) so that the SDRAM timing would not depend
-# on placement. Off for every top since 2026-10-21: on the board, a flop packed into an I/O cell with a
-# clock enable, set or reset does not behave (the M2a report and the UART check came out scrambled with
-# IOREG=1 and right without it; hub docs/bench/IOREG_ANALYS_2026-10-21.md). IOREG=1 stays as an explicit
-# variant for experiments; tools/iob_regs.py lists what it packs. README "I/O-register i I/O-cellerna".
+# Input flops in the I/O cells (nextpnr --vopt ireg_in_iob), so that the SDRAM read window and the decoder
+# data capture do not depend on placement (owner's decision 2, 2026-10-12). Until 2026-10-21 IOREG=1 also gave
+# oreg_in_iob and ioreg_in_iob and was the default for the SDRAM tops; on the board a flop packed into an I/O
+# cell with a clock enable, set or reset did not behave (hub docs/bench/IOREG_ANALYS_2026-10-21.md), so the
+# default is 0. IOREG=1 now packs input flops only, and the build fails unless tools/iob_regs.py --strict
+# finds none with CE / SET / RESET in the cells: the SDRAM DQ capture (sdram_burst.v dq_in) and the decoder
+# data (mixer2.v a_in / b_in) are plain flops for this. README "I/O-register i I/O-cellerna".
 ioreg_default=0
 ioreg="${IOREG:-$ioreg_default}"
 case "$ioreg" in 0|1) ;; *) echo "IOREG must be 0 or 1" >&2; exit 1 ;; esac
 ioreg_opts=()
-if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob); fi
+if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob); fi
 if [ "$ioreg" != "$ioreg_default" ]; then out_fs="${out_fs%.fs}_ioreg$ioreg.fs"; fi
 # The onboard SPI flash's MSPI pins (57, 59-62) as user I/O after configuration, for the tops that keep
 # settings there (flash_store.v): gowin_pack --mspi_as_gpio. Without it they stay configuration pins.
@@ -146,12 +147,16 @@ if [ -f "$source_here/boards/$top.sdc" ]; then cp "$source_here/boards/$top.sdc"
     exit 1
   }
 "$bin/python" "$manifest" route "$prefix.pnr.log"
-# which registers nextpnr put into I/O cells (tools/iob_regs.py); with IOREG=1 a warning when any has CE / SET / RESET
-if [ -f "$here/tools/iob_regs.py" ]; then
-  "$bin/python" "$here/tools/iob_regs.py" "$prefix.pnr.json" 2> /dev/null | tail -1 || true
-  if [ "$ioreg" = 1 ] && ! "$bin/python" "$here/tools/iob_regs.py" "$prefix.pnr.json" --strict > /dev/null 2>&1; then
-    echo "warning: IOREG=1 packed registers with CE / SET / RESET into I/O cells; on the board they did not behave (2026-10-21)" >&2
-  fi
+# which registers nextpnr put into I/O cells (tools/iob_regs.py); with IOREG=1 none may have CE / SET / RESET
+iob="$here/tools/iob_regs.py"
+if [ "$ioreg" = 1 ]; then
+  [ -f "$iob" ] || { echo "IOREG=1 needs $iob" >&2; exit 1; }
+  "$bin/python" "$iob" "$prefix.pnr.json" --strict || {
+    echo "IOREG=1: flops with CE / SET / RESET in I/O cells; refused (on the board they did not behave, 2026-10-21)" >&2
+    exit 1
+  }
+elif [ -f "$iob" ]; then
+  "$bin/python" "$iob" "$prefix.pnr.json" 2> /dev/null | tail -1 || true
 fi
 "$bin/gowin_pack" -c -d GW2A-18C "${pack_opts[@]}" -o "$out_fs" "$prefix.pnr.json"
 "$bin/python" "$manifest" finish "$here/.." inputs.json "$prefix" "$prefix.build.json"

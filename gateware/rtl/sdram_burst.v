@@ -33,11 +33,12 @@
 // was accepted). Reads: 8 rdata_valid pulses.
 //
 // Read sample point: the cycle (counted from ACTIVATE = 0) at whose end word 0
-// is sampled. The default, parameter RD_SAMPLE, is CAS+1 clocks after READ, as
-// upstream. With the 225-degree clock that is 0.375 period (5.8 ns) after the
-// SDRAM clock edge at which the word is valid. The word is at the controller's
-// flip-flops then if the delay of the clock to the SDRAM plus that of the data
-// back is between 3.3 and 15.2 ns (sim/test_sdram.py checks both limits).
+// is sampled from the pins. The default, parameter RD_SAMPLE, is CAS+1 clocks
+// after READ, as upstream. With the 225-degree clock that is 0.375 period
+// (5.8 ns) after the SDRAM clock edge at which the word is valid. The word is
+// at the controller's pin flip-flops then if the delay of the clock to the
+// SDRAM plus that of the data back is between 3.3 and 15.2 ns
+// (sim/test_sdram.py checks both limits).
 // Outside that window the read is shifted by a word or broken, and another
 // sample point or another clock phase is needed. top/m2a_memtest.v shows on
 // the board which sample point reads correctly.
@@ -45,6 +46,16 @@
 // rd_sample selects the sample point at run time, per read: it is taken when
 // the request is accepted. T_RCD+CAS .. T_RCD+CAS+3 are used as given; any
 // other value, such as a port tied to 0, means RD_SAMPLE.
+//
+// The pins are sampled by dq_in, a plain flop that takes SDRAM_DQ on every clock
+// (no enable, no reset), so that the build can put all 32 of them into the
+// pads' I/O cells (build.sh IOREG=1: nextpnr ireg_in_iob, refused unless
+// tools/iob_regs.py --strict passes) and the read window is then the same in
+// every top. Until 2026-10-21 rdata took the pins directly with a clock enable;
+// a flop with an enable did not behave in an I/O cell on the board (hub
+// docs/bench/IOREG_ANALYS_2026-10-21.md). The word sampled at the end of cycle
+// rs .. rs+7 is moved to rdata one clock later: the sample instant at the pins
+// is unchanged, rdata and rdata_valid come one clock later than before.
 `default_nettype none
 
 module sdram_burst #(
@@ -104,6 +115,9 @@ module sdram_burst #(
     reg [11:0] refresh_cnt;
     reg        cfg_now;
     reg [4:0]  rs;                            // sample point of the read in progress
+    reg        rd_take;                       // dq_in holds a word of the burst: move it to rdata
+    reg [31:0] dq_in;
+    always @(posedge clk) dq_in <= SDRAM_DQ;  // the pin sample: no enable, no reset (see the header)
     wire       rs_usable = (rd_sample >= T_RCD + CAS) && (rd_sample <= T_RCD + CAS + 3);
 
     assign req_ready = (state == IDLE) && !refresh_due;
@@ -112,7 +126,9 @@ module sdram_burst #(
         cycle <= (cycle == 5'd31) ? cycle : cycle + 5'd1;
         {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_NOP;
         wdata_take  <= 1'b0;
-        rdata_valid <= 1'b0;
+        rdata_valid <= rd_take;
+        rd_take     <= 1'b0;
+        if (rd_take) rdata <= dq_in;
 
         // refresh timer
         if (refresh_cnt == REFRESH_EVERY - 1) begin refresh_cnt <= 0; refresh_due <= 1'b1; end
@@ -176,10 +192,7 @@ module sdram_burst #(
                 SDRAM_A[9:0] <= {2'b00, addr_buf[7:3], 3'b000};
                 SDRAM_DQM <= 4'b0000;
             end
-            if (cycle >= rs && cycle < rs + 8) begin
-                rdata <= SDRAM_DQ;
-                rdata_valid <= 1'b1;
-            end
+            if (cycle >= rs && cycle < rs + 8) rd_take <= 1'b1;      // dq_in takes word cycle - rs at this edge
             if (cycle == rs + 8 + T_RP) state <= IDLE;
         end
 
@@ -188,7 +201,7 @@ module sdram_burst #(
         endcase
 
         if (!resetn) begin
-            dq_oen <= 1'b1; SDRAM_DQM <= 4'b0000; state <= INIT; init_done <= 1'b0;
+            dq_oen <= 1'b1; SDRAM_DQM <= 4'b0000; state <= INIT; init_done <= 1'b0; rd_take <= 1'b0;
             refresh_due <= 1'b0; refresh_cnt <= 0;
         end
     end

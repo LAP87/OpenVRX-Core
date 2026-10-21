@@ -121,6 +121,7 @@ module puck_ui #(
     output wire        osd_show,
     // measurement log over the board's USB-UART (one line per meter window, see below)
     input  wire        mix_overflow,      // any domain, level: the mixer has dropped a line since reset
+    input  wire [3:0]  sdram_test,        // {done, ok[2:0]}: the SDRAM self-test (sdram_selftest.v), ok steady once done
     output wire        uart_txd,
     // state (tests, LEDs)
     output reg  [2:0]  band,
@@ -486,9 +487,9 @@ module puck_ui #(
     assign osd_show = (osd_ms != 0) || (page != P_FLY);
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line
-    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V F/L o ll rrrrr sssss pa_ pb_ ww\r\n"
-    //   (87 bytes incl. CRLF; 85 before the HDMI range of 2026-10-18, 62 before the RSSI fields of
-    //   2026-10-13)
+    //   "S aaaaaa bbbbbb nnnnnn mmmmmm ua_ ub_ um_ Bc ffff MOD T/V F/L o ll rrrrr sssss pa_ pb_ ww t\r\n"
+    //   (89 bytes incl. CRLF; 87 before the SDRAM self-test of 2026-10-21, 85 before the HDMI range of
+    //   2026-10-18, 62 before the RSSI fields of 2026-10-13)
     //   snow A, snow B, noise A, noise B (luma samples outside 16..235 in the last 1024 lines),
     //   % from A, % from B, % blended, band+channel, MHz, mode (MIX/A/B), filter (T/V),
     //   HDMI range (F full, L limited: the menu's choice, also in the DVI build, which ignores it),
@@ -497,7 +498,9 @@ module puck_ui #(
     //   (lost lock), "-" whole rounds without it, "?" no whole round (decoder absent or reset),
     //   RSSI A, RSSI B (raw ADC codes of the last round, "-----" without a reading), calibrated % A,
     //   B ("---" uncalibrated), and per receiver "W" weak (the mixer avoids it), "L" low but not
-    //   weak (the other one is low too, or not calibrated), "-" neither, "?" no reading
+    //   weak (the other one is low too, or not calibrated), "-" neither, "?" no reading;
+    //   t = the SDRAM self-test: "-" not run yet, else a digit 0-7 whose bits 0/1/2 say that sample
+    //   point 4/5/6 read the test bursts right ("2": only the default point 5, as it should be)
     reg [1:0] ll_round, ll_lost;                           // since the previous log line
     wire      log_take;                                    // the line is copied this clock
     function [7:0] ll_char(input round, input lost);
@@ -530,7 +533,7 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 87;
+    localparam LOG_LEN = 89;
     wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, ch_dig, " ", mhz, " ", mode_s, " ",
@@ -539,7 +542,8 @@ module puck_ui #(
                              z5(bcd_ra, !rssi_valid[0]), " ", z5(bcd_rb, !rssi_valid[1]), " ",
                              rssi_cal_ok[0] ? z3(bcd_pa) : "---", " ", rssi_cal_ok[1] ? z3(bcd_pb) : "---", " ",
                              rs_char(rssi_valid[0], rssi_low[0], rssi_warn[0]),
-                             rs_char(rssi_valid[1], rssi_low[1], rssi_warn[1]), 16'h0D0A};
+                             rs_char(rssi_valid[1], rssi_low[1], rssi_warn[1]), " ",
+                             sdram_test[3] ? 8'h30 + {5'd0, sdram_test[2:0]} : "-", 16'h0D0A};
     reg  [8:0] log_wait;
     reg  [6:0] log_i;
     reg        log_active, u_send;

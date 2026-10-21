@@ -41,7 +41,8 @@ module fb_backend #(
     parameter RT_EN = 1, RT_NTSC = 4, RT_PAL = 44, RT_HYST = 16, RT_SPLIT = 270,    // fb_sdram.v
     parameter LL_EQ = 1,                    // low-latency mode: delay early fields for frames of equal length
     parameter JUMP_AFTER = 3, HOLD = 32,    // genlock_timing.v
-    parameter WAIT_BEFORE_VSYNC = 0         // genlock_timing.v: the varying line before vsync (needs V_FP >= 2)
+    parameter WAIT_BEFORE_VSYNC = 0,        // genlock_timing.v: the varying line before vsync (needs V_FP >= 2)
+    parameter SELFTEST = 0                  // 1: sdram_selftest.v runs once after the SDRAM start-up, before the field store
 ) (
     input  wire        sd_clk,
     input  wire        sd_clk_shift,
@@ -65,6 +66,8 @@ module fb_backend #(
     output wire [11:0] tx, ty,            // timing generator position (the video is valid 6 clocks later)
     output wire        have_video,        // pix domain: a field buffer is being shown
     output wire        sdram_ready,       // sd domain: SDRAM initialised
+    output wire        sdram_test_done,   // sd domain: the self-test has run (SELFTEST = 0: always 0)
+    output wire [2:0]  sdram_test_ok,     // sd domain, steady once done: sample point 4/5/6 (bit 0/1/2) read right
     output wire        hz50               // pix domain: the timing runs 720p50 lines (LOW with a PAL source)
 );
     reg [2:0] rst_s, rst_p;
@@ -94,6 +97,10 @@ module fb_backend #(
     wire        req_valid, req_write, req_ready, wdata_take, rdata_valid, init_done;
     wire [20:0] req_addr;
     wire [31:0] wdata, rdata;
+    wire [4:0]  rd_sample;
+    wire        fb_req_valid, fb_req_write;     // the field store's request port
+    wire [20:0] fb_req_addr;
+    wire [31:0] fb_wdata;
     wire        lb_we, pub_valid, frame_low;
     wire [10:0] lb_waddr;
     wire [31:0] lb_wdata;
@@ -101,21 +108,46 @@ module fb_backend #(
     sdram_burst #(.FREQ(SDRAM_FREQ)) sdram (
         .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
         .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .SDRAM_DQM(SDRAM_DQM),
-        .clk(sd_clk), .clk_sdram(sd_clk_shift), .resetn(~srst), .rd_sample(RD_SAMPLE),
+        .clk(sd_clk), .clk_sdram(sd_clk_shift), .resetn(~srst), .rd_sample(rd_sample),
         .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
         .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid), .init_done(init_done));
     assign sdram_ready = init_done;
 
+    // ---- SDRAM read self-test (sdram_selftest.v): owns the request port until it is done ----
+    wire        st_done, st_req_valid, st_req_write;
+    wire [20:0] st_req_addr;
+    wire [31:0] st_wdata;
+    wire [4:0]  st_rd_sample;
+    wire [2:0]  st_ok;
+    generate if (SELFTEST != 0) begin : selftest
+        sdram_selftest test (.clk(sd_clk), .rst(srst), .init_done(init_done),
+            .req_valid(st_req_valid), .req_write(st_req_write), .req_addr(st_req_addr), .rd_sample(st_rd_sample),
+            .req_ready(req_ready), .wdata(st_wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid),
+            .done(st_done), .ok(st_ok));
+    end else begin : no_selftest
+        assign st_done = 1'b0; assign st_ok = 3'b000;
+        assign st_req_valid = 1'b0; assign st_req_write = 1'b0; assign st_req_addr = 21'd0;
+        assign st_wdata = 32'd0; assign st_rd_sample = 5'd0;
+    end endgenerate
+    wire   fb_owns = (SELFTEST == 0) || st_done;
+    assign req_valid = fb_owns ? fb_req_valid : st_req_valid;
+    assign req_write = fb_owns ? fb_req_write : st_req_write;
+    assign req_addr  = fb_owns ? fb_req_addr  : st_req_addr;
+    assign wdata     = fb_owns ? fb_wdata     : st_wdata;
+    assign rd_sample = fb_owns ? RD_SAMPLE    : st_rd_sample;
+    assign sdram_test_done = st_done;
+    assign sdram_test_ok   = st_ok;
+
     wire fb_pop;
     // held in reset in low-latency mode, so that it starts empty when the mode is left
     fb_sdram #(.RT_EN(RT_EN), .RT_NTSC(RT_NTSC), .RT_PAL(RT_PAL), .RT_HYST(RT_HYST), .RT_SPLIT(RT_SPLIT)) fb (
-        .clk(sd_clk), .resetn(~srst & init_done & ~ll_s),
+        .clk(sd_clk), .resetn(~srst & init_done & fb_owns & ~ll_s),
         .in_empty(f_empty | ll_s), .in_data(f_data), .in_pop(fb_pop),
         .fetch_req(s_fetch_req), .fetch_first(s_fetch_first), .fetch_line(s_fetch_line), .fetch_slot(s_fetch_slot),
         .lb_we(lb_we), .lb_addr(lb_waddr), .lb_data(lb_wdata),
         .pub_valid(pub_valid), .pub_lines(pub_lines), .frame_low(frame_low),
-        .req_valid(req_valid), .req_write(req_write), .req_addr(req_addr), .req_ready(req_ready),
-        .wdata(wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid));
+        .req_valid(fb_req_valid), .req_write(fb_req_write), .req_addr(fb_req_addr), .req_ready(req_ready),
+        .wdata(fb_wdata), .wdata_take(wdata_take), .rdata(rdata), .rdata_valid(rdata_valid));
 
     reg       s_pub_toggle;             // one cycle after pub_valid, when pub_lines has its new value
     always @(posedge sd_clk) begin

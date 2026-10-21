@@ -47,6 +47,7 @@ module tb_puck_ui;
     end
     reg  [1:0] dec_locked = 2'b01;                // decoder A locked, B not
     reg  mix_overflow = 0;                        // set after the "final" mark
+    reg  [3:0] sdram_test = 4'b0000;              // the SDRAM self-test: done with ok 010 after the "final" mark
     // decoder poll rounds (tvp_ctrl round_ok): both every 20 ms. A's round reads 88h bit 4 once,
     // after the "lat" mark. B's rounds stop at the "unlock" mark; its bit 4 then stays at 1
     // (a stale status word), which must not count without a round.
@@ -79,7 +80,7 @@ module tb_puck_ui;
         .rx_spi_clk(sclk), .rx_spi_data(sdat), .rx_spi_sel_n(sel_n),
         .text_row(row), .text_col(col), .text_char(chr), .text_big(tbig),
         .osd_row(osd_row), .osd_col(osd_col), .osd_char(osd_char), .osd_show(osd_show),
-        .mix_overflow(mix_overflow), .uart_txd(txd),
+        .mix_overflow(mix_overflow), .sdram_test(sdram_test), .uart_txd(txd),
         .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
         .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd));
 
@@ -210,6 +211,7 @@ module tb_puck_ui;
         wait_frames(2);
         $display("MARK final force=%b band=%0d ch=%0d mode=%0d field=%0d", force_bad, band, ch, mode, field);
         mix_overflow = 1;
+        sdram_test = 4'b1010;
         press(0);                                 // LAT
         press(1);                                 // BUF -> LOW
         wait_frames(2);
