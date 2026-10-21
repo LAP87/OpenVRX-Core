@@ -20,3 +20,6 @@ This branch holds build outputs only; it is not part of main.
 The earlier m2a_memtest_ioreg0.fs equals the new m2a_memtest.fs in options; m2u_uart64_ioreg1.fs and the old IOREG=1 builds are kept as the evidence of the scrambled output.
 | m3_probe_tvp5d.fs | build/tvp-addr | the probe for decoders at I2C address 5D (the red CP803A module): i2c OK, 27 MHz, NTSC timing on the board 2026-10-21 |
 | m4_dual_mix_tvp5d.fs | build/tvp-addr | M4 for decoders at 5D |
+| m4_dual_mix_low.fs | build/m4-low | M4 in the low-latency mode (no SDRAM field store), decoders at 5C |
+| m4_dual_mix_low_tvp5d.fs | build/m4-low | the same for decoders at 5D: the first-picture bitstream for the CP803A module (council 2026-10-21) |
+| m6_puck_proto.fs, m6_puck_proto_hdmi.fs | main fcad832 | M6 with the flight view (task 42), decoders at 5C, DVI and HDMI=1 |
