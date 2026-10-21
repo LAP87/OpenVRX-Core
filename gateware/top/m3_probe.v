@@ -2,7 +2,7 @@
 // No video out. Once a second it prints one line per decoder over the
 // onboard USB-UART (PIN69, 115200 8N1):
 //
-//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 000E ri 00
+//   A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c 5C st 000E ri 00
 //
 //   sclk  SCLK frequency in Hz (resolution 256 Hz); "no SCLK" ends the line when the decoder clock is absent
 //   tog   data bits YOUT7..0 that toggled (FF = all wired); hi = bits ever 1 (stuck-low bit: tog 0, hi 0)
@@ -10,7 +10,8 @@
 //   ln    active lines this second (NTSC about 14 500, PAL about 14 400)
 //   fld   field changes this second (60 or 50)
 //   xe    timing codes with uncorrectable bit errors
-//   i2c   OK / NA (the last transaction was not acknowledged) / -- (start-up not finished)
+//   i2c   5C / 5D: the address the decoder answers at (tvp_ctrl tries both, 2026-10-21; until then
+//         OK), NA (the last transaction was not acknowledged), -- (start-up not finished)
 //   st    status registers 89h,88h (---- = none yet); healthy NTSC 000E or 100E, healthy PAL x06E
 //   ri    times the decoder was found reset (03h not 0Dh) and brought up again, hex, stops at FF
 //
@@ -61,6 +62,7 @@ module m3_probe #(
     wire [1:0] sda_low, dev_err, st_valid;
     wire [15:0] st0, st1;
     wire [7:0]  ri0, ri1;
+    wire [1:0]  addr_alt;
 `ifdef TVP_DEV_5D
     localparam [6:0] TVP_DEV = 7'h5D;  // TVP_ADDR=5D gateware/build.sh: modules strapped the other way (YOUT7)
 `else
@@ -70,7 +72,8 @@ module m3_probe #(
         .clk(clk), .rst(rst), .tvp_resetb(tvp_resetb),
         .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
         .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
-        .reinit0(ri0), .reinit1(ri1), .hold(1'b0), .op_mode_req(1'b0), .op_mode_vcr(1'b0), .active());
+        .reinit0(ri0), .reinit1(ri1), .addr_alt(addr_alt), .addr_found(),
+        .hold(1'b0), .op_mode_req(1'b0), .op_mode_vcr(1'b0), .active());
     assign i2c_scl   = scl_low    ? 1'b0 : 1'bz;
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
@@ -147,6 +150,7 @@ module m3_probe #(
     wire [15:0] stv     = ch ? st1 : st0;
     wire        stok    = ch ? st_valid[1] : st_valid[0];
     wire        err     = ch ? dev_err[1] : dev_err[0];
+    wire        a5d     = (ch ? addr_alt[1] : addr_alt[0]) ^ TVP_DEV[0];   // the decoder answers at 5Dh
     wire [7:0]  ri      = ch ? ri1 : ri0;
     wire        fr      = ch ? fresh[1] : fresh[0];
     always @* case (ci)
@@ -162,7 +166,7 @@ module m3_probe #(
     wire [31:0] b0 = bcd[0], b1 = bcd[1], b2 = bcd[2], b3 = bcd[3], b4 = bcd[4], b5 = bcd[5];
     wire [63:0] sclk_s = {dg(b0[31:28]), dg(b0[27:24]), dg(b0[23:20]), dg(b0[19:16]), d4(b0)};
     wire [71:0] len_s  = (lns == 0) ? "---------" : {d4(b1), "-", d4(b2)};
-    wire [15:0] i2c_s  = !init_done ? "--" : err ? "NA" : "OK";
+    wire [15:0] i2c_s  = !init_done ? "--" : err ? "NA" : a5d ? "5D" : "5C";
     wire [31:0] st_s   = stok ? hex4(stv) : "----";
     wire [LEN*8-1:0] line_ok = {ch ? "B" : "A", " sclk ", sclk_s, " tog ", hex2(tog_sel), " hi ", hex2(hi_sel),
                                 " len ", len_s, " ln ", dg(b3[19:16]), d4(b3), " fld ", dg(b4[11:8]), dg(b4[7:4]),

@@ -44,6 +44,20 @@
 // identical modules have the same address (the pull is fixed on the module):
 // then use SPLIT_SDA = 1, one SDA line per decoder and a shared SCL; DEV1 may
 // then equal DEV0. The F bit setting (15h) is left at its default.
+//
+// Address search (SEARCH = 1, with SPLIT_SDA = 1 or one decoder): YOUT7 may be
+// pulled either way on a module, and without a RESETB wire the decoder may take
+// its address while the FPGA is still being configured (hub
+// docs/design/2026-10-21/LOGIKGRANSKNING.md F3). DEV0/DEV1 are the first
+// address tried. When the init list's first write is not acknowledged there,
+// the same write goes to the other address (DEVn ^ 1) at once; when neither
+// answers, dev_err is set and each later poll round tries the other address
+// than the round before, so a decoder that joins late is found at either. The
+// first acknowledged transaction locks the decoder's address until reset:
+// re-initialisations and polls stay there. addr_alt says which address a
+// decoder uses (1 = DEVn ^ 1), addr_found that one has answered. On a shared
+// SDA line (SPLIT_SDA = 0, two decoders at 5Ch and 5Dh) there is no search:
+// it could find the other decoder.
 `default_nettype none
 module tvp_ctrl #(
     parameter CLK_HZ = 27_000_000,
@@ -53,6 +67,7 @@ module tvp_ctrl #(
     parameter [6:0] DEV1 = 7'h5D,
     parameter POWER_MS = 20, RESET_MS = 2, BOOT_MS = 1, POLL_MS = 20,
     parameter SPLIT_SDA = 0,
+    parameter SEARCH = 1,                 // try DEVn ^ 1 when DEVn does not answer (see above)
     parameter [7:0] VIDEO_STD = 8'h00,    // register 28h, see above
     parameter [7:0] OP_MODE = 8'h30       // register 02h, see above (20h = VCR mode)
 ) (
@@ -72,6 +87,8 @@ module tvp_ctrl #(
     output reg  [7:0]  reinit1,
     output reg  [1:0]  round_ok,          // pulse: a whole poll round found the decoder up (status words new now)
     output reg  [1:0]  lost_lock,         // 88h bit 4 of the decoder's last whole round (valid with round_ok)
+    output reg  [1:0]  addr_alt,          // the decoder is addressed at DEVn ^ 1 (address search)
+    output reg  [1:0]  addr_found,        // the decoder has acknowledged at that address (locked until reset)
     input  wire        hold,              // another master on the same bus wants it: start nothing new
     input  wire        op_mode_req,       // one-clock request to select TV or VCR mode
     input  wire        op_mode_vcr,       // value paired with op_mode_req: 0=TV, 1=VCR
@@ -80,6 +97,7 @@ module tvp_ctrl #(
     localparam MS = CLK_HZ / 1000;
     localparam N_INIT = 6;
     localparam [7:0] MISC_ON = 8'h0D;     // register 03h when the decoder is up
+    localparam       SEARCH_ON = (SEARCH != 0) && (SPLIT_SDA != 0 || N_DEV == 1);
 
     reg [7:0] selected_mode;
 
@@ -116,6 +134,9 @@ module tvp_ctrl #(
     reg        mode_tx, mode_tx_di;       // frozen 02h write tag/device, including init-list writes
     reg [7:0]  mode_tx_value;             // frozen value recorded only if the transaction ACKs
     reg        tx_sel1;                   // frozen physical SDA lane for the active transaction
+    reg        swapped;                   // the running init list's first write has gone to the other address
+    wire [6:0] dev_of0 = DEV0 ^ {6'd0, addr_alt[0]};
+    wire [6:0] dev_of1 = DEV1 ^ {6'd0, addr_alt[1]};
 
     reg        start, rw;
     reg [6:0]  dev;
@@ -143,7 +164,7 @@ module tvp_ctrl #(
         S_RESET: begin tvp_resetb <= 1'b0; t <= t + 1; if (t == RESET_MS * MS) begin t <= 0; st <= S_BOOT; end end
         S_BOOT:  begin tvp_resetb <= 1'b1; t <= t + 1; if (t == BOOT_MS * MS) begin t <= 0; di <= 0; ii <= 0; st <= S_INIT; end end
         S_INIT: if (!busy && !start && !hold) begin
-            start <= 1'b1; rw <= 1'b0; dev <= di ? DEV1 : DEV0;
+            start <= 1'b1; rw <= 1'b0; dev <= di ? dev_of1 : dev_of0;
             {addr, wdata} <= init_rom(ii);
             tx_sel1 <= di;
             mode_tx <= (ii == 3'd4);
@@ -160,8 +181,13 @@ module tvp_ctrl #(
                 end
                 mode_tx <= 1'b0;
             end
-            if (ret == S_INIT) begin
+            if (!nack) addr_found[di] <= 1'b1;                       // this address answers: keep it
+            if (ret == S_INIT && nack && ii == 3'd0 && SEARCH_ON && !addr_found[di] && !swapped) begin
+                addr_alt[di] <= ~addr_alt[di];                       // nobody at this address: try the other
+                swapped <= 1'b1; st <= S_INIT;
+            end else if (ret == S_INIT) begin
                 dev_err[di] <= nack;
+                swapped <= 1'b0;
                 if (ii == N_INIT - 1 || nack) begin                  // list done, or nobody there
                     ii <= 0;
                     if (again) begin again <= 1'b0; st <= S_NEXT; end
@@ -176,6 +202,7 @@ module tvp_ctrl #(
             end else begin
                 if (nack) begin                                      // the round is void
                     dev_err[di] <= 1'b1; status_valid[di] <= 1'b0; st <= S_NEXT;
+                    if (SEARCH_ON && !addr_found[di]) addr_alt[di] <= ~addr_alt[di];   // next round: the other
                 end else if (ii != P_LAST) begin                     // next register at once
                     if (ii == 3'd0) p88 <= rdata; else p89 <= rdata;
                     ii <= ii + 1'b1; st <= S_POLL; t <= POLL_MS * MS;
@@ -200,7 +227,7 @@ module tvp_ctrl #(
         S_POLL: begin
             if (t < POLL_MS * MS) t <= t + 1;
             else if (!busy && !start && !hold) begin
-                start <= 1'b1; rw <= 1'b1; dev <= di ? DEV1 : DEV0; addr <= poll_reg(ii[1:0]);
+                start <= 1'b1; rw <= 1'b1; dev <= di ? dev_of1 : dev_of0; addr <= poll_reg(ii[1:0]);
                 tx_sel1 <= di;
                 mode_tx <= 1'b0;
                 st <= S_WAIT; ret <= S_POLL;
@@ -217,7 +244,7 @@ module tvp_ctrl #(
             if (!busy && !start && !hold) begin
                 if ((!mode_cursor && (!mode_ack_valid[0] || mode_acked0 != selected_mode)) ||
                     ( mode_cursor && (!mode_ack_valid[1] || mode_acked1 != selected_mode))) begin
-                    start <= 1'b1; rw <= 1'b0; dev <= mode_cursor ? DEV1 : DEV0;
+                    start <= 1'b1; rw <= 1'b0; dev <= mode_cursor ? dev_of1 : dev_of0;
                     addr <= 8'h02; wdata <= selected_mode;
                     tx_sel1 <= mode_cursor;
                     mode_tx <= 1'b1; mode_tx_di <= mode_cursor; mode_tx_value <= selected_mode;
@@ -237,6 +264,7 @@ module tvp_ctrl #(
             again <= 1'b0; reinit0 <= 0; reinit1 <= 0; round_ok <= 2'b00; lost_lock <= 2'b00;
             selected_mode <= OP_MODE; mode_ack_valid <= 2'b00; mode_acked0 <= 0; mode_acked1 <= 0;
             mode_cursor <= 0; mode_tx <= 1'b0; mode_tx_di <= 1'b0; mode_tx_value <= OP_MODE; tx_sel1 <= 1'b0;
+            addr_alt <= 2'b00; addr_found <= 2'b00; swapped <= 1'b0;
         end
     end
 endmodule

@@ -276,8 +276,9 @@ def _make_transaction(
     first_address = first[0].value >> 1
     first_read = bool(first[0].value & 1)
     if topology == "split_sda":
-        if first_address != 0x5C:
-            raise TraceError(f"split_sda supports only address 5Ch, saw {first_address:02X}h")
+        # tvp_ctrl's address search: either address may appear on either lane
+        if first_address not in (0x5C, 0x5D):
+            raise TraceError(f"split_sda supports only addresses 5Ch and 5Dh, saw {first_address:02X}h")
         device = transfer.lane
     else:
         if first_address not in (0x5C, 0x5D):
@@ -733,8 +734,9 @@ def parse_bus_text(output):
     return tuple(events)
 
 
-def run(present1, split=0, scenario=0, alter=None, trace=0, tag=''):
+def run(present1, split=0, scenario=0, alter=None, trace=0, tag='', params=None):
     """Returns the testbench's RESULT line as a dict, and its MID line (or None).
+    params: further tb_tvp_ctrl parameters (S0_ADDR, S1_ADDR, DEV0, SEARCH) as {name: value}.
     alter: (text, replacement) in a copy of tvp_ctrl.v (negative controls).
     With trace=1, also decodes only the resolved SCL/SDA pin samples from the bench.
     tag: appended to the build directory when two tests run the same bench."""
@@ -743,7 +745,9 @@ def run(present1, split=0, scenario=0, alter=None, trace=0, tag=''):
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
     # one build directory per alteration: the negative controls may run in separate processes at once
-    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}_{trace}{"_alt" + hashlib.md5((alter[0] + alter[1]).encode()).hexdigest()[:6] if alter else ""}{tag}'
+    params = params or {}
+    ptag = ''.join(f'_{k}{v}' for k, v in sorted(params.items()))
+    work = HERE / 'build' / f'tb_tvp_ctrl_{present1}{split}{scenario}_{trace}{"_alt" + hashlib.md5((alter[0] + alter[1]).encode()).hexdigest()[:6] if alter else ""}{ptag}{tag}'
     work.mkdir(parents=True, exist_ok=True)
     ctrl = GW / 'rtl' / 'tvp_ctrl.v'
     if alter:
@@ -753,7 +757,7 @@ def run(present1, split=0, scenario=0, alter=None, trace=0, tag=''):
         ctrl.write_text(text.replace(*alter))
     subprocess.run(['iverilog', '-g2012', '-o', 'sim.vvp', '-s', 'tb_tvp_ctrl', f'-Ptb_tvp_ctrl.PRESENT1={present1}',
                     f'-Ptb_tvp_ctrl.SPLIT={split}', f'-Ptb_tvp_ctrl.SCENARIO={scenario}',
-                    f'-Ptb_tvp_ctrl.PIN_TRACE={trace}',
+                    f'-Ptb_tvp_ctrl.PIN_TRACE={trace}', *[f'-Ptb_tvp_ctrl.{k}={v}' for k, v in params.items()],
                     str(GW / 'rtl' / 'i2c_master.v'), str(ctrl),
                     str(HERE / 'i2c_slave_model.v'), str(HERE / 'tb_tvp_ctrl.v')], cwd=work, env=env, check=True)
     out = subprocess.run(['vvp', '-n', 'sim.vvp'], cwd=work, env=env, check=True, capture_output=True, text=True).stdout
@@ -914,6 +918,81 @@ def test_late_decoder_and_error_flag():
     assert (mid['s1_03'], mid['s1_04'], mid['s1_0d']) == INIT and mid['valid'] == '3' and mid['st1'] == ST_PAL
     assert r['err'] == '2' and r['reinit1'] == '1' and r['s1_writes'] == str(N)
     assert r['reinit0'] == '0' and r['s0_writes'] == str(N)
+
+
+# ---- address search (tvp_ctrl SEARCH, split SDA): a module strapped to 5Dh with DEV0 = 5Ch
+
+A5C, A5D = "7'h5C", "7'h5D"
+
+
+def test_address_search_finds_5d():
+    """Decoder 0 strapped to 5Dh, decoder 1 to 5Ch, both expected at 5Ch: the first init write to
+    decoder 0 is not acknowledged, the same write goes to 5Dh, and the whole list and the polls follow
+    there. Decoder 1 answers at 5Ch as before."""
+    r, _ = run(1, split=1, trace=1, params={'S0_ADDR': A5D})
+    assert r['err'] == '0' and r['valid'] == '3' and r['alt'] == '1' and r['found'] == '3', r
+    assert r['log'] == INIT_LIST and init_list_ok(r)
+    assert r['s0_writes'] == str(N) and r['s1_writes'] == str(N)
+    assert r['st0'] == ST_NTSC and r['st1'] == ST_PAL and int(r['rounds0']) >= 3
+    lane0 = [t for t in r['transactions'] if t.device == 0]
+    assert lane0[0].address == 0x5C and not lane0[0].acks[0].acknowledged, lane0[0]      # refused at 5Ch
+    assert all(t.address == 0x5D for t in lane0[1:]), [hex(t.address) for t in lane0]
+    assert all(t.address == 0x5C for t in r['transactions'] if t.device == 1)
+
+
+def test_address_search_keeps_5c():
+    """Both strapped to 5Ch: nothing changes, no transaction goes to 5Dh."""
+    r, _ = run(1, split=1, trace=1, tag='_keep5c')
+    assert r['err'] == '0' and r['valid'] == '3' and r['alt'] == '0' and r['found'] == '3', r
+    assert all(t.address == 0x5C for t in r['transactions'])
+
+
+def test_address_search_off_is_tested():
+    """Negative control: with SEARCH = 0 the decoder at 5Dh stays unanswered (dev_err) and gets nothing."""
+    r, _ = run(1, split=1, scenario=14, params={'S0_ADDR': A5D, 'SEARCH': 0})
+    assert r['err'] == '1' and r['valid'] == '2' and r['s0_writes'] == '0' and r['found'] == '2', r
+
+
+def test_address_search_without_decoders():
+    """No decoder on either lane: dev_err on both, nothing locked; the init write tries 5Ch and then
+    5Dh, and the poll rounds go on alternating between the two addresses."""
+    none = "7'h10"
+    r, _ = run(0, split=1, scenario=14, trace=1, params={'S0_ADDR': none})
+    assert r['err'] == '3' and r['valid'] == '0' and r['found'] == '0', r
+    for lane in (0, 1):
+        addrs = [t.address for t in r['transactions'] if t.device == lane]
+        assert addrs[:2] == [0x5C, 0x5D], (lane, [hex(a) for a in addrs])
+        polls = [t.address for t in r['transactions'] if t.device == lane and t.direction == 'read']
+        assert len(polls) >= 4 and polls[0] == 0x5D, (lane, [hex(a) for a in polls])
+        assert all(a != b for a, b in zip(polls, polls[1:])), (lane, [hex(a) for a in polls])
+
+
+def test_address_kept_after_reinit():
+    """Decoder 1 strapped to 5Dh loses its registers twice: each re-initialisation goes to 5Dh at once,
+    without a write to 5Ch (its address stays locked)."""
+    r, mid = run(1, split=1, scenario=1, trace=1, params={'S1_ADDR': A5D})
+    assert mid['reinit1'] == '1' and r['reinit1'] == '2' and r['s1_writes'] == str(3 * N), r
+    assert r['err'] == '0' and r['alt'] == '2' and r['found'] == '3'
+    lane1 = [t.address for t in r['transactions'] if t.device == 1]
+    assert lane1[0] == 0x5C and all(a == 0x5D for a in lane1[1:]), [hex(a) for a in lane1]
+
+
+def test_late_decoder_found_at_5d():
+    """Decoder 1, strapped to 5Dh, joins after start-up: the alternating poll rounds find it there and it
+    is brought up; when it leaves, the error flag is set and its address stays locked."""
+    r, mid = run(0, split=1, scenario=3, params={'S1_ADDR': A5D})
+    # one write more than the list: the TV/VCR reconciliation's 02h reaches it before the poll round does
+    assert mid['err'] == '0' and mid['reinit1'] == '1' and mid['s1_writes'] == str(N + 1) and mid['valid'] == '3', mid
+    assert mid['alt'] == '2' and mid['found'] == '3'
+    assert r['err'] == '2' and r['alt'] == '2' and r['found'] == '3', r
+
+
+def test_shared_bus_has_no_search():
+    """On a shared SDA line (5Ch and 5Dh) a missing decoder is not looked for at the other address,
+    which belongs to the other decoder."""
+    r, _ = run(0, trace=1, tag='_shared')
+    assert r['err'] == '2' and r['alt'] == '0'
+    assert all(t.address == 0x5C + t.device for t in r['transactions'])
 
 
 WRONG_OP_MODE = ("parameter [7:0] OP_MODE = 8'h30", "parameter [7:0] OP_MODE = 8'h20")

@@ -8,7 +8,7 @@
 #   IOREG=1 gateware/build.sh m4_dual_mix   # input flops in the I/O cells: 1 or 0 (default 0 since 2026-10-21, see below)
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
 #   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
-#   TVP_ADDR=5D gateware/build.sh m3_probe     # the decoders answer at I2C address 5D instead of 5C (tvp_ctrl.v)
+#   TVP_ADDR=5D gateware/build.sh m3_probe     # try the decoders' I2C address 5D first, then 5C (tvp_ctrl.v)
 #   LOW=1 gateware/build.sh m4_dual_mix        # M4 in the low-latency mode, no SDRAM field store (fb_backend.v; default 0)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI /
 # an IOREG other than the top's default).
@@ -57,9 +57,10 @@ if [ "$low" = 1 ]; then
   defs="$defs -DLOW=1"
   out_fs="${out_fs%.fs}_low.fs"
 fi
-# optional: the decoders' I2C address. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module may be
-# strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. M3, M4 and M6
-# read the define; the output gets the suffix _tvp5d and the manifest records tvp_addr.
+# optional: the decoders' I2C address tried first. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module
+# may be strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. Since
+# 2026-10-21 tvp_ctrl.v tries the other address itself when the first does not answer, so the option only sets
+# the order. M3, M4 and M6 read the define; the output gets the suffix _tvp5d and the manifest records tvp_addr.
 tvp="${TVP_ADDR:-5C}"
 case "$tvp" in 5C|5c) tvp=5C ;; 5D|5d) tvp=5D ;; *) echo "TVP_ADDR must be 5C or 5D" >&2; exit 1 ;; esac
 if [ "$tvp" = 5D ]; then
