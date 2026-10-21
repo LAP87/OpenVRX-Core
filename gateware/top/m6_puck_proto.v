@@ -78,7 +78,10 @@ module m6_puck_proto #(
 `else
     localparam [6:0] TVP_DEV = 7'h5C;
 `endif
-    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(TVP_DEV), .DEV1(TVP_DEV)) ctrl (
+    // poll pause 2 ms: 88h is read about every 5 ms per decoder (20 ms until 2026-10-21: about 26 ms);
+    // sim/test_rssi_adc.py shows the OLED and the RSSI reads keep their rate on the shared bus
+    localparam TVP_POLL_MS = 2;
+    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(TVP_DEV), .DEV1(TVP_DEV), .POLL_MS(TVP_POLL_MS)) ctrl (
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
@@ -172,9 +175,9 @@ module m6_puck_proto #(
     wire        dec_valid, dec_field;
     wire [1:0]  dec_use, dec_pop;
     wire [9:0]  dec_line;
-    // a decoder that answers but reports no H or V lock loses against one that is locked
-    wire nolock_a = st_valid[0] && !(st0[1] && st0[2]);
-    wire nolock_b = st_valid[1] && !(st1[1] && st1[2]);
+    // a decoder without a whole poll round reporting H and V lock loses against one that has it (dec_bad.v)
+    wire nolock_a, nolock_b;
+    dec_bad lockrule (.status_valid(st_valid), .status0(st0), .status1(st1), .bad({nolock_b, nolock_a}));
     mixer2 mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
                 .ext_bad_a(nolock_a | force_bad[0]), .ext_bad_b(nolock_b | force_bad[1]),
                 .ext_weak_a(rssi_warn[0]), .ext_weak_b(rssi_warn[1]),
