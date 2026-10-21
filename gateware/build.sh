@@ -5,9 +5,10 @@
 #   PULL=UP gateware/build.sh m3_probe      # weak pull-ups (or DOWN) on the decoder data pins: pull test
 #   SDRAM_PHASE=12 gateware/build.sh m2a_memtest   # SDRAM clock phase in sixteenths of a period (clocks_sdram.v)
 #   SEED=3 gateware/build.sh m6_puck_proto  # place-and-route seed (default: boards/<top>.seed if there is one, else 0)
-#   IOREG=0 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default: 1 for the SDRAM tops)
+#   IOREG=1 gateware/build.sh m4_dual_mix   # I/O registers in the I/O cells: 1 or 0 (default 0 since 2026-10-21, see below)
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
 #   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
+#   TVP_ADDR=5D gateware/build.sh m3_probe     # the decoders answer at I2C address 5D instead of 5C (tvp_ctrl.v)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI /
 # an IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
@@ -47,14 +48,22 @@ if [ "$hdmi" = 1 ]; then
   defs="$defs -DHDMI=1"
   out_fs="${out_fs%.fs}_hdmi.fs"
 fi
-# I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob), on by default for
-# the tops with SDRAM: the SDRAM read and write timing then does not depend on where the placer puts the
-# registers, so the memory test on the board (m2a_memtest) speaks for the picture builds. Owner's decision
-# 2026-10-12; README section "I/O-register i I/O-cellerna".
-case " m2_moneagle_color m2s_moneagle_color_sync m2a_memtest m4_dual_mix m6_puck_proto " in
-  *" $top "*) ioreg_default=1 ;;
-  *) ioreg_default=0 ;;
-esac
+# optional: the decoders' I2C address. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module may be
+# strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. M3, M4 and M6
+# read the define; the output gets the suffix _tvp5d and the manifest records tvp_addr.
+tvp="${TVP_ADDR:-5C}"
+case "$tvp" in 5C|5c) tvp=5C ;; 5D|5d) tvp=5D ;; *) echo "TVP_ADDR must be 5C or 5D" >&2; exit 1 ;; esac
+if [ "$tvp" = 5D ]; then
+  defs="$defs -DTVP_DEV_5D=1"
+  out_fs="${out_fs%.fs}_tvp5d.fs"
+fi
+# I/O registers in the I/O cells (nextpnr --vopt ireg_in_iob / oreg_in_iob / ioreg_in_iob). They were the
+# default for the SDRAM tops from 2026-10-12 (owner's decision 2) so that the SDRAM timing would not depend
+# on placement. Off for every top since 2026-10-21: on the board, a flop packed into an I/O cell with a
+# clock enable, set or reset does not behave (the M2a report and the UART check came out scrambled with
+# IOREG=1 and right without it; hub docs/bench/IOREG_ANALYS_2026-10-21.md). IOREG=1 stays as an explicit
+# variant for experiments; tools/iob_regs.py lists what it packs. README "I/O-register i I/O-cellerna".
+ioreg_default=0
 ioreg="${IOREG:-$ioreg_default}"
 case "$ioreg" in 0|1) ;; *) echo "IOREG must be 0 or 1" >&2; exit 1 ;; esac
 ioreg_opts=()
@@ -102,7 +111,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.
@@ -137,6 +146,13 @@ if [ -f "$source_here/boards/$top.sdc" ]; then cp "$source_here/boards/$top.sdc"
     exit 1
   }
 "$bin/python" "$manifest" route "$prefix.pnr.log"
+# which registers nextpnr put into I/O cells (tools/iob_regs.py); with IOREG=1 a warning when any has CE / SET / RESET
+if [ -f "$here/tools/iob_regs.py" ]; then
+  "$bin/python" "$here/tools/iob_regs.py" "$prefix.pnr.json" 2> /dev/null | tail -1 || true
+  if [ "$ioreg" = 1 ] && ! "$bin/python" "$here/tools/iob_regs.py" "$prefix.pnr.json" --strict > /dev/null 2>&1; then
+    echo "warning: IOREG=1 packed registers with CE / SET / RESET into I/O cells; on the board they did not behave (2026-10-21)" >&2
+  fi
+fi
 "$bin/gowin_pack" -c -d GW2A-18C "${pack_opts[@]}" -o "$out_fs" "$prefix.pnr.json"
 "$bin/python" "$manifest" finish "$here/.." inputs.json "$prefix" "$prefix.build.json"
 # The bitstream is published last, after its logs, hashes and manifest are ready.

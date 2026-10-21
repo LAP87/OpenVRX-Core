@@ -80,6 +80,8 @@ gateware/build.sh m3_probe
 openFPGALoader -b tangnano20k gateware/build/m3_probe.fs
 ```
 
+**Dekoderns I2C-adress.** TVP5150AM1 tar adressen (5C eller 5D) från YOUT7:s nivå när den startar, och en modul kan ha den fast dragen åt endera hållet. Den röda modulen CP803A svarar på 5D (bänken 2026-10-21: `i2c NA` med frisk klocka på 5C, `i2c OK` på 5D). Bygg då med `TVP_ADDR=5D gateware/build.sh m3_probe` (samma för M4 och M6; filen får suffixet `_tvp5d`, manifestet bokför `tvp_addr`). Rev A-kortet drar båda dekodrarna till 5C.
+
 Loggen läses från kortets andra USB-serieport (BL616 visar två; UART:en är oftast den andra):
 
 ```bash
@@ -96,6 +98,8 @@ openFPGALoader -b tangnano20k gateware/build/m2a_memtest.fs
 ```
 
 Raderna kommer på samma serieport som M3-probens. Klart när raden `rs=5` visar `err=00000000` varv efter varv, och `err=00000001` medan S2 hålls intryckt. Visar en annan rad nollorna, eller ingen, står det i README ("M2a — minnestest av SDRAM") hur fasen och läspunkten byts. Bygg sedan M4 med den fas som gav ren rad.
+
+**Kört på kortet 2026-10-21** (rev 3923, Fable över usbipd/WSL; navets `docs/bench/`): med standardbygget (utan I/O-cellregister) `rs=5 err=00000000` varv efter varv, `rs=4 err=00400000` (alla ord fel: ordet före) och `rs=6 err=00380000 pos=FFFFFFF0` (sju av åtta ord fel: ordet efter), vid fas 9, 10 och 11. Standardfasen 225° och läspunkten 5 står alltså med en marginal på minst ett steg åt vardera hållet. Byggt med `IOREG=1`, standarden fram till 2026-10-21, är raden oläsbar (README "I/O-register i I/O-cellerna"); en sådan logg är inget minnesresultat.
 
 ### 2.2 M6: filterfältet, HDMI-fältet och mätloggen
 

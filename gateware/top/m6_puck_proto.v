@@ -73,7 +73,12 @@ module m6_puck_proto #(
     wire [1:0] dev_err, st_valid, round_ok, lost_lock;
     wire [15:0] st0, st1;
     wire filter_vcr, filter_changed, hdmi_ltd;
-    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C)) ctrl (
+`ifdef TVP_DEV_5D
+    localparam [6:0] TVP_DEV = 7'h5D;  // TVP_ADDR=5D gateware/build.sh: modules strapped the other way (YOUT7)
+`else
+    localparam [6:0] TVP_DEV = 7'h5C;
+`endif
+    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(TVP_DEV), .DEV1(TVP_DEV)) ctrl (
                    .clk(clk), .rst(rst_c[2]), .tvp_resetb(tvp_resetb),
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
