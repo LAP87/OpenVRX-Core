@@ -156,7 +156,7 @@ module m6_puck_proto #(
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar), .text_big(tbig),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
-                .mix_overflow(overflow), .uart_txd(uart_txd),
+                .mix_overflow(overflow), .sdram_test(sdram_test), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
                 .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd));
     assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
@@ -187,7 +187,8 @@ module m6_puck_proto #(
                 .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb));
 
     wire [7:0] r, g, b;
-    wire de, hs, vs, have_video, sdram_ready, hz50;
+    wire de, hs, vs, have_video, sdram_ready, hz50, sdram_test_done;
+    wire [2:0] sdram_test_ok;
     wire [11:0] tx, ty;
     // ---- OSD: mirror the menu text into the overlay's RAM (board clock), draw it over the video
     reg  [1:0] scan_row, w_row;
@@ -205,14 +206,19 @@ module m6_puck_proto #(
         .clk(clk_pixel), .show(osd_show), .x(tx), .y(ty), .r_in(r), .g_in(g), .b_in(b),
         .de_in(de), .hs_in(hs), .vs_in(vs), .r(ro), .g(go), .b(bo), .de(deo), .hs(hso), .vs(vso),
         .wclk(clk), .we(scan_we), .waddr({w_row, w_col}), .wchar(osd_char));
-    fb_backend backend (
+    fb_backend #(.SELFTEST(1)) backend (
         .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(clk_pixel), .rst_async(rst), .ll_mode(low_lat),
         .f_empty(m_empty), .f_data(m_data), .f_pop(m_pop),
         .SDRAM_DQ(IO_sdram_dq), .SDRAM_A(O_sdram_addr), .SDRAM_BA(O_sdram_ba), .SDRAM_nCS(O_sdram_cs_n),
         .SDRAM_nWE(O_sdram_wen_n), .SDRAM_nRAS(O_sdram_ras_n), .SDRAM_nCAS(O_sdram_cas_n),
         .SDRAM_CLK(O_sdram_clk), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(O_sdram_dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hs), .vsync(vs), .yo(), .cbo(), .cro(), .tx(tx), .ty(ty),
-        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50));
+        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50),
+        .sdram_test_done(sdram_test_done), .sdram_test_ok(sdram_test_ok));
+    // the SDRAM self-test's result for the log line (puck_ui.v): done through sync2, ok steady before it
+    wire st_done_c;
+    sync2 st_sync (.clk(clk), .d(sdram_test_done), .q(st_done_c));
+    wire [3:0] sdram_test = {st_done_c, st_done_c ? sdram_test_ok : 3'b000};
 
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};

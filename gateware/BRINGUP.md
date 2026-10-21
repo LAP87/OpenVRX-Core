@@ -59,6 +59,8 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | M3 | hjärtslag 1 Hz | SCLK från A | SCLK från B |
 | M4, M6 | hjärtslag: 1 Hz när båda dekodrarna är låsta, 4 Hz annars | rader från A | rader från B |
 
+M4 visar de första 3 sekunderna i stället SDRAM-självtestet på lysdiod 1 och 2 (README under M4, "SDRAM-självtestet"): 1 tänd = läspunkt 5 läste båda testskurarna rätt; 2 tänd = den gjorde det inte, men läspunkt 4 eller 6 gjorde det; båda tända = ingen läspunkt. M6 skriver resultatet sist i varje loggrad (2.2).
+
 **OLED (M6):** SCL J6-3, SDA J6-4 (samma buss som dekoder A), 3,3 V, GND.
 
 **Sändaren LST-S4:** ställ den på NTSC (blå lysdiod enligt manualen) och band F, kanal 4 (5800 MHz). M3 och M4 ställer mottagarna på F4. M6 ställer dem på menyns kanal, som är F4 vid start.
@@ -107,7 +109,7 @@ Filterfältet står på rad 4 som `TV` eller `VCR` (före 2026-10-18 `FILT TV`) 
 
 Efter filtret kommer HDMI-fältet, sist före sidvalet: `HDMI FULL` (standard) eller `HDMI LTD`. Det gör något bara i HDMI-bygget (`HDMI=1 gateware/build.sh m6_puck_proto`, filen `m6_puck_proto_hdmi.fs`): `FULL` sänder 0–255 och säger fullt omfång i AVI-infoframen, `LTD` skalar bilden till 16–235 och säger begränsat. Bytet slår igenom vid nästa bild. Kortet kan inte läsa skärmens EDID, så vilket läge som ger rätt svärta avgörs med gråskala och EDID per skärm (navets `docs/MATPROTOKOLL.md`, blad 16; README under M0, "Omfånget i HDMI-läget"). DVI-bygget, standard, påverkas inte.
 
-Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **87 byte** inklusive CR LF (85 före HDMI-tecknet 2026-10-18, 62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V` och HDMI-omfånget som `F` eller `L`, före tappflaggan och de två låstecknen; sist kommer RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`). Utan ADS1115 på kortet står RSSI som `-----` och `??`.
+Mätloggen kommer på samma serieport som proben: en rad per mätfönster (cirka 15 per sekund), **89 byte** inklusive CR LF (87 före SDRAM-självtestet 2026-10-21, 85 före HDMI-tecknet 2026-10-18, 62 före RSSI-fälten 2026-10-13). Efter mixläget står filtret som `T` eller `V` och HDMI-omfånget som `F` eller `L`, före tappflaggan och de två låstecknen; därefter RSSI A och B, kalibrerat värde och ett tecken per mottagare (`W`, `L`, `-`, `?`), och sist SDRAM-självtestet: `2` när bara standardläspunkten 5 läser rätt, som den ska. Utan ADS1115 på kortet står RSSI som `-----` och `??`.
 
 Filtertecknet är menyvalet som begärts, inte en återläsning av 02h, så direkt efter ett byte kan en dekoder ännu stå i det gamla läget. Fältens betydelse står i tabellen i 2.3 och i README under M6.
 
@@ -117,7 +119,7 @@ python gateware/tools/snowlog.py /dev/ttyUSB1 --label vcr --seconds 30 --out fil
 python gateware/tools/snowlog.py --summary filt.csv
 ```
 
-`snowlog.py` läser också de äldre raderna på 85, 62, 60, 57 och 43 byte från tidigare bitströmmar; kolumnerna de saknar blir tomma. En CSV-fil skriven före kolumnen `hdmi` (2026-10-18) får inga nya rader; skriv till en ny fil.
+`snowlog.py` läser också de äldre raderna på 87, 85, 62, 60, 57 och 43 byte från tidigare bitströmmar; kolumnerna de saknar blir tomma. En CSV-fil skriven före kolumnen `sdram` (2026-10-21) eller `hdmi` (2026-10-18) får inga nya rader; skriv till en ny fil.
 
 ### 2.3 M6: SCAN, CAL och sparade inställningar
 
@@ -134,10 +136,10 @@ Allt här är simulerat (`sim/test_chan_scan.py`, `sim/test_rssi_adc.py`, `sim/t
 | `CAL` | RSSI-sidan (▼ två gånger i flygvyn) | ▲ slår på; flytta sändaren nära och långt bort, eller stäng av den; ▲ stänger av | Min och max per mottagare. En mottagare är kalibrerad när spannet är minst 400 koder: rad 4 visar `OK` och rad 2–3 ett värde 0–100 i stället för `---`. Att lämna sidan (▼) avslutar kalibreringen |
 | Sparstatus | flygvyn, rad 4 | | `SAVED` när flashen har en post med just de här inställningarna, `UNSAVED` från en ändring tills posten är skriven och återläst (3 s efter sista ändringen), `SAVE ERR` om återläsningen inte stämde, `DEFAULTS` när flashen saknar post och inget är ändrat |
 
-**Loggraden, 87 byte** (115200 8N1, ungefär 15 rader per sekund):
+**Loggraden, 89 byte** (115200 8N1, ungefär 15 rader per sekund):
 
 ```
-S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W
+S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W 2
 ```
 
 | Fält | I exemplet | Betydelse |
@@ -154,6 +156,7 @@ S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 0
 | RSSI A, B | `12000 04567` | ADS1115-kod, `-----` utan avläsning |
 | kalibrerat A, B | `075 003` | 0–100, `---` okalibrerat |
 | tillstånd A, B | `-W` | `W` svag (mixern undviker den), `L` låg, `-` ingetdera, `?` ingen avläsning |
+| SDRAM-självtest | `2` | `-` inte kört än, annars en siffra 0–7: bit 0, 1, 2 = läspunkt 4, 5, 6 läste testskurarna rätt. `2` är rätt; `1` eller `4` betyder fas eller läspunkt ett steg fel för det här bygget (kör M2a-svepet), `0` att ingen läspunkt fungerar |
 
 Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En rad skickas efter varje fönster om 1 024 mixerbeslut, så utan video från någon dekoder kommer ingen logg.
 

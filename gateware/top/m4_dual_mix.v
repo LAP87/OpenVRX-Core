@@ -6,7 +6,10 @@
 //
 // LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
-// from B. The pins of LED 3-5 are header pins: RESETB leaves on 18 (J6-18),
+// from B. For ST_SHOW_MS (3 s) after the SDRAM self-test (sdram_selftest.v, at
+// power-up) LED 1 and 2 show its result instead: 1 lit = the build's read point
+// (5) read both test bursts right; 2 lit = it did not, but point 4 or 6 did;
+// both lit = no point did. The pins of LED 3-5 are header pins: RESETB leaves on 18 (J6-18),
 // the RX5808 SPI DATA on 19 (J6-17) and SEL on 20 (J6-16).
 // RESETB must not sit in bank 4 or 5 (pins 25-42): Apicula sets BANK_VCCIO for
 // a whole bank from its first single-ended output, and that changes the IOB
@@ -18,7 +21,8 @@ module m4_dual_mix #(
 `else
     parameter LOW_LATENCY = 0,            // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
 `endif
-    parameter CLK_HZ = 27_000_000         // board clock; a testbench shortens the millisecond timers with it
+    parameter CLK_HZ = 27_000_000,        // board clock; a testbench shortens the millisecond timers with it
+    parameter ST_SHOW_MS = 3000           // how long LED 1/2 show the SDRAM self-test after it has run
 ) (
     input  wire        clk,
     input  wire        rst_i,
@@ -100,15 +104,17 @@ module m4_dual_mix #(
                 .dec_field(dec_field), .dec_line(dec_line));
 
     wire [7:0] r, g, b;
-    wire de, hs, vs, have_video, sdram_ready, hz50;
-    fb_backend backend (
+    wire de, hs, vs, have_video, sdram_ready, hz50, sdram_test_done;
+    wire [2:0] sdram_test_ok;
+    fb_backend #(.SELFTEST(1)) backend (
         .sd_clk(sd_clk), .sd_clk_shift(sd_clk_shift), .pix_clk(clk_pixel), .rst_async(rst), .ll_mode(LOW_LATENCY[0]),
         .f_empty(m_empty), .f_data(m_data), .f_pop(m_pop),
         .SDRAM_DQ(IO_sdram_dq), .SDRAM_A(O_sdram_addr), .SDRAM_BA(O_sdram_ba), .SDRAM_nCS(O_sdram_cs_n),
         .SDRAM_nWE(O_sdram_wen_n), .SDRAM_nRAS(O_sdram_ras_n), .SDRAM_nCAS(O_sdram_cas_n),
         .SDRAM_CLK(O_sdram_clk), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(O_sdram_dqm),
         .r(r), .g(g), .b(b), .de(de), .hsync(hs), .vsync(vs),
-        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50));
+        .have_video(have_video), .sdram_ready(sdram_ready), .hz50(hz50),
+        .sdram_test_done(sdram_test_done), .sdram_test_ok(sdram_test_ok));
 
     reg [3:0] rst_sr = 4'hF;
     always @(posedge clk_pixel) rst_sr <= {rst_sr[2:0], rst};
@@ -125,6 +131,20 @@ module m4_dual_mix #(
         else beat_t <= beat_t + 1'b1;
         if (rst_c[2]) begin beat_t <= 0; beat <= 1'b0; end
     end
-    assign led = ~{b_lines, a_lines, beat};
+    // the SDRAM self-test's result (sd domain, steady once done) for ST_SHOW_MS after it has run
+    localparam ST_SHOW = CLK_HZ / 1000 * ST_SHOW_MS;
+    wire st_done_c;
+    sync2 st_sync (.clk(clk), .d(sdram_test_done), .q(st_done_c));
+    reg        st_done_d, st_pass, st_other;
+    reg [$clog2(ST_SHOW + 1)-1:0] st_show;
+    always @(posedge clk) begin
+        st_done_d <= st_done_c;
+        if (st_done_c && !st_done_d) begin                 // ok has been steady since before done rose
+            st_pass <= sdram_test_ok[1]; st_other <= sdram_test_ok[0] | sdram_test_ok[2]; st_show <= ST_SHOW;
+        end else if (st_show != 0) st_show <= st_show - 1'b1;
+        if (rst_c[2]) begin st_done_d <= 1'b0; st_show <= 0; end
+    end
+    wire [1:0] st_led = st_pass ? 2'b01 : st_other ? 2'b10 : 2'b11;     // {LED 2, LED 1} lit
+    assign led = ~{st_show != 0 ? st_led : {b_lines, a_lines}, beat};
 endmodule
 `default_nettype wire

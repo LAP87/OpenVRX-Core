@@ -94,6 +94,20 @@ def test_parse_hdmi():
     assert set(snowlog.FIELDS) >= set(full)
 
 
+def test_parse_sdram_selftest():
+    """Lines with the SDRAM self-test at the end (puck_ui.v, 89 bytes): "-" before it has run, else the
+    digit of its ok bits. The 87-byte line reads as before, without the column; a wrong token does not read."""
+    line = 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W'
+    assert len(line + ' 2') + 2 == 89
+    done, before, old = (snowlog.parse(line + t) for t in (' 2', ' -', ''))
+    assert (done['sdram'], before['sdram']) == (2, None) and 'sdram' not in old
+    assert {k: v for k, v in done.items() if k != 'sdram'} == old, 'the other columns are the same'
+    assert snowlog.parse(line + ' 7')['sdram'] == 7 and snowlog.parse(line + ' 0')['sdram'] == 0
+    for damaged in (' 8', ' X', ' 22', ' ?'):
+        assert snowlog.parse(line + damaged) is None, damaged
+    assert set(snowlog.FIELDS) >= set(done)
+
+
 def test_log_writes_the_hdmi_column(tmp_path, monkeypatch):
     """A new line fills the hdmi column, an 85-byte line from an older bitstream leaves it empty."""
     fake_port(monkeypatch, [b'S 000100 000200 000003 000000 050 040 010 F4 5800 MIX T L - -- 12000 04567 075 003 -W\r\n'

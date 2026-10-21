@@ -9,6 +9,11 @@ cheap. The decoder models report no lock until T_LOCK.
 Negative control: in a run where the decoders never lock, the checks that LED0
 slows down and that the RX5808 writes stop must fail.
 
+The SDRAM pins carry sim/sdram_model.v with its default board delays: the
+self-test (sdram_selftest.v) finds read point 5 alone, and M4 shows that on
+LED 1 for ST_SHOW_MS. Negative control: with the pins open no point reads
+right, and M4 lights LED 1 and 2 while A's lines would light only LED 1.
+
 Run: .venv/bin/python -m pytest -q gateware/sim/test_top_pins.py"""
 import functools
 import os
@@ -29,6 +34,7 @@ import vtx_channels as vc  # noqa: E402
 T_CLK = 37                      # ns, board clock of the testbench
 T_B = 300_000                   # ns, decoder B starts to deliver lines
 VIDEO_STOP = 600_000            # ns, PLL outputs and decoder clocks stop
+ST_SHOW_MS = 5                  # M4: LED 1/2 show the SDRAM self-test this long (5 ms at CLK_HZ 27 kHz: 5 us)
 TOPS = {
     4: dict(name='m4_dual_mix', clk_hz=27_000, t_lock=7_000_000, t_end=14_000_000),
     6: dict(name='m6_puck_proto', clk_hz=135_000, t_lock=14_000_000, t_end=28_000_000),
@@ -36,18 +42,18 @@ TOPS = {
 
 
 @functools.lru_cache(maxsize=None)
-def run(top, locks=True):
-    cfg = TOPS[top]
+def run(top, locks=True, sdram=True, t_end=None):
+    cfg = dict(TOPS[top], **({'t_end': t_end} if t_end else {}))
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_top_pins_{top}_{int(locks)}'
+    work = HERE / 'build' / f'tb_top_pins_{top}_{int(locks)}{"" if sdram else "_nosdram"}'
     work.mkdir(parents=True, exist_ok=True)
-    src = [HERE / 'gowin_prim_stubs.v', HERE / 'i2c_slave_model.v', HERE / 'tb_top_pins.v',
+    src = [HERE / 'gowin_prim_stubs.v', HERE / 'i2c_slave_model.v', HERE / 'sdram_model.v', HERE / 'tb_top_pins.v',
            *sorted((GW / 'rtl').glob('*.v')), GW / 'top' / f'{cfg["name"]}.v']
     params = dict(TOP=top, CLK_HZ=cfg['clk_hz'], T_B_NS=T_B, T_LOCK_NS=cfg['t_lock'] if locks else 0,
-                  T_END_NS=cfg['t_end'])
+                  T_END_NS=cfg['t_end'], SDRAM=int(sdram), ST_SHOW_MS=ST_SHOW_MS)
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), '-o', 'sim.vvp', '-s', 'tb_top_pins',
                     *[f'-Ptb_top_pins.{k}={v}' for k, v in params.items()], *map(str, src)],
                    cwd=work, env=env, check=True)
@@ -62,6 +68,7 @@ def run(top, locks=True):
     return dict(cfg,
                 resetb=[(int(t), v) for t, v in re.findall(r'^RESETB (\d+) (\S)$', log, re.M)],
                 led=[(int(t), v) for t, v in re.findall(r'^LED (\d+) (\S{3})$', log, re.M)],
+                sdtest=[(int(t), v) for t, v in re.findall(r'^SDRAMTEST (\d+) (\S{3})$', log, re.M)],
                 spi=[(int(t), int(n), int(bits, 16)) for t, n, bits in re.findall(r'^SPI (\d+) (\d+) (\w+)$', log, re.M)])
 
 
@@ -111,6 +118,18 @@ def check_line_leds(r):
     assert led_at(r, VIDEO_STOP - 10_000)[:2] == '00', led_at(r, VIDEO_STOP - 10_000)
 
 
+def check_sdram_selftest(r, mask):
+    """One self-test result, before decoder B starts; M4: LED 1/2 show it for ST_SHOW_MS, then A's lines."""
+    assert [m for _, m in r['sdtest']] == [mask], r['sdtest']
+    t = r['sdtest'][0][0]
+    show = r['clk_hz'] // 1000 * ST_SHOW_MS * T_CLK
+    assert t + show + 2_000 < T_B, (t, show)
+    if r['name'] == 'm4_dual_mix':
+        leds = {'010': '10', '001': '01', '100': '01', '000': '00'}[mask]       # led2 led1, 0 = lit
+        assert led_at(r, t + 2_000)[:2] == leds, (mask, led_at(r, t + 2_000))
+        assert led_at(r, t + show + 2_000)[:2] == '10', led_at(r, t + show + 2_000)
+
+
 def f4_word():
     reg = {(b, c): reg for b, c, f, reg, _ in vc.table()}[('F', 4)]
     return sum(bit << i for i, bit in enumerate(vc.spi_frame(reg)))
@@ -133,6 +152,7 @@ def check_rx_stops(r):
 
 
 def check_all(r):
+    check_sdram_selftest(r, '010')
     check_resetb(r)
     check_line_leds(r)
     check_led0_fast(r, r['t_lock'])
@@ -160,3 +180,12 @@ def test_without_lock_led0_stays_fast_and_writes_go_on():
         check_led0_slow_at_end(r)
     with pytest.raises(AssertionError):
         check_rx_stops(r)
+
+
+def test_m4_sdram_selftest_without_sdram():
+    """Negative control: open SDRAM pins. No read point is right, and LED 1 and 2 are both lit in the window,
+    where A's lines alone light only LED 1; afterwards the line LEDs return."""
+    r = run(4, sdram=False, t_end=400_000)
+    check_sdram_selftest(r, '000')
+    with pytest.raises(AssertionError):
+        check_sdram_selftest(r, '010')

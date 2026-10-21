@@ -61,12 +61,18 @@ module flash_store #(
     reg [7:0] x_tx, x_rx;
     reg [3:0] x_bit;
     reg [1:0] x_ph;
+    // MISO through a plain flop (no enable, no reset), so that build.sh IOREG=1 may put it into the pad's
+    // I/O cell (tools/iob_regs.py --strict). It is the pin at the end of phase 1, as before 2026-10-21,
+    // shifted in one clock later.
+    reg       miso_q;
+    always @(posedge clk) miso_q <= flash_miso;
     always @(posedge clk) begin
         if (x_go && !x_busy) begin x_busy <= 1'b1; x_bit <= 0; x_ph <= 0; flash_mosi <= x_tx[7]; end
         else if (x_busy) begin
             x_ph <= x_ph + 1'b1;
             case (x_ph)
-                2'd1: begin flash_clk <= 1'b1; x_rx <= {x_rx[6:0], flash_miso}; end
+                2'd1: flash_clk <= 1'b1;
+                2'd2: x_rx <= {x_rx[6:0], miso_q};
                 2'd3: begin
                     flash_clk <= 1'b0;
                     if (x_bit == 4'd7) x_busy <= 1'b0;

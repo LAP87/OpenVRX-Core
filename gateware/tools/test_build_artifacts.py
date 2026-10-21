@@ -47,7 +47,13 @@ elif stage == 'yowasp-nextpnr-himbaechel-gowin':
     if failure == 'timing': log = log.replace('90.00 MHz (PASS', '40.00 MHz (FAIL')
     if failure == 'no_timing': log = 'Info: no timing table\n'
     Path(arg('--log')).write_text(log)
-    if failure != 'no_pnr_output': Path(arg('--write')).write_text('{"fresh": true}')
+    iob = os.environ.get('BUILD_TEST_IOB', '')        # a routed netlist with one input flop in an I/O cell
+    if iob:
+        ports = {'CLK': [1], 'D': [2], 'Q': [3], **({'CE': [4]} if iob == 'ce' else {})}
+        netlist = {'modules': {'top': {'cells': {'dq_in_IOLOGIC': {'type': 'IOLOGICI', 'parameters': {},
+                                                                    'connections': ports}}}}}
+        Path(arg('--write')).write_text(json.dumps(netlist))
+    elif failure != 'no_pnr_output': Path(arg('--write')).write_text('{"fresh": true}')
     if failure == 'routing': sys.exit(3)
 elif stage == 'gowin_pack':
     (root / 'gateware/build/pack.args').write_text(' '.join(sys.argv[1:]) + ' ')
@@ -66,7 +72,7 @@ def project(tmp_path):
     root = tmp_path / 'project'
     for rel in ('gateware/rtl', 'gateware/top', 'gateware/boards', 'gateware/tools', 'gateware/build', '.venv/bin'):
         (root / rel).mkdir(parents=True)
-    for rel in ('build.sh', 'tools/build_manifest.py'):
+    for rel in ('build.sh', 'tools/build_manifest.py', 'tools/iob_regs.py'):
         shutil.copy2(GW / rel, root / 'gateware' / rel)
     (root / 'gateware/rtl/fixture.v').write_text('module fixture; endmodule\n')
     (root / 'gateware/rtl/fixture.vh').write_text('// included source\n')
@@ -88,7 +94,8 @@ def project(tmp_path):
 
 
 def build(project, failure='', top='demo', **settings):
-    env = {k: v for k, v in os.environ.items() if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ', 'IOREG', 'VINTERP', 'HDMI')}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('PULL', 'SDRAM_PHASE', 'SEED', 'FREQ_MHZ', 'IOREG', 'VINTERP', 'HDMI', 'BUILD_TEST_IOB')}
     env.update(settings, BUILD_TEST_FAILURE=failure)
     return subprocess.run(['bash', str(project / 'gateware/build.sh'), top],
                           cwd=project, env=env, capture_output=True, text=True, timeout=20)
@@ -194,7 +201,7 @@ def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(proj
     assert not (out / 'calls.log').exists()
 
 
-IOB_OPTS = '--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob '
+IOB_OPTS = '--vopt ireg_in_iob --vopt ioreg_in_iob '
 
 
 @pytest.mark.parametrize('top,settings,suffix,iob', [
@@ -204,16 +211,34 @@ IOB_OPTS = '--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob '
     ('demo', {'IOREG': '1'}, '_ioreg1', True),
     ('m4_dual_mix', {'IOREG': '0'}, '', False)])         # the default, asked for explicitly
 def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings, suffix, iob):
-    r = build(project, top=top, **settings)
+    """IOREG=1 asks nextpnr for input flops in the I/O cells, of input and of bidirectional pins, and no
+    output flops (2026-10-21: those carry enables and sets in our tops)."""
+    r = build(project, top=top, BUILD_TEST_IOB='plain', **settings)
     assert r.returncode == 0, r.stdout + r.stderr
     args = (project / 'gateware/build/nextpnr.args').read_text()
-    assert (IOB_OPTS in args) == iob and args.count('_in_iob') == (3 if iob else 0), args
+    assert (IOB_OPTS in args) == iob and args.count('_in_iob') == (2 if iob else 0), args
     out = project / 'gateware/build'
     record = json.loads((out / f'{top}{suffix}.build.json').read_text())
     assert record['options']['ioreg'] == ('1' if iob else '0')
     assert (out / f'{top}{suffix}.fs').read_bytes() == b'new packed bitstream'
     assert (out / 'demo.fs').read_bytes() == (b'new packed bitstream' if top == 'demo' and not suffix
                                               else b'old successful bitstream')
+
+
+@pytest.mark.parametrize('iob, ok', [('plain', True), ('ce', False)])
+def test_ioreg_build_refuses_a_flop_with_enable_in_an_io_cell(project, iob, ok):
+    """With IOREG=1 the routed netlist must pass tools/iob_regs.py --strict: a flop with CE in an I/O cell
+    fails the build and leaves no bitstream (negative control: the plain flop builds). Without IOREG the
+    same netlist builds; the list is only printed."""
+    r = build(project, BUILD_TEST_IOB=iob, IOREG='1')
+    out = project / 'gateware/build'
+    assert (r.returncode == 0) == ok, r.stdout + r.stderr
+    assert (out / 'demo_ioreg1.fs').exists() == ok
+    assert (out / 'demo.fs').read_bytes() == b'old successful bitstream'
+    if not ok:
+        assert 'refused' in r.stderr and 'CE' in r.stdout, r.stdout + r.stderr
+        assert 'gowin_pack' not in (out / 'calls.log').read_text().splitlines()
+    assert build(project, BUILD_TEST_IOB=iob).returncode == 0
 
 
 @pytest.mark.parametrize('name, settings, suffix, define', [

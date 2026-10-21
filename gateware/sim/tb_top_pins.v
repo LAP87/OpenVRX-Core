@@ -10,6 +10,10 @@
 // every RX5808 frame is printed for sim/test_top_pins.py; the video path has
 // its own tests.
 //
+// SDRAM = 1 puts sim/sdram_model.v (its default board delays, 3 + 3 ns) on the
+// SDRAM pins; with 0 they are open. The SDRAM self-test's result is printed
+// (SDRAMTEST), and M4 shows it on LED 1/2 for ST_SHOW_MS.
+//
 // M6: the onboard flash reads as erased (FLASH = 0), or is sim/spi_flash_model.v
 // loaded from mem.hex (FLASH = 1, sim/test_m6_settings.py). The flash load, the
 // menu's HDMI range and the transmitter's rgb_full are printed, and the flash's
@@ -23,6 +27,8 @@ module tb_top_pins;
     parameter T_LOCK_NS = 0;
     parameter T_END_NS = 1_000_000;
     parameter FLASH = 0;
+    parameter SDRAM = 0;
+    parameter ST_SHOW_MS = 5;                     // M4: LED 1/2 show the SDRAM self-test this long (CLK_HZ ms)
 
     time stop_ns;
     initial if (!$value$plusargs("pll_stop_ns=%d", stop_ns)) stop_ns = 0;
@@ -68,17 +74,26 @@ module tb_top_pins;
 
     wire [3:0]  tmds_p, tmds_n;
     wire [31:0] dq;
+    wire        sd_clk, sd_cke, sd_cs_n, sd_cas_n, sd_ras_n, sd_we_n;
+    wire [3:0]  sd_dqm;
+    wire [10:0] sd_a;
+    wire [1:0]  sd_ba;
+    generate if (SDRAM) begin : sd
+        sdram_model #(.AW(21)) mem (.clk(sd_clk), .cke(sd_cke), .ncs(sd_cs_n), .nras(sd_ras_n), .ncas(sd_cas_n),
+                                    .nwe(sd_we_n), .ba(sd_ba), .a(sd_a), .dqm(sd_dqm), .dq(dq));
+    end endgenerate
     wire        spi_clk, spi_data, spi_sel_n;
     generate
         if (TOP == 4) begin : g
-            m4_dual_mix #(.CLK_HZ(CLK_HZ)) dut (
+            m4_dual_mix #(.CLK_HZ(CLK_HZ), .ST_SHOW_MS(ST_SHOW_MS)) dut (
                 .clk(clk), .rst_i(1'b0), .tvpa_sclk(ca), .tvpa_d(da), .tvpb_sclk(cb), .tvpb_d(db),
                 .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
                 .rx_spi_clk(spi_clk), .rx_spi_data(spi_data), .rx_spi_sel_n(spi_sel_n),
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led),
-                .O_sdram_clk(), .O_sdram_cke(), .O_sdram_cs_n(), .O_sdram_cas_n(), .O_sdram_ras_n(),
-                .O_sdram_wen_n(), .O_sdram_dqm(), .O_sdram_addr(), .O_sdram_ba(), .IO_sdram_dq(dq));
+                .O_sdram_clk(sd_clk), .O_sdram_cke(sd_cke), .O_sdram_cs_n(sd_cs_n), .O_sdram_cas_n(sd_cas_n),
+                .O_sdram_ras_n(sd_ras_n), .O_sdram_wen_n(sd_we_n), .O_sdram_dqm(sd_dqm), .O_sdram_addr(sd_a),
+                .O_sdram_ba(sd_ba), .IO_sdram_dq(dq));
         end else begin : g
             wire s_oled, txd;
             assign sda_a = s_oled ? 1'b0 : 1'bz;
@@ -105,11 +120,13 @@ module tb_top_pins;
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led), .uart_txd(txd),
                 .flash_cs_n(f_cs_n), .flash_clk(f_clk), .flash_mosi(f_mosi), .flash_miso(f_miso), .flash_wp_n(f_wp_n),
-                .O_sdram_clk(), .O_sdram_cke(), .O_sdram_cs_n(), .O_sdram_cas_n(), .O_sdram_ras_n(),
-                .O_sdram_wen_n(), .O_sdram_dqm(), .O_sdram_addr(), .O_sdram_ba(), .IO_sdram_dq(dq));
+                .O_sdram_clk(sd_clk), .O_sdram_cke(sd_cke), .O_sdram_cs_n(sd_cs_n), .O_sdram_cas_n(sd_cas_n),
+                .O_sdram_ras_n(sd_ras_n), .O_sdram_wen_n(sd_we_n), .O_sdram_dqm(sd_dqm), .O_sdram_addr(sd_a),
+                .O_sdram_ba(sd_ba), .IO_sdram_dq(dq));
         end
     endgenerate
 
+    always @(posedge g.dut.sdram_test_done) $display("SDRAMTEST %0d %b", $time, g.dut.sdram_test_ok);
     always @(resetb) $display("RESETB %0d %b", $time, resetb);
     always @(led)    $display("LED %0d %b", $time, led);
 
