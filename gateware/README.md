@@ -543,6 +543,8 @@ Kostnad, byggt ur `fc267a8` (standardval i övrigt, siffror efter routning, krav
 
 ## M3 — uppstartsprob
 
+Byggvalet `TVP_ADDR=5D` (sedan 2026-10-21) låter M3, M4 och M6 tala med dekodrar som har I2C-adressen 5D i stället för 5C (YOUT7:s nivå vid start; den röda modulen CP803A svarar på 5D, rev A drar 5C). Utan valet gäller 5C som förut; `tvp_ctrl.v` är oförändrad.
+
 `top/m3_probe.v`, samma stift som M4/M6. Visar en gång i sekunden, per dekoder: SCLK-frekvens, vilka databitar som växlar, radlängder, rader och fält per sekund, synkfel, I2C-svar, statusregister och hur många gånger dekodern har hittats återställd och startats om. Lysdioder: LED0 hjärtslag 1 Hz, LED1 SCLK från A, LED2 SCLK från B. Pull-test med `PULL=UP` eller `PULL=DOWN gateware/build.sh m3_probe` (bit 0–6; bit 7 är dekoderns adresstrapp och får ingen pull, `tools/test_build_pull.py`). Allt om koppling och tolkning finns i [BRINGUP.md](BRINGUP.md).
 
 ## Formella bevis

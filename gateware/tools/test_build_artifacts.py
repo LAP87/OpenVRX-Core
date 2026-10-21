@@ -183,7 +183,7 @@ def test_variant_outputs_and_manifests_do_not_replace_the_normal_build(project, 
 
 @pytest.mark.parametrize('top,settings', [('missing', {}), ('../demo', {}), ('demo', {'PULL': 'SIDEWAYS'}),
                                          ('demo', {'SDRAM_PHASE': '16'}), ('demo', {'SEED': 'two'}),
-                                         ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'}),
+                                         ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'}), ('demo', {'TVP_ADDR': '5E'}),
                                          ('demo', {'VINTERP': 'yes'}), ('demo', {'HDMI': '2'})])
 def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(project, top, settings):
     r = build(project, top=top, **settings)
@@ -229,6 +229,17 @@ def test_define_options_are_variants(project, name, settings, suffix, define):
     assert (out / f'demo{suffix}.fs').read_bytes() == b'new packed bitstream'
     if suffix:
         assert (out / 'demo.fs').read_bytes() == b'old successful bitstream'
+
+
+@pytest.mark.parametrize('settings, suffix, addr', [({}, '', '5C'), ({'TVP_ADDR': '5c'}, '', '5C'),
+                                                    ({'TVP_ADDR': '5D'}, '_tvp5d', '5D')])
+def test_decoder_address_is_a_variant(project, settings, suffix, addr):
+    """TVP_ADDR=5D becomes the define TVP_DEV_5D, an output suffix and the manifest option tvp_addr."""
+    r = build(project, **settings)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ('-DTVP_DEV_5D=1' in (project / 'gateware/build/yosys.cmd').read_text()) == (addr == '5D')
+    record = json.loads((project / f'gateware/build/demo{suffix}.build.json').read_text())
+    assert record['options']['tvp_addr'] == addr
 
 
 @pytest.mark.parametrize('top, mspi', [('m6_puck_proto', True), ('m4_dual_mix', False), ('demo', False)])

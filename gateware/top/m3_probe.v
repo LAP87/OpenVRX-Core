@@ -61,7 +61,12 @@ module m3_probe #(
     wire [1:0] sda_low, dev_err, st_valid;
     wire [15:0] st0, st1;
     wire [7:0]  ri0, ri1;
-    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(7'h5C), .DEV1(7'h5C), .POWER_MS(POWER_MS)) ctrl (
+`ifdef TVP_DEV_5D
+    localparam [6:0] TVP_DEV = 7'h5D;  // TVP_ADDR=5D gateware/build.sh: modules strapped the other way (YOUT7)
+`else
+    localparam [6:0] TVP_DEV = 7'h5C;
+`endif
+    tvp_ctrl #(.CLK_HZ(CLK_HZ), .SPLIT_SDA(1), .DEV0(TVP_DEV), .DEV1(TVP_DEV), .POWER_MS(POWER_MS)) ctrl (
         .clk(clk), .rst(rst), .tvp_resetb(tvp_resetb),
         .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
         .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
