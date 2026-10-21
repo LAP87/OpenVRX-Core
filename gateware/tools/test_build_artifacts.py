@@ -197,11 +197,11 @@ IOB_OPTS = '--vopt ireg_in_iob --vopt oreg_in_iob --vopt ioreg_in_iob '
 
 
 @pytest.mark.parametrize('top,settings,suffix,iob', [
-    ('m4_dual_mix', {}, '', True),                       # an SDRAM top: on by default
-    ('demo', {}, '', False),                             # any other top: off by default
-    ('m4_dual_mix', {'IOREG': '0'}, '_ioreg0', False),   # against the default: a variant beside the normal build
+    ('m4_dual_mix', {}, '', False),                      # off by default for every top since 2026-10-21
+    ('demo', {}, '', False),
+    ('m4_dual_mix', {'IOREG': '1'}, '_ioreg1', True),    # against the default: a variant beside the normal build
     ('demo', {'IOREG': '1'}, '_ioreg1', True),
-    ('m4_dual_mix', {'IOREG': '1'}, '', True)])          # the default, asked for explicitly
+    ('m4_dual_mix', {'IOREG': '0'}, '', False)])         # the default, asked for explicitly
 def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings, suffix, iob):
     r = build(project, top=top, **settings)
     assert r.returncode == 0, r.stdout + r.stderr
