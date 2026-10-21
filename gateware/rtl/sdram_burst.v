@@ -49,8 +49,8 @@
 //
 // The pins are sampled by dq_in, a plain flop that takes SDRAM_DQ on every clock
 // (no enable, no reset), so that the build can put all 32 of them into the
-// pads' I/O cells (build.sh IOREG=1: nextpnr ireg_in_iob, refused unless
-// tools/iob_regs.py --strict passes) and the read window is then the same in
+// pads' I/O cells (build.sh IOREG=1: nextpnr ireg_in_iob and ioreg_in_iob,
+// refused unless tools/iob_regs.py --strict passes) and the read window is then the same in
 // every top. Until 2026-10-21 rdata took the pins directly with a clock enable;
 // a flop with an enable did not behave in an I/O cell on the board (hub
 // docs/bench/IOREG_ANALYS_2026-10-21.md). The word sampled at the end of cycle

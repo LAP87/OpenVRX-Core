@@ -201,7 +201,7 @@ def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(proj
     assert not (out / 'calls.log').exists()
 
 
-IOB_OPTS = '--vopt ireg_in_iob '
+IOB_OPTS = '--vopt ireg_in_iob --vopt ioreg_in_iob '
 
 
 @pytest.mark.parametrize('top,settings,suffix,iob', [
@@ -211,12 +211,12 @@ IOB_OPTS = '--vopt ireg_in_iob '
     ('demo', {'IOREG': '1'}, '_ioreg1', True),
     ('m4_dual_mix', {'IOREG': '0'}, '', False)])         # the default, asked for explicitly
 def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings, suffix, iob):
-    """IOREG=1 asks nextpnr for input flops in the I/O cells and nothing else (2026-10-21: no output flops,
-    which carry enables and sets in our tops)."""
+    """IOREG=1 asks nextpnr for input flops in the I/O cells, of input and of bidirectional pins, and no
+    output flops (2026-10-21: those carry enables and sets in our tops)."""
     r = build(project, top=top, BUILD_TEST_IOB='plain', **settings)
     assert r.returncode == 0, r.stdout + r.stderr
     args = (project / 'gateware/build/nextpnr.args').read_text()
-    assert (IOB_OPTS in args) == iob and args.count('_in_iob') == (1 if iob else 0), args
+    assert (IOB_OPTS in args) == iob and args.count('_in_iob') == (2 if iob else 0), args
     out = project / 'gateware/build'
     record = json.loads((out / f'{top}{suffix}.build.json').read_text())
     assert record['options']['ioreg'] == ('1' if iob else '0')

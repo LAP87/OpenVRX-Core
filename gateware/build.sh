@@ -66,18 +66,19 @@ if [ "$tvp" = 5D ]; then
   defs="$defs -DTVP_DEV_5D=1"
   out_fs="${out_fs%.fs}_tvp5d.fs"
 fi
-# Input flops in the I/O cells (nextpnr --vopt ireg_in_iob), so that the SDRAM read window and the decoder
-# data capture do not depend on placement (owner's decision 2, 2026-10-12). Until 2026-10-21 IOREG=1 also gave
-# oreg_in_iob and ioreg_in_iob and was the default for the SDRAM tops; on the board a flop packed into an I/O
+# Input flops in the I/O cells, so that the SDRAM read window and the decoder data capture do not depend on
+# placement (owner's decision 2, 2026-10-12): nextpnr --vopt ireg_in_iob for input pins and ioreg_in_iob for
+# the SDRAM's bidirectional DQ pins (ireg_in_iob alone leaves those out; built 2026-10-21). Until 2026-10-21
+# IOREG=1 also gave oreg_in_iob and was the default for the SDRAM tops; on the board a flop packed into an I/O
 # cell with a clock enable, set or reset did not behave (hub docs/bench/IOREG_ANALYS_2026-10-21.md), so the
-# default is 0. IOREG=1 now packs input flops only, and the build fails unless tools/iob_regs.py --strict
-# finds none with CE / SET / RESET in the cells: the SDRAM DQ capture (sdram_burst.v dq_in) and the decoder
+# default is 0. IOREG=1 now leaves output flops out, and the build fails unless tools/iob_regs.py --strict
+# finds no flop with CE / SET / RESET in the cells: the SDRAM DQ capture (sdram_burst.v dq_in) and the decoder
 # data (mixer2.v a_in / b_in) are plain flops for this. README "I/O-register i I/O-cellerna".
 ioreg_default=0
 ioreg="${IOREG:-$ioreg_default}"
 case "$ioreg" in 0|1) ;; *) echo "IOREG must be 0 or 1" >&2; exit 1 ;; esac
 ioreg_opts=()
-if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob); fi
+if [ "$ioreg" = 1 ]; then ioreg_opts=(--vopt ireg_in_iob --vopt ioreg_in_iob); fi
 if [ "$ioreg" != "$ioreg_default" ]; then out_fs="${out_fs%.fs}_ioreg$ioreg.fs"; fi
 # The onboard SPI flash's MSPI pins (57, 59-62) as user I/O after configuration, for the tops that keep
 # settings there (flash_store.v): gowin_pack --mspi_as_gpio. Without it they stay configuration pins.
