@@ -481,7 +481,7 @@ Byggt ur `9023ab1`, seed 2, standardval (siffror efter routning, inga `ERROR`): 
 
 ## Bildvägen efter mixern: `BUF` och `LOW`
 
-Två lägen, valbara i menyn medan det kör (`LOW_LATENCY=1` i M4 väljer `LOW`).
+Två lägen, valbara i menyn medan det kör (`LOW=1 gateware/build.sh m4_dual_mix` bygger M4 i `LOW`, fil `m4_dual_mix_low.fs`; rådet 2026-10-21 vill ha första bilden där, eftersom SDRAM-läsningens fönster ännu följer bygget).
 
 **`BUF`** (`rtl/fb_sdram.v`): fälten skrivs till fyra buffertar i SDRAM, och utgången går i fast 720p60.
 - Vilken buffert en bild visar bestäms i SDRAM-domänen, där skrivaren finns, vid bildens första radbegäran. Skrivaren får aldrig bufferten som visas, dess reserv eller den nyss publicerade. (Förut skickade visningen sitt val över klockdomänsgränsen, och en källa snabbare än utgången kunde få bufferten som visades.)

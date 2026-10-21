@@ -184,6 +184,7 @@ def test_variant_outputs_and_manifests_do_not_replace_the_normal_build(project, 
 @pytest.mark.parametrize('top,settings', [('missing', {}), ('../demo', {}), ('demo', {'PULL': 'SIDEWAYS'}),
                                          ('demo', {'SDRAM_PHASE': '16'}), ('demo', {'SEED': 'two'}),
                                          ('demo', {'FREQ_MHZ': '0'}), ('demo', {'IOREG': '2'}), ('demo', {'TVP_ADDR': '5E'}),
+                                         ('demo', {'LOW': '2'}),
                                          ('demo', {'VINTERP': 'yes'}), ('demo', {'HDMI': '2'})])
 def test_invalid_request_keeps_the_previous_result_and_does_not_start_tools(project, top, settings):
     r = build(project, top=top, **settings)
@@ -217,7 +218,8 @@ def test_io_registers_in_the_io_cells_by_top_and_recorded(project, top, settings
 
 @pytest.mark.parametrize('name, settings, suffix, define', [
     ('vinterp', {}, '', False), ('vinterp', {'VINTERP': '0'}, '', False), ('vinterp', {'VINTERP': '1'}, '_vinterp', True),
-    ('hdmi', {}, '', False), ('hdmi', {'HDMI': '0'}, '', False), ('hdmi', {'HDMI': '1'}, '_hdmi', True)])
+    ('hdmi', {}, '', False), ('hdmi', {'HDMI': '0'}, '', False), ('hdmi', {'HDMI': '1'}, '_hdmi', True),
+    ('low', {}, '', False), ('low', {'LOW': '0'}, '', False), ('low', {'LOW': '1'}, '_low', True)])
 def test_define_options_are_variants(project, name, settings, suffix, define):
     """VINTERP=1 and HDMI=1 become Verilog defines, an output suffix and a manifest option."""
     r = build(project, **settings)
