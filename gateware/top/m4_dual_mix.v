@@ -16,7 +16,11 @@
 // fuses of the TMDS pairs there (tools/test_tmds_bank_outputs.py).
 `default_nettype none
 module m4_dual_mix #(
+`ifdef LOW
+    parameter LOW_LATENCY = 1,            // LOW=1 gateware/build.sh: no SDRAM field buffer, output locked to the input
+`else
     parameter LOW_LATENCY = 0,            // 1: no SDRAM field buffer, output locked to the input (fb_backend.v)
+`endif
     parameter CLK_HZ = 27_000_000,        // board clock; a testbench shortens the millisecond timers with it
     parameter ST_SHOW_MS = 3000           // how long LED 1/2 show the SDRAM self-test after it has run
 ) (

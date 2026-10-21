@@ -9,6 +9,7 @@
 #   VINTERP=1 gateware/build.sh m6_puck_proto  # blend two source lines per output line in BUF (fb_display.v; default 0)
 #   HDMI=1 gateware/build.sh m0_testpattern    # HDMI with an AVI InfoFrame instead of DVI (tmds_link.v; default 0)
 #   TVP_ADDR=5D gateware/build.sh m3_probe     # the decoders answer at I2C address 5D instead of 5C (tvp_ctrl.v)
+#   LOW=1 gateware/build.sh m4_dual_mix        # M4 in the low-latency mode, no SDRAM field store (fb_backend.v; default 0)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI /
 # an IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
@@ -47,6 +48,14 @@ case "$hdmi" in 0|1) ;; *) echo "HDMI must be 0 or 1" >&2; exit 1 ;; esac
 if [ "$hdmi" = 1 ]; then
   defs="$defs -DHDMI=1"
   out_fs="${out_fs%.fs}_hdmi.fs"
+fi
+# optional: M4 in the low-latency mode (fb_backend.v LOW, no SDRAM field store; M6 has it in the menu). The
+# council 2026-10-21 wants the first picture there, since the SDRAM read window still follows the build.
+low="${LOW:-0}"
+case "$low" in 0|1) ;; *) echo "LOW must be 0 or 1" >&2; exit 1 ;; esac
+if [ "$low" = 1 ]; then
+  defs="$defs -DLOW=1"
+  out_fs="${out_fs%.fs}_low.fs"
 fi
 # optional: the decoders' I2C address. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module may be
 # strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. M3, M4 and M6
@@ -112,7 +121,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --low "$low" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.
