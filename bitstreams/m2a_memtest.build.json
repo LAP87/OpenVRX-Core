@@ -1,15 +1,15 @@
 {
   "artifacts": {
     "m2a_memtest.cst": "c569b9073798ba11fe8e5eef3ef73ebf1e1388c3f8b09770a4935efa15a14b3e",
-    "m2a_memtest.fs": "0a58ea6c343733af65df18a32135bac38916215a297763140ae110efa86819b6",
-    "m2a_memtest.pnr.json": "eb3249001766eb00b3a8ebc844ce6bf3120c5f5a626b8daa1dc77f0d2b1031b6",
-    "m2a_memtest.pnr.log": "769eccb15baaf8e3da7496fe810d3d619cd0ce4fafe03228048f182c79bba4fd",
+    "m2a_memtest.fs": "994158ea6d03a66c9a96f993437aa805ab8023643a8220a3b875ef2d7e7e44e3",
+    "m2a_memtest.pnr.json": "af1896a1b42d857d7c15e626b8362d7e873c8e05dbce1e5312e44aaaaa02bf71",
+    "m2a_memtest.pnr.log": "4f954e155d6faff4b15fe365b34a9f516c46397e8187548bae37705777127bbc",
     "m2a_memtest.stat.txt": "3c0ec20b4d60c28b9b5e933c7bf7ed72c3ca7144dd6c8396603f257432a4ac84",
-    "m2a_memtest.synth.json": "1ef2c51f3805637f7983b172af79c1a34ae6fe9b75eb3f48614e415614a02c26",
-    "m2a_memtest.yosys.log": "1de38fd4150b89e92c420d7a6df8eaf94679f04dcbd6bae4c5cdd501ad927a54"
+    "m2a_memtest.synth.json": "cd28dacee8711f8155c36113b1b4d876ea8ff00dbb0f932ffc120b848732989d",
+    "m2a_memtest.yosys.log": "a87c4ee6a4ceae0beb178cbb47e1a5be9fc0e67775bd009d3aae5fc7b4d28de8"
   },
   "bitstream": "m2a_memtest.fs",
-  "completed_utc": "2026-10-20T16:27:02.188134+00:00",
+  "completed_utc": "2026-10-21T07:32:55.926653+00:00",
   "format_version": 1,
   "git": {
     "commit": null,
@@ -18,7 +18,7 @@
   "inputs": {
     "gateware/boards/m2a_memtest.cst": "fec6a1d39b9e6e45bdeb1e45403671a5ea36d78430fb4a5bb016249ae8e2d41d",
     "gateware/boards/tangnano20k.cst": "5e0c2e23cfed522933a02451ee566d555f03ebb6b3cb9cd849879238c0b7c596",
-    "gateware/build.sh": "9f6928d5a4ad9700f07435ab48089c1d98abb70f909f1a17e7b06101be204858",
+    "gateware/build.sh": "6eb989dc2b954243f64e5cf720af63e1a10fad2c3cb2a21672571c1acc56e355",
     "gateware/rtl/async_fifo.v": "5e4d92a5005177e9bc18d7ac672d23e5df4adab74be8a4788b7cb9a065941ecd",
     "gateware/rtl/bin2bcd.v": "cbb8af29f77726b0ab8d5cf2d1361de411722e53dc7025572fcb1d6b8c6ccefc",
     "gateware/rtl/bt1120_tx.v": "250a17749ae1518544ba9b134b3075fa608694ab518438b4c90519a8e4c27628",
@@ -71,7 +71,7 @@
   "options": {
     "freq_mhz": "75",
     "hdmi": "0",
-    "ioreg": "1",
+    "ioreg": "0",
     "mspi": "0",
     "pull": "",
     "sdram_phase": "",
@@ -80,7 +80,7 @@
   },
   "timing": {
     "sd_clk": {
-      "max_mhz": 81.84,
+      "max_mhz": 90.06,
       "passed": true,
       "required_mhz": 75.0
     }
