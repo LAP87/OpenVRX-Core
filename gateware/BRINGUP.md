@@ -82,7 +82,7 @@ gateware/build.sh m3_probe
 openFPGALoader -b tangnano20k gateware/build/m3_probe.fs
 ```
 
-**Dekoderns I2C-adress.** TVP5150AM1 tar adressen (5C eller 5D) från YOUT7:s nivå när den startar, och en modul kan ha den fast dragen åt endera hållet. Den röda modulen CP803A svarar på 5D (bänken 2026-10-21: `i2c NA` med frisk klocka på 5C, `i2c OK` på 5D). Bygg då med `TVP_ADDR=5D gateware/build.sh m3_probe` (samma för M4 och M6; filen får suffixet `_tvp5d`, manifestet bokför `tvp_addr`). Rev A-kortet drar båda dekodrarna till 5C.
+**Dekoderns I2C-adress.** TVP5150AM1 tar adressen (5C eller 5D) från YOUT7:s nivå när den startar, och en modul kan ha den fast dragen åt endera hållet. Den röda modulen CP803A svarar på 5D (bänken 2026-10-21: `i2c NA` med frisk klocka på 5C, `i2c OK` på 5D). Sedan 2026-10-21 provar `tvp_ctrl.v` båda adresserna själv, per dekoder: svarar ingen på den första (5C, eller 5D med `TVP_ADDR=5D`) går samma skrivning till den andra, och den adress som svarat behålls till nästa reset, också när dekodern initieras om. M3-proben skriver adressen i fältet `i2c` (`5C` eller `5D`). Två moduler med olika strappning går alltså i samma bitström, och `TVP_ADDR=5D` behövs inte längre; valet finns kvar och anger vilken adress som provas först. Utan RESETB-tråd kan adressen bero på FPGA:ns pull medan den konfigureras (navets `docs/design/2026-10-21/LOGIKGRANSKNING.md`, F3); löd därför tråden. Simulerat mot slavmodellen, inte provat på kortet. Rev A-kortet drar båda dekodrarna till 5C.
 
 Loggen läses från kortets andra USB-serieport (BL616 visar två; UART:en är oftast den andra):
 
@@ -207,7 +207,7 @@ Tom flash, trasig nyaste post, full sektor, avbruten radering (150 halvraderade 
 En rad per dekoder och sekund. Frisk NTSC:
 
 ```
-A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 000E ri 00
+A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c 5C st 000E ri 00
 ```
 
 | Fält | Friskt | Betyder |
@@ -219,7 +219,7 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c OK st 00
 | `ln` | ca 14 500 | aktiva rader per sekund |
 | `fld` | `060` (PAL `050`) | fältbyten per sekund |
 | `xe` | `0000` | synkord med bitfel som inte gick att rätta |
-| `i2c` | `OK` | dekodern svarade på den senaste I2C-frågan (`NA`: inget svar, `--`: uppstarten är inte klar) |
+| `i2c` | `5C` (eller `5D`) | dekodern svarade på den senaste I2C-frågan, på den adressen (`NA`: inget svar, `--`: uppstarten är inte klar; före 2026-10-21 `OK`) |
 | `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan. `----`: ingen giltig status, för att senaste pollrundan inte fick svar på alla tre läsningarna (88h, 89h, 03h) eller för att dekodern hittades återställd och inte har lästs hel sedan dess |
 | `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |
 
@@ -248,8 +248,8 @@ Testbänken `sim/test_probe.py` kör samma rapport mot en ren NTSC-bild och mot 
 | `tog 00 hi 00` men `sclk` är rätt | databussen är tyst: 1,8 V-nivåer (se avsnitt 0), eller dekodern startar inte (`i2c`) |
 | `len ---------`, `ln 00000` | inga synkord: en databit fel räcker. Titta på `tog`/`hi` först |
 | `len` varierar, `xe` stiger | brus eller fel samplingsflank: korta trådarna, jord mellan signalerna |
-| `i2c NA` | SDA eller SCL, pull-up saknas, eller fel adress (YOUT7-strappning) |
-| `i2c OK` men låsbitarna i `st` är nollor (sista siffran inte `E`) | ingen videosignal: mottagaren, kanalen eller videokabeln |
+| `i2c NA` | SDA eller SCL, pull-up saknas; varken 5C eller 5D svarar |
+| `i2c 5C` eller `5D` men låsbitarna i `st` är nollor (sista siffran inte `E`) | ingen videosignal: mottagaren, kanalen eller videokabeln |
 | `st` börjar på `4`–`7` (t.ex. `400E`) | dekodern flaggar svag signal: antenn, avstånd, eller mottagaren på fel kanal |
 | `ri` stiger då och då | dekodern återställs under drift: glapp i matningen eller på RESETB-tråden |
 | `ri` går till `FF` på några sekunder, `st ----` | register 03h läser aldrig tillbaka 0Dh: SDA ligger låg hela tiden (kortslutning läses som svar), eller kretsen tar inte emot skrivningarna |
@@ -265,7 +265,7 @@ Ett svagt internt pull-motstånd kan inte flytta ett stift som dekodern verklige
 
 Två begränsningar:
 
-- Bit 7 får ingen pull. YOUT7 är dekoderns adresstrapp (I2CSEL), som läses vid reset. En pull-up mot modulens eget strappmotstånd kan flytta dekodern till adress BAh, och då visar proben `i2c NA` för en dekoder som är rätt kopplad. Bit 7 kontrolleras i stället med `tog` och `hi` i den vanliga bitströmmen.
+- Bit 7 får ingen pull. YOUT7 är dekoderns adresstrapp (I2CSEL), som läses vid reset. En pull-up mot modulens eget strappmotstånd kan flytta dekodern till adress BAh (5D); proben hittar den där och visar `i2c 5D` (före 2026-10-21 `i2c NA`). Bit 7 kontrolleras i stället med `tog` och `hi` i den vanliga bitströmmen.
 - Tre stift har motstånd på kortet som är starkare än FPGA:ns pull (Sipeeds scheman 3921 och 3923): stift 26 (YOUT2 A) har cirka 7 kΩ mot jord genom HDMI hot-plug-delaren, stift 79 (YOUT6 B) cirka 5 kΩ mot jord vid RGB-lysdioden, och stift 49 (YOUT4 B) 27 kΩ mot 3,3 V vid bakbelysningskretsen. En odriven bit där följer kortets motstånd, inte pull-testet.
 
 ## 5. Delade stift på Tang Nano 20K (rev 3923)

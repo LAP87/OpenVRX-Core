@@ -37,7 +37,8 @@ module tb_probe;
     assign sda_a = s_a ? 1'b0 : 1'bz;
     assign sda_b = s_b ? 1'b0 : 1'bz;
     i2c_slave_model #(.ADDR(7'h5C)) tvp_a (.scl(scl), .sda(sda_a), .sda_low(s_a));
-    i2c_slave_model #(.ADDR(7'h5C)) tvp_b (.scl(scl), .sda(sda_b), .sda_low(s_b));
+    // decoder B strapped to 5Dh: the probe (tvp_ctrl's address search) finds it there and says so
+    i2c_slave_model #(.ADDR(7'h5D)) tvp_b (.scl(scl), .sda(sda_b), .sda_low(s_b));
 
     // CLK_HZ only scales the millisecond timers (I2C start-up, UART, RX5808 writes) so the run stays
     // short: one probe millisecond is 0.1 ms here. RX5808: first write after 2 ms, repeats 8 ms apart (after the first status read, ~8 ms).

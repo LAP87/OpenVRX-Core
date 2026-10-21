@@ -27,7 +27,7 @@ import vtx_channels as vc  # noqa: E402
 
 WINDOW = 270_000
 CLK_HZ = 2_700_000                  # what tb_probe.v tells the probe (scales its timers)
-LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (OK|NA|--) st (\S{4}) ri ([0-9A-F]{2})$')
+LINE = re.compile(r'^([AB]) sclk (\d{8}) (.*) i2c (5C|5D|NA|--) st (\S{4}) ri ([0-9A-F]{2})$')
 
 
 def test_bringup_example_line():
@@ -38,7 +38,7 @@ def test_bringup_example_line():
     example = next(l for l in text.splitlines() if l.startswith('A sclk '))
     m = LINE.match(example)
     assert m and len(example) == 88, example
-    assert m[4] == 'OK' and m[6] == '00' and 'len 1716-1716' in m[3], example
+    assert m[4] == '5C' and m[6] == '00' and 'len 1716-1716' in m[3], example
     assert tvp_status.healthy(int(m[5], 16), 'ntsc'), example
 
 
@@ -93,14 +93,14 @@ def test_probe_reports():
         assert body.startswith('tog FF hi FF len 1716-1716 ln '), l
         m = re.search(r'ln (\d{5}) fld (\d{3}) xe (\d{4})', body)
         assert m and 100 <= int(m[1]) <= 160 and int(m[2]) <= 1 and m[3] == '0000', l
-        assert i2c == 'OK' and st == '000E', l
+        assert i2c == '5C' and st == '000E', l
     # B is reset at 15 ms (window 2). The poll round that finds 03h back at its default writes the
     # list again and makes B's status not valid; the next whole round, after window 2's report,
     # makes it valid again (tvp_ctrl.v, review 2026-10-06 F2)
     for l, want in zip(b[1:3], ('----', '000E')):
         _, _, body, i2c, st, _ = fields(l)
         assert body.startswith('tog DB hi DF len --------- ln 00000 fld 000 xe 0000'), l
-        assert i2c == 'OK' and st == want, l
+        assert i2c == '5D' and st == want, l       # B is strapped to 5Dh in tb_probe.v
 
     # B's clock has stopped: the line says so instead of repeating stale values
     _, f_dead, body, _, _, _ = fields(b[3])

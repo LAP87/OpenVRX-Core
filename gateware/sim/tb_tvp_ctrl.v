@@ -14,6 +14,10 @@
 //            9     request VCR while decoder 0 reads 88h; 10 toggles back during its mode write
 //            11    NACK the first decoder-0 mode register phase, then allow a later retry
 //            12    select VCR before startup init; 13 also reset decoder 1 twice
+//            14    run 20 ms after init without waiting for a valid status (no decoder may answer)
+//   S0_ADDR, S1_ADDR   the slaves' I2C addresses (defaults 5Ch, and 5Ch with SPLIT or 5Dh without);
+//                      any other value than 5Ch/5Dh is a decoder that never answers
+//   DEV0, SEARCH       tvp_ctrl's first address for decoder 0 and its address search
 //   PIN_TRACE=1   print resolved BUS pin changes and request timestamps for the independent oracle
 `timescale 1ns/1ps
 `default_nettype none
@@ -22,6 +26,10 @@ parameter PRESENT1 = 1;
 parameter SPLIT = 0;
 parameter SCENARIO = 0;
 parameter PIN_TRACE = 0;
+parameter [6:0] S0_ADDR = 7'h5C;
+parameter [6:0] S1_ADDR = SPLIT ? 7'h5C : 7'h5D;
+parameter [6:0] DEV0 = 7'h5C;
+parameter SEARCH = 1;
     reg clk = 0, rst = 1;
     always #500 clk = ~clk;                       // 1 MHz: 1 ms = 1000 cycles
 
@@ -39,7 +47,7 @@ parameter PIN_TRACE = 0;
     wire [1:0] dev_err, status_valid;
     wire [15:0] status0, status1;
     wire [7:0] reinit0, reinit1;
-    wire [1:0] round_ok, lost_lock;
+    wire [1:0] round_ok, lost_lock, addr_alt, addr_found;
     reg mode_req = 0, mode_vcr = 0;
     reg req_pending = 0, req_pending_vcr = 0;
     reg midpoll_req_sent = 0, latest_req_sent = 0, mode_nack_cleared = 0;
@@ -115,15 +123,16 @@ parameter PIN_TRACE = 0;
         if (round_ok[1]) begin rounds1 = rounds1 + 1; if (lost_lock[1]) lost1 = lost1 + 1; end
     end
     tvp_ctrl #(.CLK_HZ(1_000_000), .I2C_DIV(3), .POWER_MS(1), .RESET_MS(1), .BOOT_MS(1), .POLL_MS(2),
-               .SPLIT_SDA(SPLIT), .DEV1(SPLIT ? 7'h5C : 7'h5D)) dut (
+               .SPLIT_SDA(SPLIT), .DEV0(DEV0), .DEV1(SPLIT ? 7'h5C : 7'h5D), .SEARCH(SEARCH)) dut (
         .clk(clk), .rst(rst), .tvp_resetb(resetb), .scl_low(scl_low), .sda_low(m_sda_low),
         .scl_in(scl), .sda_in({sda1, sda0}), .init_done(init_done), .dev_err(dev_err),
         .status0(status0), .status1(status1), .status_valid(status_valid),
         .reinit0(reinit0), .reinit1(reinit1), .round_ok(round_ok), .lost_lock(lost_lock),
+        .addr_alt(addr_alt), .addr_found(addr_found),
         .hold(1'b0), .op_mode_req(mode_req), .op_mode_vcr(mode_vcr), .active(active));
-    i2c_slave_model #(.ADDR(7'h5C), .LOG(1)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
+    i2c_slave_model #(.ADDR(S0_ADDR), .LOG(1)) s0 (.scl(scl), .sda(sda0), .sda_low(s0_low));
     // an absent decoder sees an idle bus
-    i2c_slave_model #(.ADDR(SPLIT ? 7'h5C : 7'h5D)) s1 (.scl(present1 ? scl : 1'b1), .sda(present1 ? sda1 : 1'b1),
+    i2c_slave_model #(.ADDR(S1_ADDR)) s1 (.scl(present1 ? scl : 1'b1), .sda(present1 ? sda1 : 1'b1),
                                                        .sda_low(s1_low_raw));
     initial begin
         // decoder 0 keeps the model's default, healthy NTSC (000E); decoder 1 reads as healthy PAL
@@ -146,11 +155,12 @@ parameter PIN_TRACE = 0;
     task show(input at_end);
         begin
             if (at_end) $write("RESULT"); else $write("MID");
-            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_02=%02x s0_28=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_02=%02x s1_28=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d rounds0=%0d rounds1=%0d lost0=%0d lost1=%0d",
+            $display(" reset_low=%0d reset_falls=%0d err=%0d s0_03=%02x s0_04=%02x s0_0d=%02x s0_00=%02x s0_02=%02x s0_28=%02x s0_writes=%0d s1_03=%02x s1_04=%02x s1_0d=%02x s1_02=%02x s1_28=%02x s1_writes=%0d st0=%04x st1=%04x valid=%0d reinit0=%0d reinit1=%0d rounds0=%0d rounds1=%0d lost0=%0d lost1=%0d alt=%0d found=%0d",
                      saw_reset_low, reset_falls, dev_err, s0.regs[8'h03], s0.regs[8'h04], s0.regs[8'h0D],
                      s0.regs[8'h00], s0.regs[8'h02], s0.regs[8'h28], s0.writes,
                      s1.regs[8'h03], s1.regs[8'h04], s1.regs[8'h0D], s1.regs[8'h02], s1.regs[8'h28], s1.writes,
-                     status0, status1, status_valid, reinit0, reinit1, rounds0, rounds1, lost0, lost1);
+                     status0, status1, status_valid, reinit0, reinit1, rounds0, rounds1, lost0, lost1,
+                     addr_alt, addr_found);
         end
     endtask
 
@@ -159,9 +169,9 @@ parameter PIN_TRACE = 0;
         trace_enable = PIN_TRACE;
         if (SCENARIO == 12 || SCENARIO == 13) queue_mode_request(1'b1);
         wait (init_done);
-        wait (status_valid[0]);
+        if (SCENARIO != 14) wait (status_valid[0]);
         // a decoder whose outputs never come on (2, 4) never has valid status
-        if (PRESENT1 && SCENARIO != 2 && SCENARIO != 4) wait (status_valid[1]);
+        if (PRESENT1 && SCENARIO != 2 && SCENARIO != 4 && SCENARIO != 14) wait (status_valid[1]);
         #20_000_000;
         request_stimulus_enable = 1;
         case (SCENARIO)
@@ -182,7 +192,7 @@ parameter PIN_TRACE = 0;
                 s0.regs[8'h88] = s0.regs[8'h88] | 8'h10;
                 #20_000_000;
             end
-            9, 10, 11: #20_000_000;
+            9, 10, 11, 14: #20_000_000;
             12: #20_000_000;
             13: begin
                 s1.tvp_reset; #30_000_000;
