@@ -70,16 +70,13 @@ def b_used_after(r):
     return late, period
 
 
-def test_b_wins_while_locked():
-    """Before the loss both decoders report lock and B's flat lines win the pairs, so the scenario
-    exercises what the rule must stop."""
+def test_no_b_line_after_lock_loss():
+    """Before the loss both decoders report lock and B's flat lines win the pairs, so the scenario exercises
+    what the rule must stop. After it, one poll round plus two lines on, only A is used. (One test, one
+    simulation: the suite runs every test in its own process, and two would share the build directory.)"""
     r = run()
     before = [u for t, u in r['dec'] if 20_000_000 < t < r['loss']]
     assert len(before) > 100 and sum(u[0] == '1' for u in before) > 0.9 * len(before), before[:20]
-
-
-def test_no_b_line_after_lock_loss():
-    r = run()
     assert r['nacked'] > r['loss']
     late, period = b_used_after(r)
     assert period < 6_000_000, period                    # 88h read at least every 6 ms per decoder
