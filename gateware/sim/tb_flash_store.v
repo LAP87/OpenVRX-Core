@@ -4,7 +4,9 @@
 //   LOAD <payload> <seq>   when the start scan loads a record
 //   READY <t_ms>           when the start scan is over
 //   STATUS <t_us> <dirty> <stored>   when either changes (the menu's save status)
+//   WP <t_us> <wp_drive>   when WP# drive changes
 //   END <programs> <erases> <dirty programs> <blocked> <err> <seq>
+// MISO_HIGH = 1: the flash does not answer, MISO reads 1 (its pull-up), so every status read says busy.
 // Driven by sim/test_flash_store.py.
 `timescale 1ns/1ps
 `default_nettype none
@@ -12,6 +14,7 @@ module tb_flash_store;
     parameter CLK_HZ = 4_000_000;            // the start scan takes about 70 ms
     parameter SAVE_MS = 50;
     parameter END_MS = 2000;
+    parameter MISO_HIGH = 0;
 
     reg clk = 0, rst = 1;
     always #125 clk = ~clk;
@@ -21,15 +24,16 @@ module tb_flash_store;
     reg  [79:0] cur = 80'h0;
     wire wp_n = wp_drive ? 1'b1 : 1'bz;
     flash_store #(.CLK_HZ(CLK_HZ), .SAVE_MS(SAVE_MS)) dut (
-        .clk(clk), .rst(rst), .flash_cs_n(cs_n), .flash_clk(sck), .flash_mosi(mosi), .flash_miso(miso),
+        .clk(clk), .rst(rst), .flash_cs_n(cs_n), .flash_clk(sck), .flash_mosi(mosi), .flash_miso(MISO_HIGH ? 1'b1 : miso),
         .flash_wp_drive(wp_drive), .cur(cur), .loaded(loaded), .load(load), .ready(ready), .err(err), .dirty(dirty), .stored(stored),
         .seq(seq));
     spi_flash_model #(.LOAD(1)) flash (.cs_n(cs_n), .clk(sck), .mosi(mosi), .miso(miso), .wp_n(wp_n));
 
     always @(posedge clk) if (load) begin $display("LOAD %020x %0d", loaded, seq); cur <= loaded; end   // the menu takes it
-    reg ready_d = 0, dirty_d = 0, stored_d = 0;
+    reg ready_d = 0, dirty_d = 0, stored_d = 0, wp_d = 0;
     always @(posedge clk) begin
-        ready_d <= ready; dirty_d <= dirty; stored_d <= stored;
+        ready_d <= ready; dirty_d <= dirty; stored_d <= stored; wp_d <= wp_drive;
+        if (!rst && wp_drive !== wp_d) $display("WP %0d %0d", $time / 1_000, wp_drive);
         if (ready && !ready_d) $display("READY %0d", $time / 1_000_000);
         if (!rst && (dirty !== dirty_d || stored !== stored_d)) $display("STATUS %0d %0d %0d", $time / 1_000, dirty, stored);
     end

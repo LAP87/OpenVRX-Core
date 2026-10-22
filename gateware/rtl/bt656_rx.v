@@ -28,8 +28,8 @@ module bt656_rx (
     output reg  [9:0]  rec_line,       // active line within its field
     output reg  [15:0] rec_length,     // bytes between EAVs (0 = unknown)
     output reg  [10:0] rec_active,     // active bytes (saturates at 2047)
-    output reg  [7:0]  rec_xy_corrected,
-    output reg  [7:0]  rec_xy_bad,
+    output reg  [7:0]  rec_xy_corrected, // timing codes fixed by the protection bits (saturates at 255)
+    output reg  [7:0]  rec_xy_bad,       // timing codes that could not be decoded (saturates at 255)
     output reg  [19:0] rec_hf          // sum |Y[n]-Y[n-1]|
 );
     // ---- XY decode with single-error correction -------------------------
@@ -137,7 +137,7 @@ module bt656_rx (
                 // ---- XY byte ----
                 state <= 2'd0;
                 if (st == 2'd2) begin
-                    xy_bad_cnt <= xy_bad_cnt + 8'd1;
+                    if (xy_bad_cnt != 8'hFF) xy_bad_cnt <= xy_bad_cnt + 8'd1;   // saturates (LOGIKGRANSKNING F7)
                     in_active  <= 1'b0;
                     dl_v       <= 3'b000;
                 end else begin
@@ -152,13 +152,13 @@ module bt656_rx (
                             rec_line         <= px_line;
                             rec_length       <= seen_eav ? pos_n : 16'd0;
                             rec_active       <= act_count;
-                            rec_xy_corrected <= xy_corr_cnt + (st == 2'd1);
+                            rec_xy_corrected <= xy_corr_cnt + (st == 2'd1 && xy_corr_cnt != 8'hFF);
                             rec_xy_bad       <= xy_bad_cnt;
                             rec_hf           <= hf;
                             xy_corr_cnt      <= 0;
                             xy_bad_cnt       <= 0;
                         end else begin
-                            if (st == 2'd1) xy_corr_cnt <= xy_corr_cnt + 8'd1;
+                            if (st == 2'd1 && xy_corr_cnt != 8'hFF) xy_corr_cnt <= xy_corr_cnt + 8'd1;
                             if (!sav_since_eav && last_eav_valid && !last_eav_v) begin
                                 // the line that began at the previous EAV lost its SAV: count it
                                 ev_line  <= (ev_valid && !nf_pend) ? ev_line + 10'd1 : 10'd0;
@@ -173,7 +173,7 @@ module bt656_rx (
                         seen_eav  <= 1'b1;
                         pos       <= 16'd0;
                     end else begin                                  // SAV
-                        if (st == 2'd1) xy_corr_cnt <= xy_corr_cnt + 8'd1;
+                        if (st == 2'd1 && xy_corr_cnt != 8'hFF) xy_corr_cnt <= xy_corr_cnt + 8'd1;
                         in_active   <= ~v_d;
                         act_count   <= 0;
                         act_odd     <= 1'b0;

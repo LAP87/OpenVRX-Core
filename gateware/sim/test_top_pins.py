@@ -14,6 +14,12 @@ self-test (sdram_selftest.v) finds read point 5 alone, and M4 shows that on
 LED 1 for ST_SHOW_MS. Negative control: with the pins open no point reads
 right, and M4 lights LED 1 and 2 while A's lines would light only LED 1.
 
+LED 0 (2026-10-21, hub LOGIKGRANSKNING F2): 4 Hz with no decoder locked, 1 Hz with one,
+2 Hz with both. M6 (F10, F13): a log line every second once the mixer windows stop with
+the video, and the menu text in the OSD RAM. Negative controls: the never-locked run stays
+at 4 Hz; an M6 copy without the heartbeat and without the OSD mirror's reset sends no line
+after the video stops and leaves the OSD RAM unknown (X) in simulation.
+
 Run: .venv/bin/python -m pytest -q gateware/sim/test_top_pins.py"""
 import functools
 import os
@@ -42,18 +48,26 @@ TOPS = {
 
 
 @functools.lru_cache(maxsize=None)
-def run(top, locks=True, sdram=True, t_end=None):
+def run(top, locks=True, sdram=True, t_end=None, lock_b=True, alter=None):
+    """alter: ((path relative to gateware, text, replacement), ...) for copies of those files (negative controls)."""
     cfg = dict(TOPS[top], **({'t_end': t_end} if t_end else {}))
     env = dict(os.environ)
     iverilog_bin = PROJECT / '.tools' / 'iverilog' / 'bin'
     if iverilog_bin.exists():
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
-    work = HERE / 'build' / f'tb_top_pins_{top}_{int(locks)}{"" if sdram else "_nosdram"}'
+    work = HERE / 'build' / (f'tb_top_pins_{top}_{int(locks)}{"" if sdram else "_nosdram"}{"" if lock_b else "_oneb"}'
+                             f'{"_alt" if alter else ""}')
     work.mkdir(parents=True, exist_ok=True)
     src = [HERE / 'gowin_prim_stubs.v', HERE / 'i2c_slave_model.v', HERE / 'sdram_model.v', HERE / 'tb_top_pins.v',
            *sorted((GW / 'rtl').glob('*.v')), GW / 'top' / f'{cfg["name"]}.v']
+    for rel, old, new in (alter or ()):
+        text = (GW / rel).read_text()
+        assert text.count(old) == 1, (rel, old)
+        copy = work / Path(rel).name
+        copy.write_text(text.replace(old, new))
+        src = [copy if s == GW / rel else s for s in src]
     params = dict(TOP=top, CLK_HZ=cfg['clk_hz'], T_B_NS=T_B, T_LOCK_NS=cfg['t_lock'] if locks else 0,
-                  T_END_NS=cfg['t_end'], SDRAM=int(sdram), ST_SHOW_MS=ST_SHOW_MS)
+                  T_END_NS=cfg['t_end'], SDRAM=int(sdram), ST_SHOW_MS=ST_SHOW_MS, LOCK_B=int(lock_b))
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), '-o', 'sim.vvp', '-s', 'tb_top_pins',
                     *[f'-Ptb_top_pins.{k}={v}' for k, v in params.items()], *map(str, src)],
                    cwd=work, env=env, check=True)
@@ -69,6 +83,8 @@ def run(top, locks=True, sdram=True, t_end=None):
                 resetb=[(int(t), v) for t, v in re.findall(r'^RESETB (\d+) (\S)$', log, re.M)],
                 led=[(int(t), v) for t, v in re.findall(r'^LED (\d+) (\S{3})$', log, re.M)],
                 sdtest=[(int(t), v) for t, v in re.findall(r'^SDRAMTEST (\d+) (\S{3})$', log, re.M)],
+                loglines=[int(t) for t in re.findall(r'^LOGLINE (\d+)$', log, re.M)],
+                osd=(re.findall(r'^OSDTEXT (\S+)$', log, re.M) or [''])[0],
                 spi=[(int(t), int(n), int(bits, 16)) for t, n, bits in re.findall(r'^SPI (\d+) (\d+) (\w+)$', log, re.M)])
 
 
@@ -104,9 +120,9 @@ def check_led0_fast(r, until):
     assert len(gaps) >= 4 and all(abs(g - half) <= T_CLK for g in gaps), (half, gaps[:8])
 
 
-def check_led0_slow_at_end(r):
-    """1 Hz once both decoders are locked."""
-    half = r['clk_hz'] // 2 * T_CLK
+def check_led0_slow_at_end(r, both=True):
+    """2 Hz once both decoders are locked, 1 Hz once one is."""
+    half = r['clk_hz'] // (4 if both else 2) * T_CLK
     tg = led0_toggles(r)
     gaps = [b - a for a, b in zip(tg, tg[1:])][-2:]
     assert len(gaps) == 2 and all(abs(g - half) <= T_CLK for g in gaps), (half, gaps)
@@ -166,7 +182,46 @@ def test_m4_pins():
 
 
 def test_m6_pins():
-    check_all(run(6))
+    """Also the log heartbeat and the OSD text (in this test: a second test on the same run would share its
+    build directory in the parallel suite)."""
+    r = run(6)
+    check_all(r)
+    check_m6_heartbeat_and_osd(r)
+
+
+def test_m4_one_decoder_locked_led0_at_1hz():
+    """Decoder B never reports lock: LED 0 goes from 4 Hz to 1 Hz (a bench with one module sees the lock),
+    not to 2 Hz."""
+    r = run(4, lock_b=False)
+    check_led0_fast(r, r['t_lock'])
+    check_led0_slow_at_end(r, both=False)
+    with pytest.raises(AssertionError):
+        check_led0_slow_at_end(r, both=True)
+
+
+def check_m6_heartbeat_and_osd(r):
+    """After the video stops no mixer window comes, but a log line still comes every second; the OSD RAM
+    holds the menu text (printable characters in the 4 x 21 cells)."""
+    second = r['clk_hz'] * T_CLK
+    late = [t for t in r['loglines'] if t > VIDEO_STOP + second // 2]
+    assert len(late) >= 2, (r['loglines'][:5], late)
+    gaps = [b - a for a, b in zip(late, late[1:])]
+    assert all(abs(g - second) <= second // 50 for g in gaps), (second, gaps)
+    cells = [r['osd'][2 * (row * 32 + col):2 * (row * 32 + col) + 2] for row in range(4) for col in range(21)]
+    assert all(c not in ('', 'xx', 'XX') and 0x20 <= int(c, 16) <= 0x7E for c in cells), cells
+    assert sum(c != '20' for c in cells) >= 10, cells
+
+
+def test_m6_heartbeat_and_osd_checks_are_tested():
+    """Negative control: puck_ui without the heartbeat and M6 without the OSD mirror's reset, as before
+    2026-10-21."""
+    r = run(6, t_end=12_000_000, alter=(
+        ('rtl/puck_ui.v', '    parameter HEARTBEAT_MS = 1000 ', '    parameter HEARTBEAT_MS = 0    '),
+        ('top/m6_puck_proto.v', "        if (rst_c[2]) begin scan_row <= 2'd0; scan_col <= 5'd0; scan_we <= 1'b0; end", '')))
+    assert not [t for t in r['loglines'] if t > VIDEO_STOP + r['clk_hz'] * T_CLK // 2], r['loglines'][:5]
+    with pytest.raises(AssertionError):
+        check_m6_heartbeat_and_osd(r)
+    assert 'x' in r['osd'].lower(), r['osd'][:60]
 
 
 def test_without_lock_led0_stays_fast_and_writes_go_on():

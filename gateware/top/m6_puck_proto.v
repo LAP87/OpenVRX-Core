@@ -16,8 +16,8 @@
 // HDMI range: the menu's FULL / LTD (puck_ui hdmi_ltd, board clock) goes to tmds_link.v as rgb_full,
 // which takes it into the pixel clock domain at each vsync; only the HDMI build (HDMI=1) uses it.
 //
-// LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
-// report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
+// LEDs (active low): 0 heartbeat, 2 Hz when both decoders answer on I2C and
+// report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none; 1 lines from A; 2 lines
 // from B. The pins of LED 3-5 (18, 19, 20) are also header pins J6-18 / J6-17 /
 // J6-16 and carry RESETB and the RX5808 SPI DATA and SEL. Every ordinary GPIO
 // on the headers is taken by the two decoders, and the free pins 52-56 are
@@ -166,6 +166,8 @@ module m6_puck_proto #(
     assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
     assign rx_spi_sel_n = sel_n[0];       // both modules share one SEL line
+    wire any_locked = (st_valid[0] && !dev_err[0] && st0[1] && st0[2]) ||
+                      (st_valid[1] && !dev_err[1] && st1[1] && st1[2]);
     wire locked_ok = init_done && dev_err == 2'b00 && st_valid == 2'b11 &&
                      st0[1] && st0[2] && st1[1] && st1[2];
 
@@ -202,6 +204,9 @@ module m6_puck_proto #(
         if (scan_col == 5'd20) scan_row <= scan_row + 1'b1;
         {w_row, w_col} <= {scan_row, scan_col};           // osd_char is one clock behind the address
         scan_we <= 1'b1;
+        // reset: the counters started at X in simulation, so the OSD in this top was never written there
+        // (hub LOGIKGRANSKNING F13); on the board they start at 0 either way
+        if (rst_c[2]) begin scan_row <= 2'd0; scan_col <= 5'd0; scan_we <= 1'b0; end
     end
     wire [7:0] ro, go, bo;
     wire deo, hso, vso;
@@ -229,12 +234,14 @@ module m6_puck_proto #(
                       .de(deo), .hsync(hso), .vsync(vso), .r(ro), .g(go), .b(bo), .hz50(hz50), .rgb_full(!hdmi_ltd),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
-    // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B
-    localparam [24:0] BEAT_SLOW = CLK_HZ / 2 - 1, BEAT_FAST = CLK_HZ / 8 - 1;
+    // ---- LEDs: heartbeat (2 Hz both decoders locked, 1 Hz one, 4 Hz none), lines from A, lines from B
+    // 1 Hz when one decoder is locked, 2 Hz when both are, 4 Hz when none (2026-10-21, hub LOGIKGRANSKNING F2:
+    // until then 1 Hz only with both, so a bench with one module never saw the lock)
+    localparam [24:0] BEAT_ONE = CLK_HZ / 2 - 1, BEAT_BOTH = CLK_HZ / 4 - 1, BEAT_FAST = CLK_HZ / 8 - 1;
     reg [24:0] beat_t;
     reg        beat;
     always @(posedge clk) begin
-        if (beat_t >= (locked_ok ? BEAT_SLOW : BEAT_FAST)) begin beat_t <= 0; beat <= ~beat; end
+        if (beat_t >= (locked_ok ? BEAT_BOTH : any_locked ? BEAT_ONE : BEAT_FAST)) begin beat_t <= 0; beat <= ~beat; end
         else beat_t <= beat_t + 1'b1;
         if (rst_c[2]) begin beat_t <= 0; beat <= 1'b0; end
     end

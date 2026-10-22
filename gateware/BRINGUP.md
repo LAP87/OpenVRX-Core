@@ -57,7 +57,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | Bitström | Lysdiod 0 | Lysdiod 1 | Lysdiod 2 |
 |---|---|---|---|
 | M3 | hjärtslag 1 Hz | SCLK från A | SCLK från B |
-| M4, M6 | hjärtslag: 1 Hz när båda dekodrarna är låsta, 4 Hz annars | rader från A | rader från B |
+| M4, M6 | hjärtslag: 4 Hz utan låst dekoder, 1 Hz när en är låst, 2 Hz när båda är det (sedan 2026-10-21; förut 1 Hz bara med båda) | rader från A | rader från B |
 
 M4 visar de första 3 sekunderna i stället SDRAM-självtestet på lysdiod 1 och 2 (README under M4, "SDRAM-självtestet"): 1 tänd = läspunkt 5 läste båda testskurarna rätt; 2 tänd = den gjorde det inte, men läspunkt 4 eller 6 gjorde det; båda tända = ingen läspunkt. M6 skriver resultatet sist i varje loggrad (2.2).
 
@@ -74,7 +74,7 @@ M4 visar de första 3 sekunderna i stället SDRAM-självtestet på lysdiod 1 och
 | M0 | `m0_testpattern` | bara Tang + HDMI | testbilden syns på skärmen |
 | M3 | `m3_probe` | allt ovan utom OLED | proben visar friska rader för båda dekodrarna (nedan) |
 | M2a | `m2a_memtest` | bara Tang + USB | en ren läspunkt `rs=5` (avsnitt 2.1) |
-| M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (båda dekodrarna låsta); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
+| M4 | `m4_dual_mix` | samma | lysdiod 0 går från 4 Hz till 1 Hz (en dekoder låst; 2 Hz med båda); kamerabilden syns på HDMI; byte mellan mottagarna när en antenn tas bort |
 | M6 | `m6_puck_proto` | + OLED, knappar | flygvyn och menyn på OLED och OSD, kanalbyte fungerar, posten `FILT` växlar `TV`/`VCR` och `HDMI` `FULL`/`LTD`, mätloggen kommer över USB (2.2), inställningarna står kvar efter strömavbrott och flygvyn säger `SAVED` (2.3) |
 
 ```bash
@@ -158,7 +158,7 @@ S 012345 002345 000017 000000 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 0
 | tillstånd A, B | `-W` | `W` svag (mixern undviker den), `L` låg, `-` ingetdera, `?` ingen avläsning |
 | SDRAM-självtest | `2` | `-` inte kört än, annars en siffra 0–7: bit 0, 1, 2 = läspunkt 4, 5, 6 läste testskurarna rätt. `2` är rätt; `1` eller `4` betyder fas eller läspunkt ett steg fel för det här bygget (kör M2a-svepet), `0` att ingen läspunkt fungerar |
 
-Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En rad skickas efter varje fönster om 1 024 mixerbeslut, så utan video från någon dekoder kommer ingen logg.
+Latensläget (`BUF`/`LOW`) finns inte i loggen, bara på OLED:n och i OSD:n. En rad skickas efter varje fönster om 1 024 mixerbeslut, och sedan 2026-10-21 också en gång i sekunden när inget fönster kommer (utan video från någon dekoder: snö och brus `------`, procenttalen från senaste fönstret).
 
 **Att se att en inställning sparats och lästs.** Loggen har ingen särskild startrad, men redan den första raden efter start visar det som lästs: flashen läses inom cirka 10 ms efter konfigurationen, före första loggraden och före första kanalskrivningen (0,5 s). Utan sparad post startar M6 på `F4 5800`, `MIX`, `BUF`, `TV`, `HDMI FULL`, RSSI okalibrerad.
 
@@ -217,8 +217,8 @@ A sclk 27000064 tog FF hi FF len 1716-1716 ln 14565 fld 060 xe 0000 i2c 5C st 00
 | `hi` | `FF` | vilka som någon gång varit 1 |
 | `len` | `1716-1716` (PAL `1728-1728`) | kortaste och längsta raden i byte |
 | `ln` | ca 14 500 | aktiva rader per sekund |
-| `fld` | `060` (PAL `050`) | fältbyten per sekund |
-| `xe` | `0000` | synkord med bitfel som inte gick att rätta |
+| `fld` | `060` (PAL `050`) | fält per sekund, räknade på första aktiva raden efter vertikalsläckningen (före 2026-10-21 F-bitens växlingar, som gav `000` för en källa utan sammanflätning) |
+| `xe` | `0000` | synkord med bitfel som inte gick att rätta (per rad högst 255; förut slog räknaren runt vid 256) |
 | `i2c` | `5C` (eller `5D`) | dekodern svarade på den senaste I2C-frågan, på den adressen (`NA`: inget svar, `--`: uppstarten är inte klar; före 2026-10-21 `OK`) |
 | `st` | `000E` eller `100E` (PAL `006E`, `106E`, `206E`, `306E`) | statusregister 89h (två första siffrorna) och 88h (två sista), se nedan. `----`: ingen giltig status, för att senaste pollrundan inte fick svar på alla tre läsningarna (88h, 89h, 03h) eller för att dekodern hittades återställd och inte har lästs hel sedan dess |
 | `ri` | `00` | antal gånger dekodern har hittats återställd och startats om (hexadecimalt, stannar på `FF`) |

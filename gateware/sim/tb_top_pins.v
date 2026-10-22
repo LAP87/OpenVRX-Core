@@ -4,7 +4,9 @@
 // NTSC stream on decoder A from the start and on decoder B from T_B_NS on
 // (before that B has a clock but no timing codes).
 //
-// The decoders report no lock until T_LOCK_NS (0 = never). +pll_stop_ns=<t>
+// The decoders report no lock until T_LOCK_NS (0 = never); with LOCK_B = 0 decoder B never does.
+// M6: every log line taken (LOGLINE) and, at the end, the OSD text RAM (OSDTEXT, 128 hex characters).
+// +pll_stop_ns=<t>
 // stops the PLL outputs and the decoder clocks at t, so the rest of the run
 // only costs the board-clock logic. Every change of RESETB and of the LEDs and
 // every RX5808 frame is printed for sim/test_top_pins.py; the video path has
@@ -27,6 +29,7 @@ module tb_top_pins;
     parameter T_LOCK_NS = 0;
     parameter T_END_NS = 1_000_000;
     parameter FLASH = 0;
+    parameter LOCK_B = 1;
     parameter SDRAM = 0;
     parameter ST_SHOW_MS = 5;                     // M4: LED 1/2 show the SDRAM self-test this long (CLK_HZ ms)
 
@@ -67,7 +70,8 @@ module tb_top_pins;
         #1 tvp_a.regs[8'h88] = 8'h00; tvp_b.regs[8'h88] = 8'h00;        // no lock
         if (T_LOCK_NS != 0) begin
             #(T_LOCK_NS);
-            tvp_a.regs[8'h88] = 8'h0E; tvp_b.regs[8'h88] = 8'h0E;        // H, V and colour lock
+            tvp_a.regs[8'h88] = 8'h0E;                                     // H, V and colour lock
+            if (LOCK_B) tvp_b.regs[8'h88] = 8'h0E;
             $display("LOCK %0d", $time);
         end
     end
@@ -110,6 +114,14 @@ module tb_top_pins;
                 assign f_miso = 1'b1;                                                    // erased flash
             end
             always @(posedge clk) if (dut.set_load) $display("SETLOAD %0d %020x", $time, dut.saved);
+            always @(posedge clk) if (dut.ui.log_take) $display("LOGLINE %0d", $time);
+            integer oi;
+            initial begin
+                #(T_END_NS - 1000);
+                $write("OSDTEXT ");
+                for (oi = 0; oi < 128; oi = oi + 1) $write("%h", dut.osd.text[oi]);
+                $write("\n");
+            end
             always @(dut.hdmi_ltd) $display("HDMI %0d %b", $time, dut.hdmi_ltd);
             always @(dut.dvi.rgb_full) $display("RGBFULL %0d %b", $time, dut.dvi.rgb_full);
             m6_puck_proto #(.CLK_HZ(CLK_HZ)) dut (

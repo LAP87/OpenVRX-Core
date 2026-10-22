@@ -2,10 +2,15 @@
 //
 // Collects, per window: which data bits were ever 1 / ever toggled, the
 // shortest and longest line (bytes between EAVs of active lines, from
-// bt656_rx), active lines, field changes and timing codes with
+// bt656_rx), active lines, fields and timing codes with
 // uncorrectable errors. A toggle on snap_toggle (any domain) latches the
 // window into the outputs, starts a new one and toggles ack_toggle once the
 // outputs are stable. No ack means no SCLK.
+//
+// Fields are counted at their first active line (bt656_rx numbers lines from
+// the vertical blanking), not at changes of the F bit: a TVP5150AM1 holds F at 1
+// for a non-interlaced source, which counted 0 fields until 2026-10-21 (hub
+// LOGIKGRANSKNING F8).
 //
 // div_out is SCLK / 256 for a frequency counter in another domain.
 `default_nettype none
@@ -19,7 +24,7 @@ module bt656_probe (
     output reg  [7:0]  hi,                 // bits seen 1
     output reg  [15:0] len_min, len_max,   // 0 / 0 when no line ended
     output reg  [19:0] lines,
-    output reg  [9:0]  fields,
+    output reg  [9:0]  fields,             // first active lines of a field (one per field)
     output reg  [15:0] xy_bad,
     output wire        div_out
 );
@@ -47,7 +52,6 @@ module bt656_probe (
     reg  [15:0] a_min, a_max, a_bad;
     reg  [19:0] a_lines;
     reg  [9:0]  a_fields;
-    reg         last_field, have_field;
     wire        len_ok = rec_valid && rec_length != 0;
     wire [16:0] bad_sum = {1'b0, a_bad} + rec_xy_bad;
     always @(posedge clk) begin
@@ -67,12 +71,11 @@ module bt656_probe (
             if (rec_valid) begin
                 if (a_lines != 20'hFFFFF) a_lines <= a_lines + 1'b1;
                 a_bad <= bad_sum[16] ? 16'hFFFF : bad_sum[15:0];
-                if (have_field && rec_field != last_field && a_fields != 10'h3FF) a_fields <= a_fields + 1'b1;
+                if (rec_line == 10'd0 && a_fields != 10'h3FF) a_fields <= a_fields + 1'b1;
             end
         end
-        if (rec_valid) begin last_field <= rec_field; have_field <= 1'b1; end
         if (rst) begin
-            st <= 0; ack_toggle <= 1'b0; have_field <= 1'b0;
+            st <= 0; ack_toggle <= 1'b0;
             a_seen0 <= 0; a_seen1 <= 0; a_min <= 16'hFFFF; a_max <= 0; a_bad <= 0; a_lines <= 0; a_fields <= 0;
         end
     end

@@ -4,8 +4,8 @@
 // RX5808 are tuned to F4 5800 MHz 0.5 s after start, and again every 2 s for
 // as long as no decoder is locked (rx5808_tune.v, same SPI pins as M3 and M6).
 //
-// LEDs (active low): 0 heartbeat, 1 Hz when both decoders answer on I2C and
-// report horizontal + vertical lock, 4 Hz when not; 1 lines from A; 2 lines
+// LEDs (active low): 0 heartbeat, 2 Hz when both decoders answer on I2C and
+// report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none; 1 lines from A; 2 lines
 // from B. For ST_SHOW_MS (3 s) after the SDRAM self-test (sdram_selftest.v, at
 // power-up) LED 1 and 2 show its result instead: 1 lit = the build's read point
 // (5) read both test bursts right; 2 lit = it did not, but point 4 or 6 did;
@@ -125,12 +125,14 @@ module m4_dual_mix #(
                       .de(de), .hsync(hs), .vsync(vs), .r(r), .g(g), .b(b), .hz50(hz50), .rgb_full(1'b1),
                       .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n), .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n));
 
-    // ---- LEDs: heartbeat (1 Hz both decoders locked, 4 Hz not), lines from A, lines from B
-    localparam [24:0] BEAT_SLOW = CLK_HZ / 2 - 1, BEAT_FAST = CLK_HZ / 8 - 1;
+    // ---- LEDs: heartbeat (2 Hz both decoders locked, 1 Hz one, 4 Hz none), lines from A, lines from B
+    // 1 Hz when one decoder is locked, 2 Hz when both are, 4 Hz when none (2026-10-21, hub LOGIKGRANSKNING F2:
+    // until then 1 Hz only with both, so a bench with one module never saw the lock)
+    localparam [24:0] BEAT_ONE = CLK_HZ / 2 - 1, BEAT_BOTH = CLK_HZ / 4 - 1, BEAT_FAST = CLK_HZ / 8 - 1;
     reg [24:0] beat_t;
     reg        beat;
     always @(posedge clk) begin
-        if (beat_t >= (locked_ok ? BEAT_SLOW : BEAT_FAST)) begin beat_t <= 0; beat <= ~beat; end
+        if (beat_t >= (locked_ok ? BEAT_BOTH : any_locked ? BEAT_ONE : BEAT_FAST)) begin beat_t <= 0; beat <= ~beat; end
         else beat_t <= beat_t + 1'b1;
         if (rst_c[2]) begin beat_t <= 0; beat <= 1'b0; end
     end

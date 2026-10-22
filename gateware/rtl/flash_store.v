@@ -21,7 +21,9 @@
 // with it in `loaded`. Without a valid record nothing is loaded (the defaults stay).
 // Saving: when `cur` differs from what was last saved or loaded and has then not changed for
 // SAVE_MS, one record is written (only on change, so the flash wears only when settings
-// change). The write is read back; `err` is set if it does not match. For the menu: `dirty`
+// change). The write is read back; `err` is set if it does not match, or if the flash still
+// reports busy BUSY_MS after an erase or program began (no answer: MISO held high by its pull-up,
+// flash asleep, broken wire; then WP# is released and the write abandoned, hub LOGIKGRANSKNING F9). For the menu: `dirty`
 // from a change until the record is written and read back, `stored` once the flash holds a
 // record (loaded at start or written since; without one the defaults apply).
 // SPI mode 0, SCK = clk / 4. WP# is driven high only from the write enable to the end of a
@@ -36,6 +38,7 @@
 module flash_store #(
     parameter CLK_HZ = 27_000_000,
     parameter SAVE_MS = 3000,
+    parameter BUSY_MS = 1000,             // longest busy wait for one erase or program (a 4 KB erase takes at most a few 100 ms)
     parameter [23:0] SECTOR0 = 24'h7FE000
 ) (
     input  wire        clk,
@@ -137,12 +140,14 @@ module flash_store #(
     reg [2:0]  k;                         // bytes of a command header
     reg [79:0] cur_d;
     reg        prog_phase;                // 0: erase step, 1: program step
+    reg [31:0] busy_t;                    // clocks the running erase or program has been polled busy
     integer    i;
 
     always @(posedge clk) begin
         x_go <= 1'b0;
         load <= 1'b0;
         cur_d <= cur;
+        if (st == S_POLL || (st == S_GAP && after_gap == S_POLL)) busy_t <= busy_t + 1;   // the states below may clear it
         case (st)
         S_POWER: begin t <= t + 1; if (t == MS) begin t <= 0; st <= S_SCAN_CMD; k <= 0; flash_cs_n <= 1'b0; end end
         S_SCAN_CMD: if (!x_busy && !x_go) begin                    // 03h + address
@@ -196,7 +201,7 @@ module flash_store #(
             end
         end
         S_CRC: begin                                               // Z over bytes 0..12, CRC over the first 15
-            if (pos[3:0] == 4'd15) begin pos <= 0; flash_wp_drive <= 1'b1; st <= S_WREN; k <= 0; end
+            if (pos[3:0] == 4'd15) begin pos <= 0; flash_wp_drive <= 1'b1; st <= S_WREN; k <= 0; busy_t <= 0; end
             else begin
                 crc <= crc8_byte(crc, out_byte(pos[3:0])); pos <= pos + 1'b1;
                 if (pos[3:0] <= 4'd12) zc <= ((pos[3:0] == 4'd0) ? 8'd0 : zc) + {4'd0, zeros8(out_byte(pos[3:0]))};
@@ -206,7 +211,9 @@ module flash_store #(
             if (k == 0) begin flash_cs_n <= 1'b0; x_tx <= 8'h06; x_go <= 1'b1; k <= 1; end
             else begin flash_cs_n <= 1'b1; k <= 0; after_gap <= prog_phase ? S_PROG : S_ERASE; st <= S_GAP; end
         end
-        S_GAP: begin t <= t + 1; if (t == 3) begin t <= 0; st <= after_gap; end end   // CS high between commands
+        S_GAP: begin                                               // CS high between commands
+            t <= t + 1; if (t == 3) begin t <= 0; st <= after_gap; end
+        end
         S_ERASE: if (!x_busy && !x_go) begin                       // 20h + sector address
             if (k == 0) flash_cs_n <= 1'b0;
             if (k == 3'd4) begin flash_cs_n <= 1'b1; k <= 0; after_poll <= S_WREN; prog_phase <= 1'b1; after_gap <= S_POLL; st <= S_GAP; end
@@ -228,8 +235,11 @@ module flash_store #(
             else if (k == 1) begin x_tx <= 8'h00; x_go <= 1'b1; k <= 2; end
             else begin
                 flash_cs_n <= 1'b1; k <= 0;
-                if (x_rx[0]) begin after_gap <= S_POLL; st <= S_GAP; end
+                if (x_rx[0] && busy_t >= BUSY_MS * MS) begin       // no answer: give up, release WP#
+                    err <= 1'b1; flash_wp_drive <= 1'b0; busy_t <= 0; t <= 0; st <= S_IDLE;
+                end else if (x_rx[0]) begin after_gap <= S_POLL; st <= S_GAP; end
                 else begin
+                    busy_t <= 0;
                     after_gap <= after_poll; st <= S_GAP;
                     if (after_poll == S_VERIFY) flash_wp_drive <= 1'b0;
                 end
