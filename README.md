@@ -23,3 +23,5 @@ The earlier m2a_memtest_ioreg0.fs equals the new m2a_memtest.fs in options; m2u_
 | m4_dual_mix_low.fs | build/m4-low | M4 in the low-latency mode (no SDRAM field store), decoders at 5C |
 | m4_dual_mix_low_tvp5d.fs | build/m4-low | the same for decoders at 5D: the first-picture bitstream for the CP803A module (council 2026-10-21) |
 | m6_puck_proto.fs, m6_puck_proto_hdmi.fs | main fcad832 | M6 with the flight view (task 42), decoders at 5C, DVI and HDMI=1 |
+
+| cd90e6e/m3_probe.fs, m4_dual_mix.fs, m6_puck_proto.fs | main cd90e6e (merged as e71a268), night pass 2026-10-21/22 | tasks 49-52: SDRAM DQ capture as a plain flop with the self-test (M4: LED 1/2 for 3 s, M6: last log digit), tvp_ctrl tries 5C and 5D itself, unknown decoder status counts as bad, small findings. On the bench 2026-10-22: M4 showed the first camera picture, M6 answered 2 in the self-test |
