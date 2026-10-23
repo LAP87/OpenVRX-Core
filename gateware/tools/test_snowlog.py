@@ -108,6 +108,23 @@ def test_parse_sdram_selftest():
     assert set(snowlog.FIELDS) >= set(done)
 
 
+def test_parse_devcmd_suffix():
+    """A DEVCMD=1 bitstream's line (puck_ui.v, 101 bytes): latency, HOLD + OSD and the command echo after the
+    self-test. The 89-byte part reads as before; a damaged suffix token does not read."""
+    base = 'S 012345 002345 000017 654321 040 034 025 F4 5800 MIX T F - -- 12000 04567 075 003 -W 2'
+    line = base + ' LOW HA 4C07'
+    assert len(line) + 2 == 101
+    r, old = snowlog.parse(line), snowlog.parse(base)
+    assert (r['lat'], r['hold'], r['osd'], r['cmd'], r['cmd_count']) == ('LOW', 1, 'A', 0x4C, 7)
+    assert {k: v for k, v in r.items() if k not in ('lat', 'hold', 'osd', 'cmd', 'cmd_count')} == old
+    assert snowlog.parse(base + ' BUF -- 0000')['osd'] == '-'
+    for damaged in (' LAW HA 4C07', ' LOW XA 4C07', ' LOW HB 4C07', ' LOW HA 4G07', ' LOW HA 4C0', ' LOW H 4C07',
+                    ' LOW HAA 4C07'):
+        assert snowlog.parse(base + damaged) is None, damaged
+    assert snowlog.parse(base[:-2] + ' LOW HA 4C07') is None, 'the suffix needs the self-test before it'
+    assert set(snowlog.FIELDS) >= set(r)
+
+
 def test_log_writes_the_hdmi_column(tmp_path, monkeypatch):
     """A new line fills the hdmi column, an 85-byte line from an older bitstream leaves it empty."""
     fake_port(monkeypatch, [b'S 000100 000200 000003 000000 050 040 010 F4 5800 MIX T L - -- 12000 04567 075 003 -W\r\n'

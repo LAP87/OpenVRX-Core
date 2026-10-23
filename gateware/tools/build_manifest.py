@@ -117,7 +117,7 @@ def main():
     begin.add_argument('top')
     begin.add_argument('output', type=Path)
     begin.add_argument('--copy-to', type=Path)
-    for option in ('freq', 'seed', 'pull', 'phase', 'ioreg', 'vinterp', 'hdmi', 'mspi', 'tvp', 'low'):
+    for option in ('freq', 'seed', 'pull', 'phase', 'ioreg', 'vinterp', 'hdmi', 'mspi', 'tvp', 'low', 'devcmd'):
         begin.add_argument(f'--{option}', default='')
     route = commands.add_parser('route')
     route.add_argument('log', type=Path)
@@ -141,7 +141,7 @@ def main():
                           git=git_state(args.root), tool_versions=tool_versions(),
                           options=dict(freq_mhz=args.freq, seed=args.seed, pull=args.pull, sdram_phase=args.phase,
                                        ioreg=args.ioreg, vinterp=args.vinterp, hdmi=args.hdmi, mspi=args.mspi,
-                                       tvp_addr=args.tvp, low=args.low))
+                                       tvp_addr=args.tvp, low=args.low, devcmd=args.devcmd))
             args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
         else:
             finish(args.root.resolve(), args.snapshot, args.prefix, args.output)

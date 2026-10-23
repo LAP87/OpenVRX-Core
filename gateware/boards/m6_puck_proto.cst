@@ -188,6 +188,11 @@ IO_PORT "key_i" IO_TYPE=LVCMOS33;
 // measurement log: FPGA TXD -> onboard BL616 USB-UART (apicula examples/tangnano20k.cst "TXD" 69)
 IO_LOC  "uart_txd" 69;
 IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// development commands (DEVCMD=1 builds only; nextpnr skips the entry when the port is absent): BL616 TXD ->
+// FPGA pin 70 (Sipeed schematic 3923, UART between BL616 and FPGA; apicula examples/tangnano20k.cst "RXD" 70).
+// Pull-up: the line idles high while the BL616 does not drive it.
+IO_LOC  "uart_rxd" 70;
+IO_PORT "uart_rxd" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 // onboard SPI flash (XTX XT25F64F, Sipeed schematic 3923): the FPGA's MSPI pins, user I/O after
 // configuration with gowin_pack --mspi_as_gpio (build.sh). Settings live in its last two 4 KB sectors
 // (flash_store.v). HOLD# (pin 63, 4.7 k pull-up on the board) is left alone. WP# (57) is driven high

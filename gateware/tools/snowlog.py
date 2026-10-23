@@ -19,7 +19,10 @@ receiver W (weak: the mixer avoids it), L (low, not weak), - or ? (no reading), 
 self-test (sdram_selftest.v): "-" not run yet, else a digit whose bits 0/1/2 say that read point
 4/5/6 read the test bursts right ("2" on a working board). Lines from older bitstreams (no
 self-test: 87 bytes; no HDMI range: 85 bytes; no RSSI, no lost-lock field, no noise values,
-possibly no "!"/"-") are read too; the missing columns stay empty. The Tang Nano 20K's BL616
+possibly no "!"/"-") are read too; the missing columns stay empty. A bitstream built with DEVCMD=1
+(development commands, puck_ui.v) adds 12 bytes (101 in all): latency BUF/LOW, HOLD (H/-) and OSD
+(A buttons, O on, - off) in one token, and the last accepted command byte and the count of accepted
+commands as four hex digits; they fill the columns lat, hold, osd, cmd, cmd_count. The Tang Nano 20K's BL616
 shows up as two ttyUSB ports; the UART is usually the second one.
 
 Only compare runs with the same camera scene: the snow value also depends on the
@@ -38,7 +41,19 @@ from collections import defaultdict
 
 FIELDS = ['time', 'label', 'snow_a', 'snow_b', 'noise_a', 'noise_b', 'use_a', 'use_b', 'use_mix', 'channel',
           'mhz', 'mode', 'filter', 'hdmi', 'dropped', 'lost_a', 'lost_b',
-          'rssi_a', 'rssi_b', 'rssi_pct_a', 'rssi_pct_b', 'rssi_state_a', 'rssi_state_b', 'sdram']
+          'rssi_a', 'rssi_b', 'rssi_pct_a', 'rssi_pct_b', 'rssi_state_a', 'rssi_state_b', 'sdram',
+          'lat', 'hold', 'osd', 'cmd', 'cmd_count']
+HEX = '0123456789ABCDEF'
+
+
+def parse_devcmd(tokens):
+    """The three DEVCMD tokens (latency, HOLD+OSD, command echo) as a dict, or None if they are not that."""
+    lat, ho, echo = tokens
+    if (lat not in ('BUF', 'LOW') or len(ho) != 2 or ho[0] not in 'H-' or ho[1] not in 'AO-' or len(echo) != 4
+            or any(c not in HEX for c in echo)):
+        return None
+    return {'lat': lat, 'hold': int(ho[0] == 'H'), 'osd': ho[1], 'cmd': int(echo[:2], 16),
+            'cmd_count': int(echo[2:], 16)}
 
 
 def parse_rssi(tail):
@@ -59,6 +74,12 @@ def parse(line):
     rssi = None
     hdmi = None
     sdram = None
+    dev = None
+    if len(p) == 24:                                   # DEVCMD=1: three more tokens at the end (2026-10-23)
+        dev = parse_devcmd(p[21:])
+        if dev is None:
+            return None
+        p = p[:21]
     if len(p) == 21:                                   # with the SDRAM self-test at the end (2026-10-21)
         if len(p[20]) != 1 or p[20] not in '-01234567':
             return None
@@ -146,6 +167,10 @@ def parse(line):
         rec['hdmi'] = hdmi
     if sdram is not None:
         rec['sdram'] = None if sdram == '-' else int(sdram)
+    if dev is not None:
+        if sdram is None:
+            return None
+        rec.update(dev)
     return rec
 
 
