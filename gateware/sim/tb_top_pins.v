@@ -20,6 +20,10 @@
 // loaded from mem.hex (FLASH = 1, sim/test_m6_settings.py). The flash load, the
 // menu's HDMI range and the transmitter's rgb_full are printed, and the flash's
 // program and erase counts at the end.
+//
+// M6 built with the define DEVCMD (and UART_BAUD): +cmd=<hex byte> +cmd_ns=<t> sends that byte to uart_rxd at t
+// (CMD <t> <byte>), and every byte on uart_txd is printed (TXB <t> <byte>, time of the start bit). DUMP_LINES
+// shortens the field dump to that many lines (sim/test_field_dump.py).
 `timescale 1ns/1ps
 `default_nettype none
 module tb_top_pins;
@@ -122,6 +126,35 @@ module tb_top_pins;
                 for (oi = 0; oi < 128; oi = oi + 1) $write("%h", dut.osd.text[oi]);
                 $write("\n");
             end
+`ifdef DEVCMD
+            reg cmd_rxd = 1'b1;
+            localparam UDIV = CLK_HZ / `UART_BAUD;
+            integer cmd_ns, cmd_b, ck, tk;
+            reg [7:0] tb8;
+            time tt;
+            initial if ($value$plusargs("cmd_ns=%d", cmd_ns) && $value$plusargs("cmd=%h", cmd_b)) begin
+                #(cmd_ns);
+                @(posedge clk) cmd_rxd = 1'b0;
+                repeat (UDIV) @(posedge clk);
+                for (ck = 0; ck < 8; ck = ck + 1) begin cmd_rxd = cmd_b[ck]; repeat (UDIV) @(posedge clk); end
+                cmd_rxd = 1'b1;
+                $display("CMD %0d %02x", $time, cmd_b[7:0]);
+            end
+            initial begin
+                #100_000;
+                forever begin
+                    @(negedge txd);
+                    tt = $time;
+                    repeat (UDIV / 2) @(posedge clk);
+                    for (tk = 0; tk < 8; tk = tk + 1) begin repeat (UDIV) @(posedge clk); tb8[tk] = txd; end
+                    repeat (UDIV) @(posedge clk);
+                    $display("TXB %0d %02x", tt, tb8);
+                end
+            end
+`ifdef DUMP_LINES
+            defparam dut.dump.N_LINES = `DUMP_LINES;
+`endif
+`endif
             always @(dut.hdmi_ltd) $display("HDMI %0d %b", $time, dut.hdmi_ltd);
             always @(dut.dvi.rgb_full) $display("RGBFULL %0d %b", $time, dut.dvi.rgb_full);
             m6_puck_proto #(.CLK_HZ(CLK_HZ)) dut (
@@ -131,6 +164,9 @@ module tb_top_pins;
                 .i2c_scl(scl), .i2c_sda_a(sda_a), .i2c_sda_b(sda_b), .tvp_resetb(resetb),
                 .tmds_clk_p(tmds_p[3]), .tmds_clk_n(tmds_n[3]), .tmds_d_p(tmds_p[2:0]), .tmds_d_n(tmds_n[2:0]),
                 .led(led), .uart_txd(txd),
+`ifdef DEVCMD
+                .uart_rxd(cmd_rxd),
+`endif
                 .flash_cs_n(f_cs_n), .flash_clk(f_clk), .flash_mosi(f_mosi), .flash_miso(f_miso), .flash_wp_n(f_wp_n),
                 .O_sdram_clk(sd_clk), .O_sdram_cke(sd_cke), .O_sdram_cs_n(sd_cs_n), .O_sdram_cas_n(sd_cas_n),
                 .O_sdram_ras_n(sd_ras_n), .O_sdram_wen_n(sd_we_n), .O_sdram_dqm(sd_dqm), .O_sdram_addr(sd_a),

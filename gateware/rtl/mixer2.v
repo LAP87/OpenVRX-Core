@@ -37,7 +37,10 @@ module mixer2 #(
     // noise meter (sys domain, see noise_stats.v): luma samples outside 16..235 per receiver,
     // summed over 1024 arriving lines; each toggle flips on a new value. Not used by the mixer.
     output wire [19:0] noise_a, noise_b,
-    output wire        noise_toggle_a, noise_toggle_b
+    output wire        noise_toggle_a, noise_toggle_b,
+    // decoder A's words as they leave chan_capture (a_clk domain, no markers): the field dump's tap (field_dump.v)
+    output wire        tap_a_valid,
+    output wire [51:0] tap_a_word
 );
     reg [2:0] rst_a, rst_b, rst_s;
     always @(posedge a_clk   or posedge rst_async) if (rst_async) rst_a <= 3'b111; else rst_a <= {rst_a[1:0], 1'b0};
@@ -53,6 +56,8 @@ module mixer2 #(
     wire [52:0] ea_d, eb_d;
     chan_capture cap_a (.clk(a_clk), .rst(arst), .d(a_in), .e_valid(ea_v), .e_data(ea_d), .line_pulse(a_pulse));
     chan_capture cap_b (.clk(b_clk), .rst(brst), .d(b_in), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse));
+    assign tap_a_valid = ea_v && !ea_d[52];
+    assign tap_a_word = ea_d[51:0];
 
     activity act_a (.clk(a_clk), .rst(arst), .pulse(a_pulse), .active(a_lines));
     activity act_b (.clk(b_clk), .rst(brst), .pulse(b_pulse), .active(b_lines));

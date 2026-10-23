@@ -11,7 +11,9 @@
 #   TVP_ADDR=5D gateware/build.sh m3_probe     # try the decoders' I2C address 5D first, then 5C (tvp_ctrl.v)
 #   LOW=1 gateware/build.sh m4_dual_mix        # M4 in the low-latency mode, no SDRAM field store (fb_backend.v; default 0)
 #   DEVCMD=1 gateware/build.sh m6_puck_proto   # development commands on the UART, pin 70 (puck_ui.v; default 0)
+#   UART_BAUD=921600 DEVCMD=1 gateware/build.sh m6_puck_proto  # M6's UART rate (log, commands, field dump)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI / DEVCMD /
+# UART_BAUD /
 # an IOREG other than the top's default).
 # Failed builds leave no bitstream at that path; previous outputs are saved in build/previous/.
 # — flash with openFPGALoader -b tangnano20k <file>
@@ -66,6 +68,15 @@ case "$devcmd" in 0|1) ;; *) echo "DEVCMD must be 0 or 1" >&2; exit 1 ;; esac
 if [ "$devcmd" = 1 ]; then
   defs="$defs -DDEVCMD=1"
   out_fs="${out_fs%.fs}_devcmd.fs"
+fi
+# optional: M6's UART rate for the log, the commands and the field dump (define UART_BAUD; default 115200). The
+# divider is 27 MHz / rate rounded down: 921600 gives 931034 baud (+1.0 %), 1000000 is exact. Suffix _baud<rate>,
+# manifest uart_baud.
+baud="${UART_BAUD:-115200}"
+case "$baud" in 115200|230400|460800|921600|1000000) ;; *) echo "UART_BAUD must be 115200, 230400, 460800, 921600 or 1000000" >&2; exit 1 ;; esac
+if [ "$baud" != 115200 ]; then
+  defs="$defs -DUART_BAUD=$baud"
+  out_fs="${out_fs%.fs}_baud$baud.fs"
 fi
 # optional: the decoders' I2C address tried first. The TVP5150AM1 takes it from YOUT7's pull at reset, so a module
 # may be strapped either way: the red CP803A module answers at 5D (bench 2026-10-21), rev A straps 5C. Since
@@ -133,7 +144,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --low "$low" --devcmd "$devcmd" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --low "$low" --devcmd "$devcmd" --uart-baud "$baud" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.

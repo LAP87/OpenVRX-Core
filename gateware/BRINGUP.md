@@ -126,6 +126,12 @@ python gateware/tools/m6ctl.py V          # filter VCR, skriver loggraden som vi
 python gateware/tools/m6ctl.py '?'        # statusraden
 ```
 
+Samma byggen har fältdumpen (README under M6, "Fältdumpen"): ett fält ur dekoder A före mixern, eller ur mixerns utström, rad för rad över UART till PNG. Vid 115 200 baud tar ett NTSC-fält cirka 35 s; `UART_BAUD=921600` vid bygget kortar det (och alla verktyg får då `--baud 921600`).
+
+```bash
+python gateware/tools/fielddump.py D --out dekoder_a
+```
+
 `snowlog.py` läser också de äldre raderna på 87, 85, 62, 60, 57 och 43 byte från tidigare bitströmmar; kolumnerna de saknar blir tomma. En CSV-fil skriven före kolumnen `sdram` (2026-10-21) eller `hdmi` (2026-10-18) får inga nya rader; skriv till en ny fil.
 
 ### 2.3 M6: SCAN, CAL och sparade inställningar
