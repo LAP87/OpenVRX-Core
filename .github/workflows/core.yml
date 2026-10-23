@@ -1,0 +1,69 @@
+# Draft (hub docs/NATTPASS_2026-10-23.md, task 61): the whole suite and the M0/M3/M4/M6 builds on GitHub's runners,
+# with the manifests and bitstreams as artifacts, so that anyone can check a bitstream against its sources.
+# Not merged until the owner says yes (B5: Actions minutes on a private repository, or public repositories).
+# Starts only by hand (workflow_dispatch) for now; the push and pull_request triggers are commented out so that
+# pushing this branch spends no minutes.
+#
+# Toolchain: the same as the bench builds, from requirements.txt (yowasp-yosys, yowasp-nextpnr-himbaechel-gowin,
+# apycula 0.32, cocotb, pytest) and Icarus Verilog 12 from Ubuntu 24.04. Not oss-cad-suite: build.sh calls the
+# venv's yowasp tools, and a manifest records their versions; other binaries would give bitstreams that do not
+# compare with the bench's. Not run yet.
+name: core
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icarus Verilog 12
+        run: sudo apt-get update && sudo apt-get install -y iverilog && iverilog -V | head -1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: venv
+        run: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+      - name: whole suite, one process per simulation test
+        run: .venv/bin/python gateware/tools/run_suite.py -j 4 --out suite
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: suite-report
+          path: |
+            suite/report.txt
+            suite/results.jsonl
+            suite/durations.json
+            suite/logs/
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        top: [m0_testpattern, m3_probe, m4_dual_mix, m6_puck_proto]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: venv
+        run: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+      - name: build
+        run: gateware/build.sh ${{ matrix.top }}
+      - name: manifest against the sources
+        run: .venv/bin/python gateware/tools/build_manifest.py verify gateware/build/${{ matrix.top }}.build.json --root .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.top }}
+          path: |
+            gateware/build/${{ matrix.top }}.fs
+            gateware/build/${{ matrix.top }}.build.json
+            gateware/build/${{ matrix.top }}.pnr.log
+            gateware/build/${{ matrix.top }}.stat.txt
