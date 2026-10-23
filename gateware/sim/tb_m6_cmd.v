@@ -47,7 +47,7 @@ module tb_m6_cmd;
         // B gave no answer
         .uart_rxd(rxd), .dec_init_done(1'b1), .dec_err(2'b10), .dec_valid(2'b01), .dec_alt(2'b01),
         .dec_misc_ok(2'b01), .dec_st0(16'h100E), .dec_st1(16'h0000), .dec_misc0(8'h0D), .dec_misc1(8'h00),
-        .dec_ri0(8'h00), .dec_ri1(8'h03), .dump_req(dump_req));
+        .dec_ri0(8'h00), .dec_ri1(8'h03), .dump_req(dump_req), .tx_pause(1'b0), .tx_idle());   // no field dump here
 
     // ---- commands
     reg [31:0] cmds [0:255];
