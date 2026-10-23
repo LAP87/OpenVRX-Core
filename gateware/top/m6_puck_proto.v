@@ -18,6 +18,9 @@
 // Development commands (build option DEVCMD=1, define DEVCMD): single bytes from the PC on uart_rxd (pin 70, the
 // BL616's UART towards the FPGA) set latency, filter, mode, HOLD, channel and OSD, ask for a status line and start
 // the field dump (puck_ui.v has the list). Without the define the port does not exist and the build is as before.
+// Field dump (field_dump.v, DEVCMD builds): "D" sends one field of decoder A's words before the mixer, "F" one of the
+// mixer's output as the field store takes it, line by line in checked frames on the log's UART (the log pauses).
+// UART rate: build option UART_BAUD (define UART_BAUD, default 115200), log, commands and dump alike.
 //
 // LEDs (active low): 0 heartbeat, 2 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none; 1 lines from A; 2 lines
@@ -49,7 +52,7 @@ module m6_puck_proto #(
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
-    output wire        uart_txd,          // measurement log -> onboard BL616 USB-UART (115200 8N1)
+    output wire        uart_txd,          // measurement log -> onboard BL616 USB-UART (UART_BAUD 8N1, default 115200)
 `ifdef DEVCMD
     input  wire        uart_rxd,          // development commands <- onboard BL616 USB-UART (same rate)
 `endif
@@ -158,8 +161,14 @@ module m6_puck_proto #(
     localparam DEVCMD_BUILD = 0;
     wire       cmd_rxd = 1'b1;             // idle line; puck_ui has no receiver without DEVCMD
 `endif
+`ifdef UART_BAUD
+    localparam UART_RATE = `UART_BAUD;
+`else
+    localparam UART_RATE = 115200;
+`endif
     wire [1:0] dump_req;
-    puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD), .DEVCMD(DEVCMD_BUILD), .TVP_FIRST(TVP_DEV)) ui (
+    wire       dump_busy, dump_owns, dump_txd, ui_txd, tx_idle;
+    puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD), .DEVCMD(DEVCMD_BUILD), .TVP_FIRST(TVP_DEV), .BAUD(UART_RATE)) ui (
                 .clk(clk), .rst(rst_c[2]), .btn_down(rst_i), .btn_up(key_i), .view_b(cur),
                 .dec_present({init_done & ~dev_err[1], init_done & ~dev_err[0]}),
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
@@ -177,12 +186,14 @@ module m6_puck_proto #(
                 .force_bad(force_bad), .rx_spi_clk(rx_spi_clk), .rx_spi_data(rx_spi_data), .rx_spi_sel_n(sel_n),
                 .text_row(trow), .text_col(tcol), .text_char(tchar), .text_big(tbig),
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
-                .mix_overflow(overflow), .sdram_test(sdram_test), .uart_txd(uart_txd),
+                .mix_overflow(overflow), .sdram_test(sdram_test), .uart_txd(ui_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
                 .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd),
                 .uart_rxd(cmd_rxd), .dec_init_done(init_done), .dec_err(dev_err), .dec_valid(st_valid),
                 .dec_alt(addr_alt), .dec_misc_ok(misc_ok), .dec_st0(st0), .dec_st1(st1), .dec_misc0(misc0),
-                .dec_misc1(misc1), .dec_ri0(ri0), .dec_ri1(ri1), .dump_req(dump_req));
+                .dec_misc1(misc1), .dec_ri0(ri0), .dec_ri1(ri1), .dump_req(dump_req),
+                .tx_pause(dump_busy), .tx_idle(tx_idle));
+    assign uart_txd = dump_owns ? dump_txd : ui_txd;
     assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
@@ -195,6 +206,8 @@ module m6_puck_proto #(
     // ---- mixer (SDRAM clock domain) ----
     wire        m_empty, m_pop, a_lines, b_lines, alive_a, alive_b, overflow;
     wire [51:0] m_data;
+    wire        tap_a_valid;                // decoder A's words for the field dump (a_clk domain)
+    wire [51:0] tap_a_word;
     wire        dec_valid, dec_field;
     wire [1:0]  dec_use, dec_pop;
     wire [9:0]  dec_line;
@@ -210,7 +223,23 @@ module m6_puck_proto #(
                 .dec_field(dec_field), .dec_line(dec_line),
                 .snow_a(snow_a), .snow_b(snow_b), .use_a(use_a), .use_b(use_b), .use_mix(use_mix),
                 .snow_toggle_a(snow_ta), .snow_toggle_b(snow_tb), .use_toggle(use_t),
-                .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb));
+                .noise_a(noise_a), .noise_b(noise_b), .noise_toggle_a(noise_ta), .noise_toggle_b(noise_tb),
+                .tap_a_valid(tap_a_valid), .tap_a_word(tap_a_word));
+`ifdef DEVCMD
+    // field dump: tap 0 decoder A (its own clock), tap 1 the words the field store takes (SDRAM clock)
+    reg [2:0] rst_a3, rst_s3;
+    always @(posedge tvpa_sclk or posedge rst) if (rst) rst_a3 <= 3'b111; else rst_a3 <= {rst_a3[1:0], 1'b0};
+    always @(posedge sd_clk or posedge rst) if (rst) rst_s3 <= 3'b111; else rst_s3 <= {rst_s3[1:0], 1'b0};
+    field_dump #(.CLK_HZ(CLK_HZ), .BAUD(UART_RATE)) dump (
+        .clk(clk), .rst(rst_c[2]), .req(dump_req), .busy(dump_busy), .tx_idle(tx_idle), .owns_tx(dump_owns),
+        .txd(dump_txd),
+        .t0_clk(tvpa_sclk), .t0_rst(rst_a3[2]), .t0_valid(tap_a_valid), .t0_word(tap_a_word),
+        .t1_clk(sd_clk), .t1_rst(rst_s3[2]), .t1_valid(m_pop && !m_empty), .t1_word(m_data));
+`else
+    assign dump_busy = 1'b0;
+    assign dump_owns = 1'b0;
+    assign dump_txd = 1'b1;
+`endif
 
     wire [7:0] r, g, b;
     wire de, hs, vs, have_video, sdram_ready, hz50, sdram_test_done;

@@ -162,7 +162,9 @@ module puck_ui #(
     input  wire [1:0]  dec_err, dec_valid, dec_alt, dec_misc_ok,
     input  wire [15:0] dec_st0, dec_st1,  // {89h, 88h}
     input  wire [7:0]  dec_misc0, dec_misc1, dec_ri0, dec_ri1,
-    output reg  [1:0]  dump_req           // one-clock pulse: [0] dump a field from decoder A, [1] from the field store
+    output reg  [1:0]  dump_req,          // one-clock pulse: [0] dump a field from decoder A, [1] from the field store
+    input  wire        tx_pause,          // the field dump wants the UART: start no line (DEVCMD = 1 only)
+    output wire        tx_idle            // no line is being sent or about to be
 );
     `include "vtx_channels.vh"
     localparam MS = CLK_HZ / 1000;
@@ -671,7 +673,9 @@ module puck_ui #(
     reg  [LOG_LEN*8-1:0] log_buf;                                    // the line left-aligned (the status line is shorter)
     wire       u_busy;
     assign log_take = (log_wait == 9'd400);
-    assign q_take = (DEVCMD != 0) && q_req && !log_active && log_wait == 0;
+    wire       pause = (DEVCMD != 0) && tx_pause;                  // field_dump.v owns the UART meanwhile
+    assign q_take = (DEVCMD != 0) && q_req && !log_active && log_wait == 0 && !pause;
+    assign tx_idle = !log_active && log_wait == 0 && !u_busy && !u_send;       // the last byte is out too
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));
     reg [$clog2(HEARTBEAT_MS + 2)-1:0] hb_ms;                        // ms since the last line was taken
@@ -681,8 +685,8 @@ module puck_ui #(
         else if (tick && hb_ms != HEARTBEAT_MS) hb_ms <= hb_ms + 1'b1;
         if (q_take) begin                                            // a status line, between log lines
             log_buf <= {q_line, {(LOG_LEN - Q_LEN) * 8{1'b0}}}; log_n <= Q_LEN; log_i <= 0; log_active <= 1'b1;
-        end else if (tgu[2] != tgu[1] && !log_active) log_wait <= 9'd1; // new window: wait for the decimal values
-        else if (HEARTBEAT_MS != 0 && hb_ms == HEARTBEAT_MS && log_wait == 0 && !log_active)
+        end else if (tgu[2] != tgu[1] && !log_active && !pause) log_wait <= 9'd1; // new window: wait for the values
+        else if (HEARTBEAT_MS != 0 && hb_ms == HEARTBEAT_MS && log_wait == 0 && !log_active && !pause)
             log_wait <= 9'd1;                                            // no window for HEARTBEAT_MS: a line anyway
         else if (log_wait != 0) begin
             log_wait <= log_wait + 1'b1;
