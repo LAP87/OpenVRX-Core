@@ -216,7 +216,7 @@ def test_m6_heartbeat_and_osd_checks_are_tested():
     """Negative control: puck_ui without the heartbeat and M6 without the OSD mirror's reset, as before
     2026-10-21."""
     r = run(6, t_end=12_000_000, alter=(
-        ('rtl/puck_ui.v', '    parameter HEARTBEAT_MS = 1000 ', '    parameter HEARTBEAT_MS = 0    '),
+        ('rtl/puck_ui.v', '    parameter HEARTBEAT_MS = 1000,', '    parameter HEARTBEAT_MS = 0,'),
         ('top/m6_puck_proto.v', "        if (rst_c[2]) begin scan_row <= 2'd0; scan_col <= 5'd0; scan_we <= 1'b0; end", '')))
     assert not [t for t in r['loglines'] if t > VIDEO_STOP + r['clk_hz'] * T_CLK // 2], r['loglines'][:5]
     with pytest.raises(AssertionError):

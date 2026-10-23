@@ -89,6 +89,9 @@ module tvp_ctrl #(
     output reg  [1:0]  lost_lock,         // 88h bit 4 of the decoder's last whole round (valid with round_ok)
     output reg  [1:0]  addr_alt,          // the decoder is addressed at DEVn ^ 1 (address search)
     output reg  [1:0]  addr_found,        // the decoder has acknowledged at that address (locked until reset)
+    output reg  [7:0]  misc0,             // 03h as read in decoder 0's last whole poll round (0Dh when it is up)
+    output reg  [7:0]  misc1,
+    output reg  [1:0]  misc_ok,           // misc0 / misc1 hold a read value
     input  wire        hold,              // another master on the same bus wants it: start nothing new
     input  wire        op_mode_req,       // one-clock request to select TV or VCR mode
     input  wire        op_mode_vcr,       // value paired with op_mode_req: 0=TV, 1=VCR
@@ -208,6 +211,8 @@ module tvp_ctrl #(
                     ii <= ii + 1'b1; st <= S_POLL; t <= POLL_MS * MS;
                 end else begin                                       // a whole round: publish it
                     if (di) status1 <= {p89, p88}; else status0 <= {p89, p88};
+                    if (di) misc1 <= rdata; else misc0 <= rdata;
+                    misc_ok[di] <= 1'b1;
                     dev_err[di] <= 1'b0;
                     if (rdata != MISC_ON) begin                      // ... but the decoder has been reset
                         if (di) begin if (reinit1 != 8'hFF) reinit1 <= reinit1 + 1'b1; end
@@ -265,6 +270,7 @@ module tvp_ctrl #(
             selected_mode <= OP_MODE; mode_ack_valid <= 2'b00; mode_acked0 <= 0; mode_acked1 <= 0;
             mode_cursor <= 0; mode_tx <= 1'b0; mode_tx_di <= 1'b0; mode_tx_value <= OP_MODE; tx_sel1 <= 1'b0;
             addr_alt <= 2'b00; addr_found <= 2'b00; swapped <= 1'b0;
+            misc0 <= 8'h00; misc1 <= 8'h00; misc_ok <= 2'b00;
         end
     end
 endmodule

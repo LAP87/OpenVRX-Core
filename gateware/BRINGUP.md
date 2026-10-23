@@ -119,6 +119,13 @@ python gateware/tools/snowlog.py /dev/ttyUSB1 --label vcr --seconds 30 --out fil
 python gateware/tools/snowlog.py --summary filt.csv
 ```
 
+**Utan knappar** (byggvalet `DEVCMD=1`, `m6_puck_proto_devcmd.fs`, inte provat på kortet): enbytes-kommandon på samma serieport ställer latensläge, filter, mixläge, `HOLD`, kanal och OSD, och `?` ger en statusrad med dekodrarnas adress, 88h/89h och 03h. Loggraden blir då 101 byte och visar varje kommando. Listan står i README under M6, "Kommandon från datorn".
+
+```bash
+python gateware/tools/m6ctl.py V          # filter VCR, skriver loggraden som visar det
+python gateware/tools/m6ctl.py '?'        # statusraden
+```
+
 `snowlog.py` läser också de äldre raderna på 87, 85, 62, 60, 57 och 43 byte från tidigare bitströmmar; kolumnerna de saknar blir tomma. En CSV-fil skriven före kolumnen `sdram` (2026-10-21) eller `hdmi` (2026-10-18) får inga nya rader; skriv till en ny fil.
 
 ### 2.3 M6: SCAN, CAL och sparade inställningar

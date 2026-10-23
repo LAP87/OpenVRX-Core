@@ -55,6 +55,26 @@
 //   ^ CAL OFF   A OK B --     calibration: ^ turns it on, move the transmitter far and near
 //                             (or tune away and back), ^ again; OK = range accepted.
 //                             Leaving the page ends a calibration.
+//
+// Development commands (DEVCMD = 1, build option DEVCMD=1; off in the product build until the owner decides,
+// hub docs/NATTPASS_2026-10-23.md B4): single bytes on uart_rxd at BAUD 8N1, from the PC through the BL616.
+// Each sets a value (repeating it changes nothing), and each accepted byte shows in the next log line.
+//   B / L    latency BUF / LOW            T / V    filter TV / VCR (a request to both decoders, like the menu)
+//   m / a / b  mode MIX / force A / force B
+//   H / h    HOLD on / off                + / -    channel up / down through all 48 (band by band, wrapping);
+//                                                  ignored while HOLD is on or a scan runs, like the menu
+//   O / o / *  OSD always on / always off / as the buttons decide (after reset)
+//   ?        one status line ("Q ...", below) after the current log line
+//   D / F    field dump from decoder A / from the field store (dump_req, field_dump.v)
+// Other bytes are ignored and not counted. A setting changed this way is saved to the flash like a menu change.
+// The log line then carries 12 more bytes before CR LF (101 bytes): latency, HOLD (H / -), OSD (A buttons,
+// O on, - off), the last accepted byte and the count of accepted bytes (two hex digits each, wrapping):
+//   "S ... -W 2 LOW HA 4C07\r\n"
+// The status line (52 bytes):
+//   "Q A 5D 100E 0D 00 B -- ---- -- 00 T 2 D 5C 0115200\r\n"
+// per decoder: the address it answers at (5C / 5D, NA no answer, -- start-up not finished), 89h 88h of the last
+// whole poll round (---- not valid), 03h as last read (-- not read yet), times found reset (hex); then the SDRAM
+// self-test as in the log line, the build: H HDMI / D DVI, the address tried first (TVP_ADDR), the UART rate.
 `default_nettype none
 module puck_ui #(
     parameter CLK_HZ = 27_000_000,
@@ -68,7 +88,9 @@ module puck_ui #(
     parameter BAUD = 115200,
     parameter RX_FIRST_MS = 500,          // RX5808 channel write after reset, and its repeat while
     parameter RX_REPEAT_MS = 2000,        // no decoder is locked (rx5808_tune.v)
-    parameter HEARTBEAT_MS = 1000         // a log line also when no mixer window came for this long (0: off)
+    parameter HEARTBEAT_MS = 1000,        // a log line also when no mixer window came for this long (0: off)
+    parameter DEVCMD = 0,                 // 1: development commands on uart_rxd (see above)
+    parameter [6:0] TVP_FIRST = 7'h5C     // the decoders' address tried first (status line; tvp_ctrl DEV0/DEV1)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -133,7 +155,14 @@ module puck_ui #(
     output reg         low_lat,           // 1 = low-latency video (no field buffer)
     output reg         filter_vcr,        // 0 TV (default), 1 VCR; persistent controller request value
     output reg         filter_changed,    // one-clock pulse for ^ on the filter item and for set_load
-    output reg         hdmi_ltd           // 0 FULL (default), 1 LTD: HDMI limited range (tmds_link.v)
+    output reg         hdmi_ltd,          // 0 FULL (default), 1 LTD: HDMI limited range (tmds_link.v)
+    // development commands (DEVCMD = 1; unused and unconnected otherwise)
+    input  wire        uart_rxd,          // BAUD 8N1 from the board's USB-UART
+    input  wire        dec_init_done,     // tvp_ctrl, this clock domain: for the status line
+    input  wire [1:0]  dec_err, dec_valid, dec_alt, dec_misc_ok,
+    input  wire [15:0] dec_st0, dec_st1,  // {89h, 88h}
+    input  wire [7:0]  dec_misc0, dec_misc1, dec_ri0, dec_ri1,
+    output reg  [1:0]  dump_req           // one-clock pulse: [0] dump a field from decoder A, [1] from the field store
 );
     `include "vtx_channels.vh"
     localparam MS = CLK_HZ / 1000;
@@ -221,6 +250,48 @@ module puck_ui #(
     end
     wire menu_timeout = (page == P_MENU) && (menu_ms == 0) && !scan_busy;
 
+    // ---- development commands (DEVCMD = 1): one byte from uart_rx, decoded here; cmd_ok marks the bytes that
+    //      are commands (the others are dropped without a trace)
+    wire       rx_valid;
+    wire [7:0] rx_byte;
+    generate if (DEVCMD != 0) begin : g_cmd_rx
+        uart_rx #(.DIV(CLK_HZ / BAUD)) urx (.clk(clk), .rst(rst), .rxd(uart_rxd), .valid(rx_valid), .data(rx_byte));
+    end else begin : g_no_cmd_rx
+        assign rx_valid = 1'b0;
+        assign rx_byte = 8'd0;
+    end endgenerate
+    reg cmd_ok;
+    always @* case (rx_byte)
+        "B", "L", "T", "V", "m", "a", "b", "H", "h", "+", "-", "O", "o", "*", "?", "D", "F": cmd_ok = 1'b1;
+        default: cmd_ok = 1'b0;
+    endcase
+    wire       cmd = (DEVCMD != 0) && rx_valid && cmd_ok;
+    wire       cmd_step = cmd && (rx_byte == "+" || rx_byte == "-") && !ch_hold && !scan_busy;
+    wire [5:0] idx_up = (ch != 3'd7) ? {band, ch + 3'd1} : {(band == 3'd5) ? 3'd0 : band + 3'd1, 3'd0};
+    wire [5:0] idx_dn = (ch != 3'd0) ? {band, ch - 3'd1} : {(band == 3'd0) ? 3'd5 : band - 3'd1, 3'd7};
+    reg  [1:0] osd_force;                                  // 0 the buttons decide, 1 always on, 2 always off
+    reg  [7:0] cmd_last, cmd_count;
+    reg        q_req;                                      // a status line is due
+    wire       q_take;                                     // ... and is copied for sending this clock
+    always @(posedge clk) begin
+        dump_req <= 2'b00;
+        if (q_take) q_req <= 1'b0;
+        if (cmd) begin
+            cmd_last <= rx_byte;
+            cmd_count <= cmd_count + 1'b1;
+            case (rx_byte)
+                "O": osd_force <= 2'd1;
+                "o": osd_force <= 2'd2;
+                "*": osd_force <= 2'd0;
+                "?": q_req <= 1'b1;
+                "D": dump_req[0] <= 1'b1;
+                "F": dump_req[1] <= 1'b1;
+                default: ;
+            endcase
+        end
+        if (rst) begin osd_force <= 2'd0; cmd_last <= 8'h00; cmd_count <= 8'h00; q_req <= 1'b0; dump_req <= 2'b00; end
+    end
+
     always @(posedge clk) begin
         filter_changed <= 1'b0;
         if (menu_timeout) page <= P_FLY;
@@ -243,6 +314,20 @@ module puck_ui #(
                 F_HOLD: ch_hold <= ~ch_hold;
                 default: ;                                                      // SCAN: chan_scan above
             endcase
+        endcase
+        if (cmd) case (rx_byte)                        // development commands (above); each one line
+            "B": low_lat <= 1'b0;
+            "L": low_lat <= 1'b1;
+            "T": begin filter_vcr <= 1'b0; filter_changed <= 1'b1; end
+            "V": begin filter_vcr <= 1'b1; filter_changed <= 1'b1; end
+            "m": mode <= 2'd0;
+            "a": mode <= 2'd1;
+            "b": mode <= 2'd2;
+            "H": ch_hold <= 1'b1;
+            "h": ch_hold <= 1'b0;
+            "+": if (cmd_step) {band, ch} <= idx_up;
+            "-": if (cmd_step) {band, ch} <= idx_dn;
+            default: ;
         endcase
         if (scan_tune) {band, ch} <= scan_idx;
         if (scan_done && scan_found) page <= P_FLY;        // the picture on the channel it found
@@ -271,7 +356,8 @@ module puck_ui #(
     //      channel is stepped, and again every RX_REPEAT_MS while no decoder is locked
     //      (band/ch change on the clock after ev_up, chan one clock later: write_now is delayed one
     //      clock so that rx5808_tune sees the new synth word one clock after write_now, as before)
-    wire chan_step  = (ui_up && page == P_MENU && !item_blocked && (field == F_BAND || field == F_CH)) || scan_tune;
+    wire chan_step  = (ui_up && page == P_MENU && !item_blocked && (field == F_BAND || field == F_CH)) || scan_tune
+                      || cmd_step;
     reg  chan_step_d;
     always @(posedge clk) chan_step_d <= chan_step && !rst;
     wire any_locked = (sp0[1] && sl0[1]) || (sp1[1] && sl1[1]);
@@ -485,7 +571,7 @@ module puck_ui #(
         else if (tick && osd_ms != 0) osd_ms <= osd_ms - 1'b1;
         if (rst) osd_ms <= OSD_MS;                         // show briefly after power-up
     end
-    assign osd_show = (osd_ms != 0) || (page != P_FLY);
+    assign osd_show = (osd_force == 2'd1) || (osd_force != 2'd2 && ((osd_ms != 0) || (page != P_FLY)));
 
     // ---- measurement log: after each mixer-usage window (~65 ms) send one fixed-width line, and
     //   HEARTBEAT_MS after the last line when no window has come (no lines from any decoder: the
@@ -537,8 +623,10 @@ module puck_ui #(
     endfunction
     reg  [1:0] ovf_s;
     always @(posedge clk) ovf_s <= {ovf_s[0], mix_overflow};
-    localparam LOG_LEN = 89;
-    wire [LOG_LEN*8-1:0] log_line = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
+    // the 87 bytes before CR LF that every build sends; DEVCMD = 1 adds 12 (see the top of the file)
+    localparam BASE_LEN = 87, CMD_LEN = 12, Q_LEN = 52;
+    localparam LOG_LEN = BASE_LEN + ((DEVCMD != 0) ? CMD_LEN : 0) + 2;
+    wire [BASE_LEN*8-1:0] log_base = {"S ", z6(bcd_a, stale_a), " ", z6(bcd_b, stale_b), " ",
                              z6(bcd_na, stale_a), " ", z6(bcd_nb, stale_b), " ", z3(bcd_ua), " ", z3(bcd_ub), " ",
                              z3(bcd_um), " ", band_letter, ch_dig, " ", mhz, " ", mode_s, " ",
                              filter_vcr ? "V" : "T", " ", hdmi_ltd ? "L" : "F", " ", ovf_s[1] ? "!" : "-", " ",
@@ -547,13 +635,43 @@ module puck_ui #(
                              rssi_cal_ok[0] ? z3(bcd_pa) : "---", " ", rssi_cal_ok[1] ? z3(bcd_pb) : "---", " ",
                              rs_char(rssi_valid[0], rssi_low[0], rssi_warn[0]),
                              rs_char(rssi_valid[1], rssi_low[1], rssi_warn[1]), " ",
-                             sdram_test[3] ? 8'h30 + {5'd0, sdram_test[2:0]} : "-", 16'h0D0A};
+                             sdram_test[3] ? 8'h30 + {5'd0, sdram_test[2:0]} : "-"};
+    function [7:0] hexd(input [3:0] v); hexd = (v < 4'd10) ? 8'h30 + v : 8'h37 + v; endfunction
+    function [15:0] hex2(input [7:0] v); hex2 = {hexd(v[7:4]), hexd(v[3:0])}; endfunction
+    wire [CMD_LEN*8-1:0] cmd_s = {" ", low_lat ? "LOW" : "BUF", " ", ch_hold ? "H" : "-",
+                                  (osd_force == 2'd1) ? "O" : (osd_force == 2'd2) ? "-" : "A", " ",
+                                  hex2(cmd_last), hex2(cmd_count)};
+    // status line: per decoder address, {89h, 88h}, 03h, times found reset
+    // (dec_init_done is an argument: a function reading a module signal is not re-evaluated in simulation when
+    //  only that signal changes)
+    function [103:0] dec_q(input init, input err, input alt, input valid, input [15:0] st, input mok, input [7:0] m,
+                           input [7:0] ri);
+        dec_q = {!init ? "--" : err ? "NA" : (alt ^ TVP_FIRST[0]) ? "5D" : "5C", " ",
+                 valid ? {hex2(st[15:8]), hex2(st[7:0])} : "----", " ", mok ? hex2(m) : "--", " ", hex2(ri)};
+    endfunction
+    localparam [7:0] BD6 = 8'h30 + (BAUD / 1000000) % 10, BD5 = 8'h30 + (BAUD / 100000) % 10,
+                     BD4 = 8'h30 + (BAUD / 10000) % 10, BD3 = 8'h30 + (BAUD / 1000) % 10,
+                     BD2 = 8'h30 + (BAUD / 100) % 10, BD1 = 8'h30 + (BAUD / 10) % 10, BD0 = 8'h30 + BAUD % 10;
+    wire [Q_LEN*8-1:0] q_line = {"Q A ", dec_q(dec_init_done, dec_err[0], dec_alt[0], dec_valid[0], dec_st0,
+                                               dec_misc_ok[0], dec_misc0, dec_ri0),
+                                 " B ", dec_q(dec_init_done, dec_err[1], dec_alt[1], dec_valid[1], dec_st1,
+                                              dec_misc_ok[1], dec_misc1, dec_ri1),
+                                 " T ", sdram_test[3] ? 8'h30 + {5'd0, sdram_test[2:0]} : "-",
+                                 (HDMI_BUILD != 0) ? " H " : " D ", TVP_FIRST[0] ? "5D" : "5C", " ",
+                                 BD6, BD5, BD4, BD3, BD2, BD1, BD0, 16'h0D0A};
+    wire [LOG_LEN*8-1:0] log_line;
+    generate if (DEVCMD != 0) begin : g_cmd_line
+        assign log_line = {log_base, cmd_s, 16'h0D0A};
+    end else begin : g_line
+        assign log_line = {log_base, 16'h0D0A};
+    end endgenerate
     reg  [8:0] log_wait;
-    reg  [6:0] log_i;
+    reg  [6:0] log_i, log_n;                                         // byte being sent, bytes in the buffer
     reg        log_active, u_send;
-    reg  [LOG_LEN*8-1:0] log_buf;
+    reg  [LOG_LEN*8-1:0] log_buf;                                    // the line left-aligned (the status line is shorter)
     wire       u_busy;
     assign log_take = (log_wait == 9'd400);
+    assign q_take = (DEVCMD != 0) && q_req && !log_active && log_wait == 0;
     uart_tx #(.DIV(CLK_HZ / BAUD)) uart (.clk(clk), .rst(rst), .send(u_send), .data(log_buf[(LOG_LEN - 1 - log_i) * 8 +: 8]),
                                          .busy(u_busy), .txd(uart_txd));
     reg [$clog2(HEARTBEAT_MS + 2)-1:0] hb_ms;                        // ms since the last line was taken
@@ -561,20 +679,24 @@ module puck_ui #(
         u_send <= 1'b0;
         if (log_take) hb_ms <= 0;
         else if (tick && hb_ms != HEARTBEAT_MS) hb_ms <= hb_ms + 1'b1;
-        if (tgu[2] != tgu[1] && !log_active) log_wait <= 9'd1;          // new window: wait for the decimal values
+        if (q_take) begin                                            // a status line, between log lines
+            log_buf <= {q_line, {(LOG_LEN - Q_LEN) * 8{1'b0}}}; log_n <= Q_LEN; log_i <= 0; log_active <= 1'b1;
+        end else if (tgu[2] != tgu[1] && !log_active) log_wait <= 9'd1; // new window: wait for the decimal values
         else if (HEARTBEAT_MS != 0 && hb_ms == HEARTBEAT_MS && log_wait == 0 && !log_active)
             log_wait <= 9'd1;                                            // no window for HEARTBEAT_MS: a line anyway
         else if (log_wait != 0) begin
             log_wait <= log_wait + 1'b1;
-            if (log_wait == 9'd400) begin log_wait <= 0; log_buf <= log_line; log_i <= 0; log_active <= 1'b1; end
+            if (log_wait == 9'd400) begin
+                log_wait <= 0; log_buf <= log_line; log_n <= LOG_LEN; log_i <= 0; log_active <= 1'b1;
+            end
         end
         if (log_active && !u_busy && !u_send) begin
             u_send <= 1'b1;
         end
         if (u_send) begin
-            if (log_i == LOG_LEN - 1) log_active <= 1'b0; else log_i <= log_i + 1'b1;
+            if (log_i == log_n - 1) log_active <= 1'b0; else log_i <= log_i + 1'b1;
         end
-        if (rst) begin log_wait <= 0; log_active <= 1'b0; log_i <= 0; hb_ms <= 0; end
+        if (rst) begin log_wait <= 0; log_active <= 1'b0; log_i <= 0; log_n <= LOG_LEN; hb_ms <= 0; end
     end
 endmodule
 `default_nettype wire

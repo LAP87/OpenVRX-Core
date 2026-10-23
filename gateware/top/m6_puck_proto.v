@@ -15,6 +15,9 @@
 // its ready / dirty / stored / err tell the flight view whether the current settings are saved.
 // HDMI range: the menu's FULL / LTD (puck_ui hdmi_ltd, board clock) goes to tmds_link.v as rgb_full,
 // which takes it into the pixel clock domain at each vsync; only the HDMI build (HDMI=1) uses it.
+// Development commands (build option DEVCMD=1, define DEVCMD): single bytes from the PC on uart_rxd (pin 70, the
+// BL616's UART towards the FPGA) set latency, filter, mode, HOLD, channel and OSD, ask for a status line and start
+// the field dump (puck_ui.v has the list). Without the define the port does not exist and the build is as before.
 //
 // LEDs (active low): 0 heartbeat, 2 Hz when both decoders answer on I2C and
 // report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none; 1 lines from A; 2 lines
@@ -47,6 +50,9 @@ module m6_puck_proto #(
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
     output wire        uart_txd,          // measurement log -> onboard BL616 USB-UART (115200 8N1)
+`ifdef DEVCMD
+    input  wire        uart_rxd,          // development commands <- onboard BL616 USB-UART (same rate)
+`endif
     // the onboard SPI flash after configuration (MSPI pins as user I/O, gowin_pack --mspi_as_gpio):
     // saved settings in its last two sectors (flash_store.v)
     output wire        flash_cs_n, flash_clk, flash_mosi,
@@ -72,6 +78,8 @@ module m6_puck_proto #(
     wire [1:0] sda_low;
     wire [1:0] dev_err, st_valid, round_ok, lost_lock;
     wire [15:0] st0, st1;
+    wire [1:0]  addr_alt, misc_ok;
+    wire [7:0]  misc0, misc1, ri0, ri1;
     wire filter_vcr, filter_changed, hdmi_ltd;
 `ifdef TVP_DEV_5D
     localparam [6:0] TVP_DEV = 7'h5D;  // TVP_ADDR=5D gateware/build.sh: modules strapped the other way (YOUT7)
@@ -86,6 +94,8 @@ module m6_puck_proto #(
                    .scl_low(scl_low), .sda_low(sda_low), .scl_in(i2c_scl), .sda_in({i2c_sda_b, i2c_sda_a}),
                    .init_done(init_done), .dev_err(dev_err), .status0(st0), .status1(st1), .status_valid(st_valid),
                    .round_ok(round_ok), .lost_lock(lost_lock), .hold(oled_hold | rssi_hold),
+                   .reinit0(ri0), .reinit1(ri1), .addr_alt(addr_alt), .addr_found(),
+                   .misc0(misc0), .misc1(misc1), .misc_ok(misc_ok),
                    .op_mode_req(filter_changed), .op_mode_vcr(filter_vcr), .active(tvp_active));
     // ---- puck UI: OLED shares SCL + SDA_A with tvp_ctrl and rssi_adc (one master at a time)
     wire oled_scl_low, oled_sda_low, oled_hold, tvp_active, frame_done, oled_nack, oled_active;
@@ -141,7 +151,15 @@ module m6_puck_proto #(
 `else
     localparam HDMI_BUILD = 0;             // DVI: the item says N/A and ^ leaves it
 `endif
-    puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD)) ui (
+`ifdef DEVCMD
+    localparam DEVCMD_BUILD = 1;
+    wire       cmd_rxd = uart_rxd;
+`else
+    localparam DEVCMD_BUILD = 0;
+    wire       cmd_rxd = 1'b1;             // idle line; puck_ui has no receiver without DEVCMD
+`endif
+    wire [1:0] dump_req;
+    puck_ui #(.CLK_HZ(CLK_HZ), .HDMI_BUILD(HDMI_BUILD), .DEVCMD(DEVCMD_BUILD), .TVP_FIRST(TVP_DEV)) ui (
                 .clk(clk), .rst(rst_c[2]), .btn_down(rst_i), .btn_up(key_i), .view_b(cur),
                 .dec_present({init_done & ~dev_err[1], init_done & ~dev_err[0]}),
                 .dec_locked({st_valid[1] & st1[1] & st1[2], st_valid[0] & st0[1] & st0[2]}),
@@ -161,7 +179,10 @@ module m6_puck_proto #(
                 .osd_row(scan_row), .osd_col(scan_col), .osd_char(osd_char), .osd_show(osd_show),
                 .mix_overflow(overflow), .sdram_test(sdram_test), .uart_txd(uart_txd),
                 .band(band), .ch(ch), .mode(mode), .field(field), .page(page), .low_lat(low_lat),
-                .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd));
+                .filter_vcr(filter_vcr), .filter_changed(filter_changed), .hdmi_ltd(hdmi_ltd),
+                .uart_rxd(cmd_rxd), .dec_init_done(init_done), .dec_err(dev_err), .dec_valid(st_valid),
+                .dec_alt(addr_alt), .dec_misc_ok(misc_ok), .dec_st0(st0), .dec_st1(st1), .dec_misc0(misc0),
+                .dec_misc1(misc1), .dec_ri0(ri0), .dec_ri1(ri1), .dump_req(dump_req));
     assign i2c_scl = (scl_low | oled_scl_low | rssi_scl_low) ? 1'b0 : 1'bz;
     assign i2c_sda_a = (sda_low[0] | oled_sda_low | rssi_sda_low) ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
