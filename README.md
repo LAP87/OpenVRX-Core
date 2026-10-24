@@ -10,11 +10,14 @@ HDMI connector, either through an SDRAM field buffer or in a genlocked
 low-latency mode. Also: RX5808 channel control over SPI, an OLED menu, an
 on-screen display, a "snow meter" and a UART measurement log.
 
-**Status (2026-10-23 night, main after task 59, tested on `4b2e814`):** 871 tests collected, all pass. DEVCMD builds also send one field over the UART on command, line by line in checked frames, from decoder A before the mixer or from the mixer output the field store takes (`field_dump.v`, `tools/fielddump.py` writes PNGs); `UART_BAUD=921600` makes that about 8 s per NTSC field. Built, not tried on the board. Before it: **Status (2026-10-23 night, main after task 58, tested on `ce2f3ad`):** 862 tests collected, all pass. `DEVCMD=1 gateware/build.sh m6_puck_proto` adds single-byte commands from the PC on the UART (latency, filter, mode, HOLD, channel, OSD, a status line), each shown in the next log line; off by default. Built, not tried on the board. Before it (2026-10-22, main after task 52, tested on `cd90e6e`): 844 tests, all pass; the first camera picture reached HDMI through M4 on 2026-10-22 (hub `docs/BANK_2026-10-22.md`). Before it: **Status (2026-10-21 night, main after task 53, tested on `0717ad7`, merged as `f049aab`):** 818 tests collected, all pass. `LOW=1 gateware/build.sh m4_dual_mix` builds M4 in the low-latency mode, the council's path to the first picture. Before it:  (2026-10-21 evening, main after task 42, tested on `7354865`, merged as `2591cec`):** 814 tests collected, all pass (2005 s); M6 built without and with `HDMI=1`. The puck menu is now a flight view with a double-size channel row, one menu item per screen, a save receipt from the flash store, a channel hold and the two buttons shown as arrows (hub `docs/UI_FLYGVY_2026-10-19.md`). Before it:  (2026-10-21 afternoon, main after the TVP_ADDR option, tested on `bed8789`, merged as `5142894`):** 803 tests collected, all pass. The red TVP5150 module CP803A answers at I2C address 5D: with `TVP_ADDR=5D` the M3 probe sees the clock, the I2C and a free-running NTSC stream on the board; no video source was connected yet. Before it:  (2026-10-21, main after task 47, tested on `06d7522`, merged as `734ae58`): 799 tests collected, all pass (1624 s). First hardware results on a Tang Nano 20K rev 3923: the HDMI test pattern, and the SDRAM memory test clean at read point 5 with one phase step of margin on each side, but only when the I/O-cell register option is off; with it on, flops with CE / SET / RESET packed into I/O cells misbehave, so the option is now off by default (`gateware/README.md`, "I/O-register i I/O-cellerna"). TVP decoders and receivers are still untested. Before it:  (2026-10-20, main after task 46, tested on `a169638`, merged as `61ec85b`): 799 tests collected, all pass (1654 s); M0 built from it. The first hardware run (home bench 2026-10-20) found the bouncing square wrapping at the left edge; fixed here with a regression test. Before it (main after task 35, tested on `52c2ffe`): 797 tests collected, all pass, run one
-process per simulation test; the three strict xfail tests of the second review (Core #21-#23) are plain
-tests now. M0, M4 and M6 built from `52c2ffe` with and without `HDMI=1`, all clocks over 75 MHz after
-routing, the HDMI pairs packed as in M0 (M6 13190 LUT4, with `HDMI=1` 13544; 29 BSRAM). Nothing has
-run on hardware.
+**Status (main `3703071`, 2026-10-24):** 879 tests collected, all pass; the latest runs and the earlier counts are
+in [gateware/README.md](gateware/README.md) ("Nuläge"). On a Tang Nano 20K rev 3923 with one TVP5150 module the
+M0 test pattern, the M2a SDRAM memory test (read point 5 clean, without I/O-cell registers) and the M3 wiring probe
+have run, and on 2026-10-22 the first camera picture reached HDMI through M4, received by an ESP32-C5 running
+C5VRX (hub `docs/BANK_2026-10-22.md`); M6 ran with its SDRAM self-test reading `2`. Two decoders and the line
+mixer have not run on hardware. Simulated and built, not tried on the board: M6 with `DEVCMD=1` (single-byte
+commands from the PC on the UART, a status line, a field dump; tasks 58 and 59). Simulated: `DIGIN=1`, a digital
+composite input as channel B (task 64). The bench from a computer: hub `docs/BENCH.md`.
 
 Built with the open toolchain, figures after routing, every clock above its 75 MHz
 requirement, HDMI pairs of M2, M2s, M4 and M6 packed as in M0. Root-accepted by Codex: M0, M4
@@ -24,12 +27,12 @@ M2s, M2a, M3, M1 and M1s builds have no root acceptance.
 
 | Top | Built from | Seed | Note |
 |---|---|---:|---|
-| M0 | `52c2ffe` | 0 | reference for the HDMI pairs; 789 LUT4, with `HDMI=1` 950 |
-| M2, M2s | `0da655d` | 0 | I/O registers in the I/O cells; the display changed since only behind VINTERP |
-| M2a | `dc307bc` | 0 | memory test; the modules it uses are unchanged since |
-| M3 | `94a2b32` | 0 | wiring probe; no BUFG flag on the decoder clocks |
-| M4 | `52c2ffe` | 0 | 5 810 LUT4, lowest clock 115.06 MHz; with `HDMI=1` 5 993 LUT4, 123.00 MHz; with `HDMI=1 VINTERP=1` from `2c64672` (6 427 LUT4, 116.33 MHz); each option alone from `bf05ac0` (Codex) |
-| M6 | `52c2ffe` | 2 | with RSSI, SCAN, the flash store (`--mspi_as_gpio`) and the HDMI range field: 13 190 LUT4, lowest clock 103.80 MHz; with `HDMI=1` 13 544 LUT4, 103.80 MHz; with `HDMI=1 VINTERP=1` from `c852cb9`, the same build inputs (13 997 LUT4, 33 BSRAM, 115.41 MHz); `VINTERP=1` alone from `bf05ac0` (Codex); seeds 0-3 from `94a2b32` |
+| M0 | `a169638` | 0 | test pattern with the edge fix (task 46); 793 LUT4; reference for the HDMI pairs (with `HDMI=1` from `52c2ffe`, 950 LUT4) |
+| M2, M2s | `0da655d` | 0 | built with I/O registers in the I/O cells, the default until 2026-10-21; the display changed since only behind VINTERP |
+| M2a | `06d7522` | 0 | memory test without I/O-cell registers; `rs=5 err=00000000` on the board (2026-10-21) |
+| M3 | `cd90e6e` | 0 | wiring probe; 2 772 LUT4 |
+| M4 | `cd90e6e` | 0 | 6 043 LUT4, lowest clock 127.52 MHz; showed the first camera picture on the board (2026-10-22); option builds (`HDMI=1`, `VINTERP=1`, `LOW=1`) in gateware/README.md |
+| M6 | `cd90e6e` | 2 | 14 358 LUT4, lowest clock 106.76 MHz; ran on the board, self-test `2` (2026-10-22); rebuilt from `e71a268` bit for bit the same. With `DEVCMD=1` from `18f2ab5`: 15 641 LUT4 (`UART_BAUD=921600`: 15 526), lowest clock 97.14 MHz, not tried on the board. Option builds in gateware/README.md |
 
 M6 with both `HDMI=1` and `VINTERP=1` did not place until 2026-10-14: LUT positions ran out
 (ALUs, LUT RAM and flip-flops without a LUT of their own share them). The mixer's two input
@@ -41,8 +44,10 @@ What changed on 2026-10-12, with figures in [gateware/README.md](gateware/README
 
 - The decoder SCLK pins carry no BUFG flag. Three BUFGs competed for global wires, and
   some placements left `clocks.clk_27` unroutable in M6.
-- M2, M2s, M2a, M4 and M6 are built with their I/O registers in the I/O cells (owner's
-  decision), so the memory test on the board speaks for the picture builds.
+- M2, M2s, M2a, M4 and M6 were built with their I/O registers in the I/O cells (owner's
+  decision), so that the memory test on the board would speak for the picture builds. On the
+  board (2026-10-21) flops with CE / SET / RESET in I/O cells misbehaved, and the option is off
+  by default since then (`4aa41f2`; gateware/README.md, "I/O-register i I/O-cellerna").
 - All 260 seeds of the C3 interference campaign have run: 257 pass with their original
   stimulus, three (1345, 1434, 1444) once four clean fields follow it. They found one RTL
   fault, fixed: the line the field store joins in the middle after LOW counted as stored.
@@ -66,8 +71,9 @@ M6 has a TV/VCR filter field for both decoders and an HDMI range field (`FULL`/`
 UART row shows the requested filter as `T` or `V` and the range as `F` or `L`. Which filter
 mode holds lock and picture better is not measured.
 M6 also reads both receivers' RSSI from the Puck rev A board's ADS1115 once per field
-(`rssi_adc.v`), with a calibration page in the menu and RSSI in the UART row (87 bytes since the
-HDMI range, 85 before it, 62 before RSSI).
+(`rssi_adc.v`), with a calibration page in the menu and RSSI in the UART row (89 bytes since the
+SDRAM self-test of 2026-10-21, 101 with `DEVCMD=1`; 87 before the self-test, 85 before the HDMI range, 62 before
+RSSI).
 A receiver whose calibrated RSSI stays low while the other's does not loses the mixer's
 pairs before its picture breaks up; its lines are never left out for it. Simulated against
 a model of the ADC; thresholds are set on the bench. A menu SCAN steps all 48 channels and
@@ -92,7 +98,7 @@ attack first.
 | `gateware/sim/` | cocotb testbenches |
 | `gateware/model/` | Python reference models (BT.656, line mixer, field store and display mapping, channel table, font) and vector generator |
 | `gateware/vectors/` | Generated BT.656 test vectors with expected results |
-| `gateware/tools/` | `snowlog.py` (UART log to CSV), `build_manifest.py` (checks build hashes), `tmds_fuses.py` (compares built HDMI pairs), I/O bank guards and formal proof tests |
+| `gateware/tools/` | `snowlog.py` (UART log to CSV), `m6ctl.py` (M6 commands, `DEVCMD=1`), `fielddump.py` (field dump to PNG), `build_manifest.py` (checks build hashes), `tmds_fuses.py` (compares built HDMI pairs), `run_suite.py`, I/O bank guards and formal proof tests |
 | `mixer/` | Original floating-point mixer prototype (Python, OpenCV) |
 | `tests/latency/` | Glass-to-glass latency analysis from a high-speed video |
 
@@ -119,8 +125,9 @@ openFPGALoader -b tangnano20k gateware/build/m6_puck_proto.fs
 The quick list is chosen from the measured times of a full run (`run_suite.py --pick-quick 300`):
 the fastest test of every file, then the fastest of the rest. `--quick` refuses (exit status 2) when the
 list names a test that is no longer collected; pick a new list after the next full run. The list of
-2026-10-18 holds 720 of the 797 tests (204 s in a fresh copy); the formal proofs and 76 simulations of
-40-314 s each, `test_puck_ui` among them, run only in the full suite.
+2026-10-18 holds 720 tests (204 s in a fresh copy, about 240 s on 2026-10-23); the tests added since, the formal
+proofs and the long simulations (`test_puck_ui` among them) run only in the full suite (879 tests on
+2026-10-24, about 30 min).
 
 Each build uses a frozen source copy and writes a manifest with source and
 artifact hashes, tool versions, options and clock timing. A failed build leaves
