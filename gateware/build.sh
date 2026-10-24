@@ -12,6 +12,7 @@
 #   LOW=1 gateware/build.sh m4_dual_mix        # M4 in the low-latency mode, no SDRAM field store (fb_backend.v; default 0)
 #   DEVCMD=1 gateware/build.sh m6_puck_proto   # development commands on the UART, pin 70 (puck_ui.v; default 0)
 #   UART_BAUD=921600 DEVCMD=1 gateware/build.sh m6_puck_proto  # M6's UART rate (log, commands, field dump)
+#   DIGIN=1 gateware/build.sh m4_dual_mix      # channel B is the C5VRX sample bus on decoder B's pins (cvbs_capture.v; default 0)
 # Output: gateware/build/<top>.fs + <top>.build.json (same suffixes for PULL / SDRAM_PHASE / VINTERP / HDMI / DEVCMD /
 # UART_BAUD /
 # an IOREG other than the top's default).
@@ -68,6 +69,15 @@ case "$devcmd" in 0|1) ;; *) echo "DEVCMD must be 0 or 1" >&2; exit 1 ;; esac
 if [ "$devcmd" = 1 ]; then
   defs="$defs -DDEVCMD=1"
   out_fs="${out_fs%.fs}_devcmd.fs"
+fi
+# optional: channel B of M4 is the C5VRX receiver's 6-bit sample bus at 40 MS/s on decoder B's pins instead of a
+# TVP5150 (define DIGIN, mixer2.v B_DIGITAL, cvbs_capture.v; hub docs/design/2026-10-24/DIGITAL_INGANG.md).
+# Suffix _digin, manifest digin.
+digin="${DIGIN:-0}"
+case "$digin" in 0|1) ;; *) echo "DIGIN must be 0 or 1" >&2; exit 1 ;; esac
+if [ "$digin" = 1 ]; then
+  defs="$defs -DDIGIN=1"
+  out_fs="${out_fs%.fs}_digin.fs"
 fi
 # optional: M6's UART rate for the log, the commands and the field dump (define UART_BAUD; default 115200). The
 # divider is 27 MHz / rate rounded down: 921600 gives 931034 baud (+1.0 %), 1000000 is exact. Suffix _baud<rate>,
@@ -144,7 +154,7 @@ cleanup() {
 }
 trap cleanup EXIT
 "$bin/python" "$manifest" snapshot "$here/.." "$top" "$work/inputs.json" \
-  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --low "$low" --devcmd "$devcmd" --uart-baud "$baud" --copy-to "$work/source"
+  --freq "$freq" --seed "$seed" --pull "${PULL:-}" --phase "${SDRAM_PHASE:-}" --ioreg "$ioreg" --vinterp "$vinterp" --hdmi "$hdmi" --mspi "$mspi" --tvp "$tvp" --low "$low" --devcmd "$devcmd" --uart-baud "$baud" --digin "$digin" --copy-to "$work/source"
 source_here="$work/source/gateware"
 manifest="$source_here/tools/build_manifest.py"
 # Remove the old result from the flash path before starting, while keeping it recoverable.

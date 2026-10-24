@@ -34,6 +34,23 @@ Ordningen är M0 → M3 → M2a → M4 → M6; M2a kan också tas direkt efter M
 | YOUT2 | J5-6 (PIN41) | | YOUT7 | J5-17 (PIN72) |
 | YOUT3 | J5-10 (PIN48) | | SDA | J5-9 (PIN51) |
 
+**Digital ingång på dekoder B:s plats (byggvalet `DIGIN=1`, `m4_dual_mix_digin.fs`).** Kanal B tar då C5VRX-mottagarens
+6-bitars sampelbuss (XIAO ESP32-C5, PARLIO TX 40 MS/s, komposit med färgbärvågen) i stället för en TVP5150; `rtl/cvbs_capture.v`
+gör samma radord och markörer som `chan_capture.v`, i det här steget bara luma (navets `docs/design/2026-10-24/DIGITAL_INGANG.md`).
+Firmwaren måste lägga ut sampelklockan på MTMS-paden (GPIO2, kortets baksida; ett privat bygge, se designnoten), och
+synkhjulet ska vara av (konsol `U`). 3,3 V-logik, korta trådar.
+
+| XIAO | Signal | Tang | | XIAO | Signal | Tang |
+|---|---|---|---|---|---|---|
+| MTMS-pad (GPIO2) | sampelklocka 40 MHz | J5-4 (PIN80) | | D7 | bit 3 | J5-10 (PIN48) |
+| D4 | bit 0 | J5-3 (PIN76) | | D8 | bit 4 | J5-12 (PIN49) |
+| D5 | bit 1 | J5-5 (PIN42) | | D9 | bit 5 | J5-13 (PIN86) |
+| D6 | bit 2 | J5-6 (PIN41) | | GND | jord | GND |
+
+Data byter värde på klockans negativa flank och samplas på den positiva. Dekoder A (TVP, RX5808) är orörd: A analog mot B
+digital från samma kamera är det första diversity-provet. Klart när lysdiod 2 (rader från B) lyser och M6-loggens B-fält
+har snö- och brusvärden; inget synklås krävs från någon TVP för kanal B.
+
 **Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-18 (PIN18, lysdiod 3). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
 
 J6-10 (PIN25) används inte. En utgång där ligger i samma bank som HDMI-klockparet och ändrar hur Apicula packar det (avsnitt 5).
