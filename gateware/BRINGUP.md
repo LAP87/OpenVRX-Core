@@ -37,8 +37,9 @@ Ordningen är M0 → M3 → M2a → M4 → M6; M2a kan också tas direkt efter M
 **Digital ingång på dekoder B:s plats (byggvalet `DIGIN=1`, `m4_dual_mix_digin.fs`).** Kanal B tar då C5VRX-mottagarens
 6-bitars sampelbuss (XIAO ESP32-C5, PARLIO TX 40 MS/s, komposit med färgbärvågen) i stället för en TVP5150; `rtl/cvbs_capture.v`
 gör samma radord och markörer som `chan_capture.v`, i det här steget bara luma (navets `docs/design/2026-10-24/DIGITAL_INGANG.md`).
-Firmwaren måste lägga ut sampelklockan på MTMS-paden (GPIO2, kortets baksida; ett privat bygge, se designnoten), och
-synkhjulet ska vara av (konsol `U`). 3,3 V-logik, korta trådar.
+Firmwaren måste lägga ut sampelklockan på MTMS-paden (GPIO2, kortets baksida): det privata bygget från 2026-10-24
+(synkhjulet av med konsol `U`) eller Twotoz PR #257 byggd med klockvalet `C5VRX_OUT_DAC6_CLOCK` (inget synkhjul;
+flasharens PR-bygge har klockan av), se designnoten. 3,3 V-logik, korta trådar.
 
 | XIAO | Signal | Tang | | XIAO | Signal | Tang |
 |---|---|---|---|---|---|---|
@@ -48,8 +49,10 @@ synkhjulet ska vara av (konsol `U`). 3,3 V-logik, korta trådar.
 | D6 | bit 2 | J5-6 (PIN41) | | GND | jord | GND |
 
 Data byter värde på klockans negativa flank och samplas på den positiva. Dekoder A (TVP, RX5808) är orörd: A analog mot B
-digital från samma kamera är det första diversity-provet. Klart när lysdiod 2 (rader från B) lyser och M6-loggens B-fält
-har snö- och brusvärden; inget synklås krävs från någon TVP för kanal B.
+digital från samma kamera är det första diversity-provet. Klart när lysdiod 2 (rader från B) lyser, hjärtslaget går från
+4 Hz till 1 Hz på B:s eget lås (`cvbs_capture` `lock`, sedan 2026-10-26; bitströmmen `6b845e8` före det blinkar 4 Hz med
+bara B) och bilden från B syns på HDMI; inget synklås krävs från någon TVP för kanal B. M6 har ingen digital ingång än,
+så M6-loggens B-fält gäller TVP B.
 
 **Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-18 (PIN18, lysdiod 3). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
 
@@ -74,7 +77,7 @@ RESETB, DATA och SEL ligger på lysdiodsstift, eftersom alla vanliga stift på s
 | Bitström | Lysdiod 0 | Lysdiod 1 | Lysdiod 2 |
 |---|---|---|---|
 | M3 | hjärtslag 1 Hz | SCLK från A | SCLK från B |
-| M4, M6 | hjärtslag: 4 Hz utan låst dekoder, 1 Hz när en är låst, 2 Hz när båda är det (sedan 2026-10-21; förut 1 Hz bara med båda) | rader från A | rader från B |
+| M4, M6 | hjärtslag: 4 Hz utan låst dekoder, 1 Hz när en är låst, 2 Hz när båda är det (sedan 2026-10-21; förut 1 Hz bara med båda); M4 med `DIGIN=1` räknar B:s eget lås (sedan 2026-10-26) | rader från A | rader från B |
 
 M4 visar de första 3 sekunderna i stället SDRAM-självtestet på lysdiod 1 och 2 (README under M4, "SDRAM-självtestet"): 1 tänd = läspunkt 5 läste båda testskurarna rätt; 2 tänd = den gjorde det inte, men läspunkt 4 eller 6 gjorde det; båda tända = ingen läspunkt. M6 skriver resultatet sist i varje loggrad (2.2).
 
