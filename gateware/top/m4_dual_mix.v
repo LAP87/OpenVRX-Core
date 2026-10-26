@@ -5,7 +5,8 @@
 // as long as no decoder is locked (rx5808_tune.v, same SPI pins as M3 and M6).
 //
 // LEDs (active low): 0 heartbeat, 2 Hz when both decoders answer on I2C and
-// report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none; 1 lines from A; 2 lines
+// report horizontal + vertical lock, 1 Hz when one does, 4 Hz when none (DIGIN: B's lock is the
+// capture's own flywheel lock, mixer2 b_lock, task 69); 1 lines from A; 2 lines
 // from B. For ST_SHOW_MS (3 s) after the SDRAM self-test (sdram_selftest.v, at
 // power-up) LED 1 and 2 show its result instead: 1 lit = the build's read point
 // (5) read both test bursts right; 2 lit = it did not, but point 4 or 6 did;
@@ -52,6 +53,11 @@ module m4_dual_mix #(
     wire sd_clk, sd_clk_shift, sd_locked;
     clocks_sdram sdclk (.clk_27(clk), .clk(sd_clk), .clk_shift(sd_clk_shift), .locked(sd_locked));
     wire rst = rst_i | ~pix_locked | ~sd_locked;
+`ifdef DIGIN
+    localparam B_DIGITAL = 1;              // DIGIN=1 gateware/build.sh: channel B is the C5VRX sample bus on decoder B's pins
+`else
+    localparam B_DIGITAL = 0;
+`endif
 
     // ---- decoder bring-up (board clock) ----
     reg [2:0] rst_c;
@@ -77,14 +83,20 @@ module m4_dual_mix #(
     assign i2c_scl = scl_low ? 1'b0 : 1'bz;
     assign i2c_sda_a = sda_low[0] ? 1'b0 : 1'bz;
     assign i2c_sda_b = sda_low[1] ? 1'b0 : 1'bz;
-    wire locked_ok = init_done && dev_err == 2'b00 && st_valid == 2'b11 &&
-                     st0[1] && st0[2] && st1[1] && st1[2];
+    // decoder lock for the heartbeat and the RX5808 tune: TVP status, and for B with DIGIN the
+    // capture's own flywheel lock (mixer2 b_lock, task 69), since the sample bus has no TVP status
+    wire lock_a_ok  = st_valid[0] && !dev_err[0] && st0[1] && st0[2];
+    wire lock_b_tvp = st_valid[1] && !dev_err[1] && st1[1] && st1[2];
+    wire b_lock, b_lock_c;                // b_clk domain, synchronised into the board clock
+    sync2 blk_sync (.clk(clk), .d(b_lock), .q(b_lock_c));
+    wire lock_b_ok  = B_DIGITAL ? b_lock_c : lock_b_tvp;
+    wire locked_ok  = B_DIGITAL ? (lock_a_ok && lock_b_ok) :
+                      (init_done && dev_err == 2'b00 && st_valid == 2'b11 && st0[1] && st0[2] && st1[1] && st1[2]);
 
     // ---- RX5808: F4 5800 MHz, as in M3 (board clock) ----
     wire [41:0] f4 = vtx_channel(6'd27);
     wire [1:0]  sel_n;
-    wire        any_locked = (st_valid[0] && !dev_err[0] && st0[1] && st0[2]) ||
-                             (st_valid[1] && !dev_err[1] && st1[1] && st1[2]);
+    wire        any_locked = lock_a_ok || lock_b_ok;
     rx5808_tune #(.CLK_HZ(CLK_HZ)) rx (
         .clk(clk), .rst(rst_c[2]), .synth(f4[19:0]), .write_now(1'b0), .any_locked(any_locked),
         .spi_clk(rx_spi_clk), .spi_data(rx_spi_data), .spi_sel_n(sel_n));
@@ -99,15 +111,10 @@ module m4_dual_mix #(
     // a decoder without a whole poll round reporting H and V lock loses against one that has it (dec_bad.v)
     wire nolock_a, nolock_b;
     dec_bad lockrule (.status_valid(st_valid), .status0(st0), .status1(st1), .bad({nolock_b, nolock_a}));
-`ifdef DIGIN
-    localparam B_DIGITAL = 1;              // DIGIN=1 gateware/build.sh: channel B is the C5VRX sample bus on decoder B's pins
-`else
-    localparam B_DIGITAL = 0;
-`endif
     mixer2 #(.B_DIGITAL(B_DIGITAL)) mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
                 .ext_bad_a(nolock_a), .ext_bad_b(nolock_b), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
                 .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
-                .a_lines(a_lines), .b_lines(b_lines), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
+                .a_lines(a_lines), .b_lines(b_lines), .b_lock(b_lock), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
                 .overflow(overflow), .dec_valid(dec_valid), .dec_use(dec_use), .dec_pop(dec_pop),
                 .dec_field(dec_field), .dec_line(dec_line));
 
