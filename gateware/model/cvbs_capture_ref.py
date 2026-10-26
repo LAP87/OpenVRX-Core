@@ -86,6 +86,8 @@ class Capture:
         self.pulse_start = 0
         self.pulse_width = 0
         self.locked = False
+        self.lock_trace = []         # (sample index, locked) at every change: the RTL's `lock` (task 69)
+        self._lock_prev = False
         self.have_start = False
         self.last_start = 0
         self.hp = H_NOM
@@ -302,6 +304,9 @@ class Capture:
                     else:
                         self.y_pending = y
                     self.y_count += 1
+        if self.locked != self._lock_prev:
+            self.lock_trace.append((self.n, self.locked))
+            self._lock_prev = self.locked
         self.n += 1
 
     def run(self, samples):
@@ -414,6 +419,13 @@ def bars(ln, x):
 
 def expected_entries(samples, comb=True):
     return Capture(comb=comb).run(samples)
+
+
+def expected_lock_trace(samples, comb=True):
+    """(sample index, locked) at every change of the line flywheel's lock."""
+    c = Capture(comb=comb)
+    c.run(samples)
+    return c.lock_trace
 
 
 def write_hex(path, samples):

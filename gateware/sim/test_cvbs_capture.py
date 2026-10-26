@@ -18,8 +18,9 @@ sys.path.insert(0, str(GW / 'model'))
 import cvbs_capture_ref as m  # noqa: E402
 
 
-def run(samples, comb=True, tag='run'):
-    """Entries the RTL emits for the samples, decoded like the model's tuples."""
+def run(samples, comb=True, tag='run', want_lock=False):
+    """Entries the RTL emits for the samples, decoded like the model's tuples; with want_lock also
+    the (sample index, locked) list of every change of the flywheel lock."""
     work = HERE / 'build' / 'cvbs_capture' / tag
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -28,12 +29,14 @@ def run(samples, comb=True, tag='run'):
         env['PATH'] = f'{iverilog_bin}{os.pathsep}' + env['PATH']
     hexfile = work / 'samples.hex'
     outfile = work / 'entries.txt'
+    lockfile = work / 'lock.txt'
     m.write_hex(hexfile, samples)
     defines = [] if comb else ['-DCVBS_COMB=0']
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), *defines, '-o', 'sim.vvp', '-s', 'tb_cvbs_capture',
                     str(HERE / 'tb_cvbs_capture.v'), str(GW / 'rtl' / 'cvbs_capture.v')],
                    cwd=work, env=env, check=True)
-    res = subprocess.run(['vvp', '-n', 'sim.vvp', f'+hex={hexfile}', f'+out={outfile}', f'+n={len(samples)}'],
+    res = subprocess.run(['vvp', '-n', 'sim.vvp', f'+hex={hexfile}', f'+out={outfile}', f'+n={len(samples)}',
+                          f'+lock={lockfile}'],
                          cwd=work, env=env, check=True, capture_output=True, text=True)
     assert re.search(r'RESULT samples=\d+ entries=\d+', res.stdout), res.stdout[-500:]
     out = []
@@ -45,6 +48,10 @@ def run(samples, comb=True, tag='run'):
             out.append(('marker', field, ln, (v >> 21) & 0xFFFFF, (v >> 17) & 0xF, (v >> 1) & 0xFFF))
         else:
             out.append(('word', field, ln, (v >> 32) & 0x1FF, v & 0xFFFFFFFF))
+    if want_lock:
+        trace = [(int(a), bool(int(b))) for a, b in
+                 (ln.split() for ln in lockfile.read_text().split('\n') if ln.strip())]
+        return out, trace
     return out
 
 
@@ -104,6 +111,45 @@ def test_negative_control_comb_off():
     assert first_difference(got, m.expected_entries(s, comb=True)) is not None
     diff = first_difference(got, m.expected_entries(s, comb=False))
     assert diff is None, diff
+
+
+def lock_offsets(got, exp):
+    """The RTL's lock changes paired with the model's: the same values in the same order, and
+    the RTL's sample index minus the model's (its registers decide a few clocks later)."""
+    assert [v for _, v in got] == [v for _, v in exp], (got, exp)
+    return [g - e for (g, _), (e, _) in zip(got, exp)]
+
+
+def test_lock_trace_matches_model():
+    """The flywheel lock, like the entries (task 69): locks on the first full line period, stays
+    locked over one missing sync (one flywheel line, below MISS_MAX), drops after the short line's
+    phase jump and locks again; every change at the model's sample plus one constant delay."""
+    s = m.synth(m.bars, frames=1, noise=1.0, seed=3, faults={100: 'nosync', 300: 'short'})
+    exp = m.expected_lock_trace(s)
+    assert [v for _, v in exp] == [True, False, True], exp
+    _, got = run(s, tag='lock_faults', want_lock=True)
+    offs = lock_offsets(got, exp)
+    assert all(0 <= o <= 8 for o in offs) and max(offs) - min(offs) <= 1, offs
+
+
+def test_lock_negative_controls():
+    """Blank level with noise never locks, RTL and model alike; a picture whose sync disappears
+    after 40 lines unlocks within MISS_MAX + 2 line periods of the cut, in both."""
+    import random
+    r = random.Random(5)
+    flat = [22 + r.choice((-1, 0, 1)) for _ in range(20 * m.H_NOM)]
+    assert m.expected_lock_trace(flat) == []
+    _, got = run(flat, tag='lock_flat', want_lock=True)
+    assert got == [], got
+    base = m.synth(m.bars, frames=1)
+    cut = 40 * m.H_NOM
+    s = list(base[:cut]) + [22] * (12 * m.H_NOM)
+    exp = m.expected_lock_trace(s)
+    assert [v for _, v in exp] == [True, False], exp
+    assert cut < exp[1][0] <= cut + (m.MISS_MAX + 2) * m.H_NOM, (cut, exp)
+    _, got = run(s, tag='lock_cut', want_lock=True)
+    offs = lock_offsets(got, exp)
+    assert all(0 <= o <= 8 for o in offs) and max(offs) - min(offs) <= 1, offs
 
 
 if __name__ == '__main__':

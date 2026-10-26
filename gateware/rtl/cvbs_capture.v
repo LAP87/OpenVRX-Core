@@ -6,6 +6,8 @@
 //   marker: {1'b1, field, line[9:0], hf[19:0], bad[3:0], 4'b0, length[11:0], 1'b0}
 // Luma only in this step (Cb = Cr = 128): the 1H comb (COMB = 1) adds the previous line's
 // sample so that the NTSC subcarrier cancels; colour is task 65.
+// `lock` is the line flywheel's lock (task 69): mixer2 uses it as channel B's health in place of
+// a TVP status that a sample bus does not have; the model records the same changes (lock_trace).
 //
 // Timing: the luma path (comb sum, level subtraction, gain multiply, clamp, HF sum) runs in a
 // three-stage pipeline; the slicer level and the gain are registered once per line. The entries
@@ -20,7 +22,8 @@ module cvbs_capture #(
     input  wire [5:0]  d,              // one composite sample per clock
     output reg         e_valid,
     output reg  [52:0] e_data,
-    output wire        line_pulse      // one pulse per completed active line
+    output wire        line_pulse,     // one pulse per completed active line
+    output wire        lock            // the line flywheel is locked to the sync period (task 69)
 );
     // ---- parameters shared with the model ----------------------------------------------------
     localparam [15:0] H_NOM = 16'd2542, H_TOL = 16'd128, WIN = 16'd64;
@@ -61,6 +64,7 @@ module cvbs_capture #(
 
     // ---- line starts --------------------------------------------------------------------------
     reg         have_start, locked, line_open;
+    assign lock = locked;               // registered; changes at most once per line
     reg  [15:0] pos_q, hp;
     reg  [1:0]  miss;
     wire [15:0] period  = pos_q - 16'd2;                         // the pulse began two samples ago

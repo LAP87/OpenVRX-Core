@@ -15,7 +15,7 @@ module mixer2 #(
     input  wire [7:0]  b_d,
     input  wire        sys_clk,
     input  wire        rst_async,
-    input  wire        ext_bad_a, ext_bad_b,  // any domain: decoder status says no lock
+    input  wire        ext_bad_a, ext_bad_b,  // any domain: decoder status says no lock (B_DIGITAL ignores ext_bad_b)
     input  wire        ext_weak_a, ext_weak_b,  // any domain: weak RSSI, counts against health only (mix_chan.v)
 
     output wire        out_empty,
@@ -23,6 +23,7 @@ module mixer2 #(
     input  wire        out_pop,
 
     output wire        a_lines, b_lines,   // own clock domains: lines are being decoded
+    output wire        b_lock,             // b_clk domain: B_DIGITAL: cvbs_capture's flywheel is locked (task 69); else 0
     output wire        alive_a, alive_b,   // sys domain: lines arrived within TIMEOUT cycles
     output wire        cur,                // sys domain: 0 = A, 1 = B
     output wire        overflow,           // sys domain, sticky
@@ -56,12 +57,21 @@ module mixer2 #(
     wire        ea_v, eb_v, a_pulse, b_pulse;
     wire [52:0] ea_d, eb_d;
     chan_capture cap_a (.clk(a_clk), .rst(arst), .d(a_in), .e_valid(ea_v), .e_data(ea_d), .line_pulse(a_pulse));
+    // what mix_chan B treats as "the decoder says no lock": the TVP status input, or with B_DIGITAL
+    // the capture's own lock (task 69). A sample bus has no TVP status, and dec_bad.v then calls
+    // every line of B bad, so B would lose every pair against A and show alone only as a run of
+    // bad lines (line_mixer.v).
+    wire b_ext_bad;
     generate if (B_DIGITAL != 0) begin : g_b_digital
         // channel B is a 6-bit composite sample bus at 40 MS/s (the C5VRX receiver's PARLIO
         // bus): cvbs_capture.v makes the same entries as chan_capture.v (task 64)
-        cvbs_capture cap_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse));
+        cvbs_capture cap_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse),
+                            .lock(b_lock));
+        assign b_ext_bad = ~b_lock;
     end else begin : g_b_bt656
         chan_capture cap_b (.clk(b_clk), .rst(brst), .d(b_in), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse));
+        assign b_lock = 1'b0;
+        assign b_ext_bad = ext_bad_b;
     end endgenerate
     assign tap_a_valid = ea_v && !ea_d[52];
     assign tap_a_word = ea_d[51:0];
@@ -103,7 +113,7 @@ module mixer2 #(
         .head_peer_sick(ha_psick), .head_self_well(ha_swell), .head_peer_dead(ha_pdead), .head_self_ok(ha_sok),
         .head_near(ha_near), .alive(alive_a), .overflow(ov_a));
     mix_chan #(.LEN_NTSC(LEN_NTSC), .LEN_PAL(LEN_PAL), .LEN_TOL(LEN_TOL), .TIMEOUT(TIMEOUT), .T_PAIR(T_PAIR), .AGE_W(AGE_W)) ch_b (
-        .clk(sys_clk), .rst(srst), .ext_bad(ext_bad_b), .ext_weak(ext_weak_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
+        .clk(sys_clk), .rst(srst), .ext_bad(b_ext_bad), .ext_weak(ext_weak_b), .in_empty(fb_empty), .in_data(fb_data), .in_pop(fb_pop),
         .pop_line(pop_b), .rd_idx(rd_idx), .rd_data(rd_b),
         .peer_sick(sick_a), .peer_dead(dead_a), .peer_arrived(arr_a), .peer_last_age(last_a),
         .sick(sick_b), .dead(dead_b), .arrived(arr_b), .last_age(last_b), .count(cnt_b),
