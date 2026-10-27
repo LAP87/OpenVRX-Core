@@ -1,0 +1,21 @@
+// M7 digital-input probe: decoder B's header J5 as wired for the C5VRX sample bus (m4_dual_mix.cst, DIGIN) and
+// the onboard USB-UART pin (m6_puck_proto.cst). Keep in step with those files.
+// Clock J5-4 PIN80 (GCLKT_0); D4..D9 = bits 0..5 on J5-3 PIN76, J5-5 PIN42, J5-6 PIN41, J5-10 PIN48, J5-12 PIN49,
+// J5-13 PIN86. No CLOCK_LOC BUFG on the bus clock (see m3_probe.cst).
+IO_LOC  "tvpb_sclk" 80;
+IO_PORT "tvpb_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[0]" 76;
+IO_PORT "tvpb_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[1]" 42;
+IO_PORT "tvpb_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[2]" 41;
+IO_PORT "tvpb_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[3]" 48;
+IO_PORT "tvpb_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[4]" 49;
+IO_PORT "tvpb_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "tvpb_d[5]" 86;
+IO_PORT "tvpb_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+// onboard BL616 USB-UART RX (as M6 and M3)
+IO_LOC  "uart_txd" 69;
+IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
