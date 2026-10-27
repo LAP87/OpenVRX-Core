@@ -30,7 +30,7 @@ module cvbs_capture #(
     localparam [15:0] H_NOM = 16'd2542, H_TOL = 16'd128, WIN = 16'd64;
     localparam [11:0] T_EQ = 12'd140, T_BROAD = 12'd600;
     localparam [15:0] ACT_CHECK = 16'd300, ACT_START = 16'd362;
-    localparam [15:0] SYNC_LO = 16'd40, SYNC_HI = 16'd72, PORCH_LO = 16'd320, PORCH_HI = 16'd352;
+    localparam [15:0] SYNC_LO = 16'd88, SYNC_HI = 16'd120, PORCH_LO = 16'd320, PORCH_HI = 16'd352;
     localparam [4:0]  V_LINES = 5'd16;
     localparam [1:0]  MISS_MAX = 2'd3;
     localparam [9:0]  SYNC_INIT16 = 10'd64, BLANK_INIT16 = 10'd320;   // 4 and 20 codes in 1/16
@@ -95,24 +95,49 @@ module cvbs_capture #(
     // one below the true period while the flywheel stepped hp + 1 (pos_q == pred_hi), which cancelled out
     // until the averaged slicer let the model's hp move too.
     wire [15:0] period  = pos_q - 16'd1;
-    wire [15:0] pred_lo = hp - WIN, pred_hi = hp + WIN;
-    wire        acc_locked = locked && period >= pred_lo && period <= pred_hi;
+    // Locked, the line starts at the prediction (the start event comes WIN samples after it, with pos WIN,
+    // like a flywheel start): the first edge within WIN of the prediction is accepted, nudges the next
+    // prediction by round((edge - prediction) / 16) and carries the period estimate, edge to edge, when the line
+    // before had an edge too (bench 2026-10-27: the noisy edges wandered 32 samples, the mixer refused
+    // the lengths). Unlocked, lines start at edges as before.
+    reg  [15:0] pred_rel;            // the next predicted start, relative to this line's start
+    reg         pend_have;           // an edge is accepted for the pending line
+    reg  [7:0]  pend_err;            // its offset from the prediction, -WIN..WIN
+    reg         pend_eq, pend_broad; // its pulse's class so far
+    reg         pend_pulse, cur_pulse;   // the pulse in progress is the pending line's / the current line's
+    reg         prev_had_edge;
+    reg  [15:0] edge_cnt;            // samples since the last accepted edge's pulse start
     wire        acc_free   = !locked && (!have_start || period >= H_NOM - H_TOL);
-    wire        start_edge = pedge && (acc_locked || acc_free);
-    wire        start_fly  = locked && have_start && !start_edge && pos_q == pred_hi - 16'd1;   // pos_c == pred_hi
-    wire        started    = start_edge || start_fly;
+    wire        start_edge = pedge && acc_free;
+    wire [16:0] err_c      = {1'b0, period} - {1'b0, pred_rel};               // edge minus prediction
+    wire        in_win     = ({1'b0, period} + WIN >= {1'b0, pred_rel}) && ({1'b0, period} <= {1'b0, pred_rel} + WIN);
+    wire        accept     = pedge && locked && !pend_have && in_win;
+    wire        pend_have_c = pend_have || accept;
+    wire [7:0]  pend_err_c  = accept ? err_c[7:0] : pend_err;
+    wire        pend_pulse_c = pend_pulse || accept;
+    wire        start_pred = locked && !start_edge && pos_q == pred_rel + WIN - 16'd1;   // pos_c == pred_rel + WIN
+    wire        started    = start_edge || start_pred;
     // a line period locks when the pulse that started the ending line was a real sync (width >= T_EQ):
     // noise crossing the swept slicer makes edges a line apart, not such pulses
     wire        lock_n     = locked ? 1'b1 : (start_edge && have_start && period <= H_NOM + H_TOL && !pulse_was_eq);
-    wire [15:0] pos_c      = start_edge ? 16'd2 : start_fly ? WIN : (pos_q == 16'hFFFF) ? pos_q : pos_q + 16'd1;
-    // hp follows accepted edges while locked: hp += (period - hp) >>> 4, clamped
-    wire [16:0] hp_diff  = {1'b0, period} - {1'b0, hp};
-    wire [15:0] hp_step  = {{4{hp_diff[16]}}, hp_diff[15:4]};
-    wire [15:0] hp_upd   = hp + hp_step;
-    wire [15:0] hp_clamp = (hp_upd < H_NOM - H_TOL) ? H_NOM - H_TOL : (hp_upd > H_NOM + H_TOL) ? H_NOM + H_TOL : hp_upd;
+    wire [15:0] pos_c      = start_edge ? 16'd2 : start_pred ? WIN : (pos_q == 16'hFFFF) ? pos_q : pos_q + 16'd1;
+    // hp follows accepted edges without a dead zone: hp_acc (hp times 64) += edge period - hp, clamped, and
+    // hp = round(hp_acc / 64); the locking period seeds both (model HP_SHIFT)
+    reg  [21:0] hp_acc;
+    wire [15:0] edge_period = edge_cnt - 16'd2;
+    wire [16:0] hp_diff  = {1'b0, edge_period} - {1'b0, hp};
+    wire [21:0] acc_upd  = hp_acc + {{5{hp_diff[16]}}, hp_diff};
+    wire [21:0] acc_clamp = (acc_upd < {H_NOM - H_TOL, 6'd0}) ? {H_NOM - H_TOL, 6'd0}
+                          : (acc_upd > {H_NOM + H_TOL, 6'd0}) ? {H_NOM + H_TOL, 6'd0} : acc_upd;
+    wire [21:0] acc_round = acc_clamp + 22'd32;
+    wire [15:0] hp_clamp = acc_round[21:6];
+    wire        hp_now_upd = accept && prev_had_edge;
+    wire [15:0] hp_c     = hp_now_upd ? hp_clamp : hp;
+    // the nudge of the next prediction: round(err / 16), -4..4 (model PLL_SHIFT)
+    wire [8:0]  nud_sum  = {pend_err_c[7], pend_err_c} + 9'd8;
+    wire [15:0] nudge    = {{11{nud_sum[8]}}, nud_sum[8:4]};          // sign-extended to the full 16 bits
 
     // ---- per-line state -----------------------------------------------------------------------
-    reg         start_pulse;         // the pulse in progress started this line
     reg         cur_active, cur_bad, cur_field, cur_line_valid;
     reg  [9:0]  cur_line;
     reg         pulse_was_eq, pulse_was_broad, active_decided;
@@ -128,11 +153,16 @@ module cvbs_capture #(
     reg  [4:0]  countdown;
     reg  [9:0]  line_no;
 
-    // the pulse that started this line: width classification
-    wire        class_now   = in_pulse && start_pulse;
+    // the accepted pulse of this line: width classification; of the pending line: class flags only
+    wire        class_now   = in_pulse && cur_pulse;
     wire        eq_clear    = class_now && pulse_w_n >= T_EQ;
     wire        broad_now   = class_now && pulse_w_n >= T_BROAD && !pulse_was_broad;
     wire        vsync_now   = broad_now && seen_normal;
+    wire        pend_class  = in_pulse && pend_pulse;
+    // at the start event the pending pulse becomes the line's, and this sample's width counts for it (the
+    // model copies the flags, then classifies)
+    wire        eq_at_start    = pend_eq && !(pend_class && pulse_w_n >= T_EQ);
+    wire        broad_at_start = pend_class && pulse_w_n >= T_BROAD && !pend_broad;
 
     // byte ticks (free running)
     wire [6:0]  acc_len_n = {1'b0, acc_len} + 7'd27;           // up to 66: seven bits
@@ -165,7 +195,7 @@ module cvbs_capture #(
     reg         levels_fresh;
     reg  [5:0]  boot_slice;
     reg  [12:0] boot_cnt;
-    wire        unlock_now = started && !start_edge && miss == MISS_MAX;
+    wire        unlock_now = start_pred && !pend_have_c && miss == MISS_MAX;
     wire        fresh_set  = lvl_upd && !levels_fresh && !pulse_was_broad;
     wire        fresh_nx   = unlock_now ? 1'b0 : (fresh_set ? 1'b1 : levels_fresh);
     wire [9:0]  sync16_nx  = lvl_upd ? (levels_fresh ? sync_n : sync_m16[9:0]) : sync16;
@@ -217,7 +247,16 @@ module cvbs_capture #(
         if (pedge) in_pulse <= 1'b1;
         else if (pulse_end) in_pulse <= 1'b0;
         pulse_w <= pulse_w_n;
-        if (pulse_end) start_pulse <= 1'b0;
+        if (pulse_end) begin cur_pulse <= 1'b0; pend_pulse <= 1'b0; end
+        // ---- accepted edges while locked ----
+        edge_cnt <= (edge_cnt == 16'hFFFF) ? edge_cnt : edge_cnt + 16'd1;
+        if (accept) begin
+            pend_have <= 1'b1; pend_err <= err_c[7:0]; pend_pulse <= 1'b1;
+            if (prev_had_edge) begin hp <= hp_clamp; hp_acc <= acc_clamp; end
+            edge_cnt <= 16'd3;                       // next clock: 3 samples past this pulse's start
+        end
+        if (pend_class && pulse_w_n >= T_EQ) pend_eq <= 1'b0;
+        if (pend_class && pulse_w_n >= T_BROAD) pend_broad <= 1'b1;
 
         // ---- free-running byte ticks ----
         acc_len <= len_tick ? acc_len_n[5:0] - 6'd40 : acc_len_n[5:0];
@@ -245,17 +284,31 @@ module cvbs_capture #(
             prev_active <= cur_active;
             prev_len    <= line_open ? pos_q : 16'd0;
             // ---- the line that starts ----
-            if (start_edge) begin
-                if (lock_n && have_start) hp <= hp_clamp;
+            if (start_edge) begin                    // unlocked: at the edge, its pulse is the line's
                 miss <= 2'd0;
-                start_pulse <= 1'b1;
-            end else begin
-                start_pulse <= 1'b0;
-                if (miss == MISS_MAX) begin locked <= 1'b0; have_start <= 1'b0; miss <= 2'd0; end
+                cur_pulse <= 1'b1;
+                locked <= lock_n; have_start <= 1'b1;
+                if (lock_n) begin                    // the next line starts at the prediction; the locking
+                    pred_rel <= period; edge_cnt <= 16'd3; prev_had_edge <= 1'b1;   // period seeds hp
+                    hp <= period; hp_acc <= {period, 6'd0};
+                end
+                pulse_was_eq <= 1'b1;                // a real pulse counts as equalizing until T_EQ
+                pulse_was_broad <= 1'b0;
+            end else begin                           // locked: the start event, with or without an edge
+                cur_pulse <= pend_pulse_c;
+                pend_pulse <= 1'b0; pend_have <= 1'b0; pend_eq <= 1'b1; pend_broad <= 1'b0;
+                prev_had_edge <= pend_have_c;
+                if (pend_have_c) miss <= 2'd0;
+                else if (miss == MISS_MAX) begin locked <= 1'b0; have_start <= 1'b0; miss <= 2'd0; end
                 else miss <= miss + 2'd1;
+                pred_rel <= hp_c + (pend_have_c ? nudge : 16'd0);
+                pulse_was_eq    <= pend_have_c ? eq_at_start : 1'b0;
+                pulse_was_broad <= pend_broad || broad_at_start;
+                if (broad_at_start && seen_normal) begin
+                    field <= ~field; countdown <= V_LINES; vs_seen <= 1'b1; seen_normal <= 1'b0;
+                end
             end
-            if (start_edge) begin locked <= lock_n; have_start <= 1'b1; end
-            cur_bad        <= start_fly;
+            cur_bad        <= start_pred && !pend_have_c;
             cur_active     <= 1'b0;
             cur_line_valid <= 1'b1;
             line_open      <= 1'b1;
@@ -265,8 +318,6 @@ module cvbs_capture #(
             sync_sum       <= 11'd0;
             porch_sum      <= 11'd0;
             active_decided <= 1'b0;
-            pulse_was_broad <= 1'b0;
-            pulse_was_eq   <= start_edge;            // a real pulse counts as equalizing until T_EQ
         end else begin
             len_ticks <= len_total;
             mk_sr <= {1'b0, mk_sr[1]};
@@ -332,8 +383,10 @@ module cvbs_capture #(
             sync16 <= SYNC_INIT16; blank16 <= BLANK_INIT16;
             slice_r <= BOOT_INIT; g_r <= gain_of(7'd32); blank2_r <= 8'd40;
             levels_fresh <= 1'b0; boot_slice <= BOOT_INIT; boot_cnt <= 13'd0;
-            low_run <= 2'd0; high_run <= 2'd0; in_pulse <= 1'b0; pulse_w <= 12'd0; start_pulse <= 1'b0;
-            have_start <= 1'b0; locked <= 1'b0; pos_q <= 16'd0; hp <= H_NOM; miss <= 2'd0;
+            low_run <= 2'd0; high_run <= 2'd0; in_pulse <= 1'b0; pulse_w <= 12'd0;
+            cur_pulse <= 1'b0; pend_pulse <= 1'b0; pend_have <= 1'b0; pend_err <= 8'd0; pend_eq <= 1'b1;
+            pend_broad <= 1'b0; prev_had_edge <= 1'b0; edge_cnt <= 16'd0; pred_rel <= H_NOM;
+            have_start <= 1'b0; locked <= 1'b0; pos_q <= 16'd0; hp <= H_NOM; hp_acc <= {H_NOM, 6'd0}; miss <= 2'd0;
             cur_active <= 1'b0; cur_bad <= 1'b0; cur_field <= 1'b0; cur_line <= 10'd0; cur_line_valid <= 1'b0;
             pulse_was_eq <= 1'b1; pulse_was_broad <= 1'b0; active_decided <= 1'b0;
             acc <= 7'd0; acc_len <= 6'd0; len_ticks <= 12'd0; y_count <= 10'd0;

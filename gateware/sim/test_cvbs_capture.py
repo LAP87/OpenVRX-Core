@@ -205,8 +205,8 @@ def test_sweep_negative_controls():
 
 def test_noisy_sync_edges_hold_the_line_length():
     """The C5VRX-level stream with three codes of noise (the bench's sync tip wobbles +-8): with the 8-sample
-    slicer window at most 5 % of the lines leave the mixer's length tolerance (3.4 % in the model: the rest is
-    for the flywheel-smoothed line start, the next step) and no lock is lost, RTL as model;
+    slicer window and the line start at the prediction, no line leaves the mixer's length tolerance (the 8-sample
+    window alone left 3.4 % outside), none is flagged bad and no lock is lost, RTL as model;
     the negative control is the same stream through the bare-sample slicer (AVG = 1, the old edge), which does
     not even find the vertical sync in this noise and numbers no line, RTL as model too."""
     s = m.synth(m.bars, frames=2, levels=(23, 31, 62), noise=3.0, seed=7)
@@ -218,13 +218,68 @@ def test_noisy_sync_edges_hold_the_line_length():
     markers = [e for e in entries if e[0] == 'marker']
     assert len(markers) >= 700, len(markers)
     off8 = sum(1 for e in markers if abs(e[5] - 1716) > 2)
-    assert off8 <= len(markers) * 0.05, (off8, len(markers))
+    assert off8 == 0, (off8, len(markers))
+    assert not any(e[4] for e in markers)
     exp1 = m.expected_entries(s, avg=1)
     entries1 = run(s, tag='noisy_avg1', avg=1)
     diff = first_difference(entries1, exp1)
     assert diff is None, diff
     markers1 = [e for e in entries1 if e[0] == 'marker']
     assert len(markers1) < len(markers) // 2, (len(markers1), len(markers))
+
+
+def displace_syncs(s, offsets):
+    """Move the start of every sync pulse (a run of the sync code at least 150 samples long) by the next offset
+    in the cycle: later by cutting the pulse's first samples, earlier by extending it into the front porch."""
+    s = list(s)
+    sync, blank = s[0] if s[0] < 31 else 23, 31
+    out, i, k = s[:], 0, 0
+    while i < len(s):
+        if s[i] == sync:
+            j = i
+            while j < len(s) and s[j] == sync:
+                j += 1
+            if j - i >= 150:
+                o = offsets[k % len(offsets)]
+                k += 1
+                if o > 0:
+                    out[i:i + o] = [blank] * o
+                elif o < 0:
+                    out[i + o:i] = [sync] * (-o)
+            i = j
+        else:
+            i += 1
+    return out, k
+
+
+def test_jittered_edges_keep_the_prediction():
+    """Every sync edge displaced by a pseudo-random -8..8 samples at the C5VRX levels (twice the bench's wobble
+    after the 8-sample window): the lines start at the prediction, so every length stays within the tolerance,
+    nothing is flagged bad and the lock holds, RTL as model. The negative control displaces the edges by
+    +-(WIN + 8): they fall outside the window, the lines are flywheel lines flagged bad and the lock drops,
+    RTL as model."""
+    import random
+    r = random.Random(11)
+    base = m.synth(m.bars, frames=2, levels=(23, 31, 62))
+    s, k = displace_syncs(base, [r.randint(-8, 8) for _ in range(97)])
+    assert k > 1000, k
+    exp = m.expected_entries(s)
+    entries, got = run(s, tag='jitter20', want_lock=True)
+    diff = first_difference(entries, exp)
+    assert diff is None, diff
+    assert [v for _, v in got] == [True], got
+    markers = [e for e in entries if e[0] == 'marker']
+    assert len(markers) >= 700, len(markers)
+    assert all(abs(e[5] - 1716) <= 2 for e in markers)
+    assert not any(e[4] for e in markers)
+    s2, _ = displace_syncs(base, [m.WIN + 8, -(m.WIN + 8)])
+    exp2 = m.expected_lock_trace(s2)
+    assert len(exp2) >= 2 and exp2[1][1] is False, exp2
+    entries2, got2 = run(s2, tag='jitter72', want_lock=True)
+    diff = first_difference(entries2, m.expected_entries(s2))
+    assert diff is None, diff
+    offs = lock_offsets(got2, exp2)
+    assert all(0 <= o <= 8 for o in offs), offs
 
 
 if __name__ == '__main__':
