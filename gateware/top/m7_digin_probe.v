@@ -19,7 +19,10 @@ module m7_digin_probe #(
     parameter CLK_HZ = 27_000_000,
     parameter BAUD = 115_200,                 // 921 600 (27e6/29, +1.0 %) stalled the BL616 bridge path on 2026-10-27: 7.7 kB, then silence
     parameter AW = 16,                        // 2^AW samples per capture: 65 536 = 1.6 ms = 26 NTSC lines
-    parameter PAUSE_MS = 1000
+    parameter PAUSE_MS = 1000,
+    parameter TRIG_LOW_RUN = 400,             // capture starts at a low run this long (a broad pulse: the vertical
+                                              // interval and the lines after it land in the dump); 0 = at once
+    parameter TRIG_LEVEL = 27                 // "low" for the trigger: below this code (C5VRX: sync 23, blanking 31)
 ) (
     input  wire       clk,
     input  wire       tvpb_sclk,              // the bus clock, PIN80
@@ -49,13 +52,25 @@ module m7_digin_probe #(
     reg  [5:0]   d_q = 6'd0;
     reg          alive_t = 1'b0;              // toggles every 2^16 bus clocks: clock presence
     reg  [15:0]  alive_cnt = 16'd0;
+    reg          armed = 1'b0;                // waiting for the trigger
+    reg  [11:0]  low_cnt = 12'd0;
+    reg  [3:0]   high_cnt = 4'd0;             // the low run survives noise spikes: it ends after 8 highs in a row
+    wire         trig = (TRIG_LOW_RUN == 0) || (low_cnt >= TRIG_LOW_RUN);
     always @(posedge tvpb_sclk) begin
         d_q   <= tvpb_d;
         arm_s <= {arm_s[1:0], arm_t};
         alive_cnt <= alive_cnt + 1'b1;
         if (&alive_cnt) alive_t <= ~alive_t;
+        if (d_q < TRIG_LEVEL) begin
+            high_cnt <= 4'd0;
+            if (!(&low_cnt)) low_cnt <= low_cnt + 1'b1;
+        end else begin
+            high_cnt <= (&high_cnt[2:0]) ? high_cnt : high_cnt + 1'b1;
+            if (high_cnt >= 4'd7) low_cnt <= 12'd0;
+        end
         if (!cap_run) begin
-            if (arm_s[2] != arm_s[1]) begin cap_run <= 1'b1; waddr <= 0; end
+            if (arm_s[2] != arm_s[1]) armed <= 1'b1;
+            if (armed && trig) begin cap_run <= 1'b1; armed <= 1'b0; waddr <= 0; end
         end else begin
             waddr <= waddr + 1'b1;
             if (&waddr) begin cap_run <= 1'b0; done_t <= ~done_t; end
@@ -74,7 +89,8 @@ module m7_digin_probe #(
     always @(posedge tvpb_sclk or posedge rst) if (rst) rst_b <= 3'b111; else rst_b <= {rst_b[1:0], 1'b0};
     wire        e_valid, line_pulse, lock;
     wire [52:0] e_data;
-    cvbs_capture cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(tvpb_d), .e_valid(e_valid), .e_data(e_data),
+    // d_q: one input flop before the capture, as mixer2's b_in in M4
+    cvbs_capture cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_q), .e_valid(e_valid), .e_data(e_data),
                       .line_pulse(line_pulse), .lock(lock));
     wire        marker = e_valid && e_data[52];
     wire [11:0] mlen   = e_data[12:1];
@@ -85,6 +101,8 @@ module m7_digin_probe #(
     reg         lock_q = 1'b0, l_lock = 1'b0;
     reg  [15:0] c_t = 16'd0, l_t = 16'd0;     // alive toggles in the window: window length = l_t * 65536 bus clocks
     reg  [23:0] c_chg = 24'd0, c_lines = 24'd0, c_bad = 24'd0, l_chg = 24'd0, l_lines = 24'd0, l_bad = 24'd0;
+    reg  [23:0] c_off = 24'd0, l_off = 24'd0;   // markers whose length is outside the mixer's 1716 +- 2
+    wire        moff   = mlen < 12'd1714 || mlen > 12'd1718;
     reg  [11:0] c_min = 12'hFFF, c_max = 12'd0, l_min = 12'hFFF, l_max = 12'd0;
     reg  [27:0] c_words = 28'd0, l_words = 28'd0;
     always @(posedge tvpb_sclk) begin
@@ -92,9 +110,9 @@ module m7_digin_probe #(
         lock_q <= lock;
         if (snap_s[2] != snap_s[1]) begin
             l_t <= c_t; l_chg <= c_chg; l_lines <= c_lines; l_bad <= c_bad; l_min <= c_min; l_max <= c_max;
-            l_words <= c_words; l_lock <= lock;
+            l_words <= c_words; l_lock <= lock; l_off <= c_off;
             c_t <= 16'd0; c_chg <= 24'd0; c_lines <= 24'd0; c_bad <= 24'd0; c_min <= 12'hFFF; c_max <= 12'd0;
-            c_words <= 28'd0;
+            c_words <= 28'd0; c_off <= 24'd0;
             ack_t <= ~ack_t;
         end else begin
             if (&alive_cnt) c_t <= c_t + 1'b1;
@@ -102,6 +120,7 @@ module m7_digin_probe #(
             if (marker) begin
                 c_lines <= c_lines + 1'b1;
                 if (mbad) c_bad <= c_bad + 1'b1;
+                if (moff) c_off <= c_off + 1'b1;
                 if (mlen < c_min) c_min <= mlen;
                 if (mlen > c_max) c_max <= mlen;
             end
@@ -111,11 +130,12 @@ module m7_digin_probe #(
     reg [2:0] ack_s = 3'b000;
     always @(posedge clk) ack_s <= {ack_s[1:0], ack_t};
     wire ack_p = ack_s[2] ^ ack_s[1];
-    // "CAP t=tttt l=L c=cccccc n=nnnnnn b=bbbbbb m=mmm M=MMM w=wwwwwww\n" (64 bytes, hex): t window in 65 536
-    // bus clocks, l lock now, c lock changes, n line markers, b of them bad, m/M shortest/longest line (ticks),
-    // w words
-    function [7:0] stat_byte(input [5:0] i, input [15:0] t, input l, input [23:0] c, input [23:0] n,
-                             input [23:0] b, input [11:0] mn, input [11:0] mx, input [27:0] w);
+    // "CAP t=tttt l=L c=cccccc n=nnnnnn b=bbbbbb m=mmm M=MMM w=wwwwwww x=xxxxxx\n" (73 bytes, hex): t window in
+    // 65 536 bus clocks, l lock now, c lock changes, n line markers, b of them bad, m/M shortest/longest line
+    // (ticks), w words, x markers with a length outside 1716 +- 2 (the mixer's tolerance)
+    localparam STAT_LEN = 73;
+    function [7:0] stat_byte(input [6:0] i, input [15:0] t, input l, input [23:0] c, input [23:0] n,
+                             input [23:0] b, input [11:0] mn, input [11:0] mx, input [27:0] w, input [23:0] o);
         case (i)
             6'd0: stat_byte = "C"; 6'd1: stat_byte = "A"; 6'd2: stat_byte = "P"; 6'd3: stat_byte = " ";
             6'd4: stat_byte = "t"; 6'd5: stat_byte = "=";
@@ -143,7 +163,10 @@ module m7_digin_probe #(
             6'd54: stat_byte = "w"; 6'd55: stat_byte = "=";
             6'd56: stat_byte = hex(w[27:24]); 6'd57: stat_byte = hex(w[23:20]); 6'd58: stat_byte = hex(w[19:16]);
             6'd59: stat_byte = hex(w[15:12]); 6'd60: stat_byte = hex(w[11:8]); 6'd61: stat_byte = hex(w[7:4]);
-            6'd62: stat_byte = hex(w[3:0]);
+            6'd62: stat_byte = hex(w[3:0]); 6'd63: stat_byte = " ";
+            7'd64: stat_byte = "x"; 7'd65: stat_byte = "=";
+            7'd66: stat_byte = hex(o[23:20]); 7'd67: stat_byte = hex(o[19:16]); 7'd68: stat_byte = hex(o[15:12]);
+            7'd69: stat_byte = hex(o[11:8]); 7'd70: stat_byte = hex(o[7:4]); 7'd71: stat_byte = hex(o[3:0]);
             default: stat_byte = 8'h0A;
         endcase
     endfunction
@@ -214,9 +237,9 @@ module m7_digin_probe #(
             S_SNAPW: if (ack_p) begin state <= S_STAT; i <= 0; end
             S_STAT:  if (u_free) begin
                          u_send <= 1'b1;
-                         u_data <= stat_byte(i[5:0], l_t, l_lock, l_chg, l_lines, l_bad, l_min, l_max, l_words);
+                         u_data <= stat_byte(i[6:0], l_t, l_lock, l_chg, l_lines, l_bad, l_min, l_max, l_words, l_off);
                          i <= i + 1'b1;
-                         if (i[5:0] == 6'd63) begin stat_done <= 1'b1; state <= S_PAUSE; end
+                         if (i[6:0] == STAT_LEN - 1) begin stat_done <= 1'b1; state <= S_PAUSE; end
                      end
             S_ARM:   begin arm_t <= ~arm_t; stat_done <= 1'b0; state <= S_WAIT; end
             S_WAIT:  if (done_p) begin state <= S_HDR; ci <= 0; i <= 0; end

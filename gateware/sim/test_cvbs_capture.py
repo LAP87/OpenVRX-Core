@@ -18,9 +18,9 @@ sys.path.insert(0, str(GW / 'model'))
 import cvbs_capture_ref as m  # noqa: E402
 
 
-def run(samples, comb=True, tag='run', want_lock=False):
+def run(samples, comb=True, tag='run', want_lock=False, avg=m.AVG):
     """Entries the RTL emits for the samples, decoded like the model's tuples; with want_lock also
-    the (sample index, locked) list of every change of the flywheel lock."""
+    the (sample index, locked) list of every change of the flywheel lock. avg: the slicer's window."""
     work = HERE / 'build' / 'cvbs_capture' / tag
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -31,7 +31,7 @@ def run(samples, comb=True, tag='run', want_lock=False):
     outfile = work / 'entries.txt'
     lockfile = work / 'lock.txt'
     m.write_hex(hexfile, samples)
-    defines = [] if comb else ['-DCVBS_COMB=0']
+    defines = ([] if comb else ['-DCVBS_COMB=0']) + ([] if avg == m.AVG else [f'-DCVBS_AVG={avg}'])
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), *defines, '-o', 'sim.vvp', '-s', 'tb_cvbs_capture',
                     str(HERE / 'tb_cvbs_capture.v'), str(GW / 'rtl' / 'cvbs_capture.v')],
                    cwd=work, env=env, check=True)
@@ -201,6 +201,30 @@ def test_sweep_negative_controls():
     std = m.synth(m.bars, frames=1)
     exp = m.expected_lock_trace(std)
     assert [v for _, v in exp] == [True] and exp[0][0] < 3 * m.BOOT_STEP, exp     # the slicer still 12 to 14
+
+
+def test_noisy_sync_edges_hold_the_line_length():
+    """The C5VRX-level stream with three codes of noise (the bench's sync tip wobbles +-8): with the 8-sample
+    slicer window at most 5 % of the lines leave the mixer's length tolerance (3.4 % in the model: the rest is
+    for the flywheel-smoothed line start, the next step) and no lock is lost, RTL as model;
+    the negative control is the same stream through the bare-sample slicer (AVG = 1, the old edge), which does
+    not even find the vertical sync in this noise and numbers no line, RTL as model too."""
+    s = m.synth(m.bars, frames=2, levels=(23, 31, 62), noise=3.0, seed=7)
+    exp = m.expected_entries(s)
+    entries, got = run(s, tag='noisy_avg8', want_lock=True)
+    diff = first_difference(entries, exp)
+    assert diff is None, diff
+    assert [v for _, v in got] == [True], got
+    markers = [e for e in entries if e[0] == 'marker']
+    assert len(markers) >= 700, len(markers)
+    off8 = sum(1 for e in markers if abs(e[5] - 1716) > 2)
+    assert off8 <= len(markers) * 0.05, (off8, len(markers))
+    exp1 = m.expected_entries(s, avg=1)
+    entries1 = run(s, tag='noisy_avg1', avg=1)
+    diff = first_difference(entries1, exp1)
+    assert diff is None, diff
+    markers1 = [e for e in entries1 if e[0] == 'marker']
+    assert len(markers1) < len(markers) // 2, (len(markers1), len(markers))
 
 
 if __name__ == '__main__':

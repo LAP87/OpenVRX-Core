@@ -64,6 +64,10 @@ SYNC_INIT, BLANK_INIT = 4, 20
 # at 31 codes, where a slicer of 12 never saw a pulse (hub docs/bench, 2026-10-27).
 BOOT_STEP = 2 * H_NOM
 BOOT_MIN, BOOT_MAX = 8, 40
+# The slicer sees the sum of the last AVG samples against AVG times the level (bench 2026-10-27: the C5VRX sync
+# tip carries +-8 codes of noise; the first-three-low-samples edge then wandered up to 32 samples from line to
+# line, the mixer refused the lengths and the picture jumped; an 8-sample average keeps the periods within 3).
+AVG = 8
 
 
 def gain_table():
@@ -82,8 +86,11 @@ class Capture:
     """Feed samples one at a time with step(); entries collect in .entries as
     ('word', field, line, idx, data32) and ('marker', field, line, hf, bad, length)."""
 
-    def __init__(self, comb=True):
+    def __init__(self, comb=True, avg=AVG):
         self.comb = comb
+        self.avg = avg
+        self.window = [0] * avg      # the last avg samples, zeros before the first
+        self.win_sum = 0
         self.entries = []
         self.n = 0
         self.sync16, self.blank16 = SYNC_INIT << 4, BLANK_INIT << 4   # level estimates in 1/16 codes
@@ -218,7 +225,10 @@ class Capture:
             self.len_ticks += 1
         locked_before = self.locked
         slice_level = (self.sync + self.blank) >> 1 if self.levels_fresh else self.boot_slice
-        low = s < slice_level
+        # the slicer on the moving sum of the last avg samples, this one included
+        self.win_sum += s - self.window[self.n % self.avg]
+        self.window[self.n % self.avg] = s
+        low = self.win_sum < slice_level * self.avg
         if low:
             self.low_run = min(self.low_run + 1, 3)
             self.high_run = 0
@@ -445,13 +455,13 @@ def bars(ln, x):
     return 16 + (x * 8 // 720) * 31
 
 
-def expected_entries(samples, comb=True):
-    return Capture(comb=comb).run(samples)
+def expected_entries(samples, comb=True, avg=AVG):
+    return Capture(comb=comb, avg=avg).run(samples)
 
 
-def expected_lock_trace(samples, comb=True):
+def expected_lock_trace(samples, comb=True, avg=AVG):
     """(sample index, locked) at every change of the line flywheel's lock."""
-    c = Capture(comb=comb)
+    c = Capture(comb=comb, avg=avg)
     c.run(samples)
     return c.lock_trace
 

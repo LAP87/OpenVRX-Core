@@ -6,6 +6,9 @@
 // +define+CVBS_COMB=0 builds the capture without the 1H comb (the negative control).
 `timescale 1ns / 1ps
 module tb_cvbs_capture;
+`ifndef CVBS_AVG
+`define CVBS_AVG 8                      // +define+CVBS_AVG=1: the slicer on the bare sample (the old edge)
+`endif
 `ifndef CVBS_COMB
 `define CVBS_COMB 1
 `endif
@@ -15,7 +18,7 @@ module tb_cvbs_capture;
     reg  [5:0] d = 6'd22;
     wire       e_valid, line_pulse, lock;
     wire [52:0] e_data;
-    cvbs_capture #(.COMB(`CVBS_COMB)) dut (.clk(clk), .rst(rst), .d(d), .e_valid(e_valid), .e_data(e_data), .line_pulse(line_pulse),
+    cvbs_capture #(.COMB(`CVBS_COMB), .AVG(`CVBS_AVG)) dut (.clk(clk), .rst(rst), .d(d), .e_valid(e_valid), .e_data(e_data), .line_pulse(line_pulse),
                                            .lock(lock));
 
     reg [7:0] mem [0:4194303];               // up to 4 M samples (three frames)

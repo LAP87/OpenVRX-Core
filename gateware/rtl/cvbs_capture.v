@@ -15,7 +15,8 @@
 // of a line waits two clocks for the line's last words.
 `default_nettype none
 module cvbs_capture #(
-    parameter COMB = 1
+    parameter COMB = 1,
+    parameter AVG = 8                  // the slicer sees the sum of the last AVG samples (1: the sample itself)
 ) (
     input  wire        clk,            // the sample clock, 40 MHz
     input  wire        rst,
@@ -53,7 +54,25 @@ module cvbs_capture #(
     reg  [5:0]  slice_r;
     reg  [11:0] g_r;
     reg  [7:0]  blank2_r;
-    wire        low = d < slice_r;
+    // the slicer on the moving sum of the last AVG samples, this one included (bench 2026-10-27: the C5VRX sync
+    // tip's noise moved the first-three-low edge up to 32 samples; the mixer then refused the lengths)
+    localparam SW = 6 + $clog2(AVG + 1);
+    reg  [5:0]  win [0:AVG-1];         // the AVG most recent samples before this one, oldest at win_i
+    reg  [SW-1:0] win_sum;             // their sum
+    reg  [$clog2(AVG + 1)-1:0] win_i;
+    wire [SW-1:0] sum_now = win_sum + {{(SW-6){1'b0}}, d} - {{(SW-6){1'b0}}, win[win_i]};
+    wire        low = sum_now < ({{(SW-6){1'b0}}, slice_r} * AVG);
+    integer     wi;
+    always @(posedge clk) begin
+        if (rst) begin
+            for (wi = 0; wi < AVG; wi = wi + 1) win[wi] <= 6'd0;
+            win_sum <= 0; win_i <= 0;
+        end else begin
+            win[win_i] <= d;
+            win_sum <= sum_now;
+            win_i <= (win_i == AVG - 1) ? 0 : win_i + 1'b1;
+        end
+    end
 
     // ---- pulse detector -----------------------------------------------------------------------
     reg  [1:0]  low_run, high_run;
@@ -70,12 +89,16 @@ module cvbs_capture #(
     assign lock = locked;               // registered; changes at most once per line
     reg  [15:0] pos_q, hp;
     reg  [1:0]  miss;
-    wire [15:0] period  = pos_q - 16'd2;                         // the pulse began two samples ago
+    // this sample's position in the line is pos_q + 1 (pos_c); the pulse began two samples ago, so the period
+    // between pulse starts is pos_q - 1, as the model's. Until 2026-10-27 it read pos_q - 2: hp then settled
+    // one below the true period while the flywheel stepped hp + 1 (pos_q == pred_hi), which cancelled out
+    // until the averaged slicer let the model's hp move too.
+    wire [15:0] period  = pos_q - 16'd1;
     wire [15:0] pred_lo = hp - WIN, pred_hi = hp + WIN;
     wire        acc_locked = locked && period >= pred_lo && period <= pred_hi;
     wire        acc_free   = !locked && (!have_start || period >= H_NOM - H_TOL);
     wire        start_edge = pedge && (acc_locked || acc_free);
-    wire        start_fly  = locked && have_start && !start_edge && pos_q == pred_hi;
+    wire        start_fly  = locked && have_start && !start_edge && pos_q == pred_hi - 16'd1;   // pos_c == pred_hi
     wire        started    = start_edge || start_fly;
     // a line period locks when the pulse that started the ending line was a real sync (width >= T_EQ):
     // noise crossing the swept slicer makes edges a line apart, not such pulses
