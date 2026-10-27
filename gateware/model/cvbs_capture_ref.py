@@ -55,7 +55,13 @@ ACT_START = 362     # first active luma sample, 9.04 us after the sync edge (BT.
 V_LINES = 16        # line starts from the first broad pulse to the first active line (4 -> 20, 267 -> 283)
 NCO_INC, NCO_MOD = 27, 80
 WORDS = 360
-SYNC_WIN = (40, 72)     # samples after the start averaged for the sync tip (inside the 188-sample pulse)
+SYNC_WIN = (88, 120)    # samples after the start averaged for the sync tip: inside the 188-sample pulse for an
+                        # edge anywhere within +- WIN of the predicted start, and after the start event (pos WIN)
+PLL_SHIFT = 4           # locked: the next predicted start moves round((edge - prediction) / 16) toward the edge:
+                        # at most one sample per line for edges within +- 23, so the length stays within the
+                        # mixer's 2 ticks (3 samples); / 8 moved up to 3 samples and rounded to 3 ticks
+HP_SHIFT = 6            # the period estimate: hp_acc (hp times 64) += edge period - hp, no dead zone; seeded with
+                        # the locking period, so a PAL-length line needs no slow walk from H_NOM
 PORCH_WIN = (320, 352)  # samples after the start averaged for the back porch (after the burst, before active)
 SYNC_INIT, BLANK_INIT = 4, 20
 # Bootstrap (bench 2026-10-27): the slicer sweeps one code every BOOT_STEP samples while unlocked, from
@@ -108,7 +114,18 @@ class Capture:
         self.have_start = False
         self.last_start = 0
         self.hp = H_NOM
+        self.hp_acc = H_NOM << HP_SHIFT
         self.miss = 0
+        # locked: the line starts at the prediction (+ WIN, like a flywheel start), the accepted edge only
+        # nudges the next prediction and feeds the period estimate (bench 2026-10-27: edge jitter of up to
+        # 32 samples made the mixer refuse the lengths)
+        self.pred = 0                # the next predicted start
+        self.last_edge = 0           # the last accepted edge: the period estimate runs edge to edge
+        self.prev_had_edge = False   # the line before the pending one had an edge: last_edge is one line back
+        self.pend_edge = None        # the edge accepted for the pending line, and its pulse's class so far
+        self.pend_eq = True
+        self.pend_broad = False
+        self.cur_edge = None         # the current line's accepted edge (free running: its start)
         self.field = 0
         self.countdown = -1          # -1: no vertical sync seen yet
         self.seen_normal = True      # armed: the next broad pulse at a line start is a vertical sync
@@ -173,12 +190,9 @@ class Capture:
         self.prev_len = self.pos if self.pos >= 0 else 0      # the comb partner exists below this position
         self.have_prev_line = self.pos >= 0
 
-    def _start_line(self, start_at, flywheel):
-        if self.have_start and self.locked and not flywheel:
-            # the period estimate follows accepted edges only (free running sees half-line pulses)
-            period = start_at - self.last_start
-            self.hp += (period - self.hp) >> 4
-            self.hp = clamp(self.hp, H_NOM - H_TOL, H_NOM + H_TOL)
+    def _start_line(self, start_at, flywheel, edge):
+        """A line starts at start_at; edge is its accepted sync edge (None: a flywheel line, no edge within
+        WIN of the prediction). The pending pulse's class becomes the line's."""
         self._finish_line(flywheel)
         self.last_start = start_at
         self.have_start = True
@@ -194,8 +208,10 @@ class Capture:
         self.sync_sum = self.porch_sum = 0
         self.active_decided = False
         self.cur_active = False
-        self.pulse_was_broad = False
-        self.pulse_was_eq = not flywheel     # a real pulse counts as equalizing until its width reaches T_EQ
+        self.cur_edge = edge
+        self.pulse_was_broad = self.pend_broad
+        self.pulse_was_eq = self.pend_eq if edge is not None else False   # a real pulse counts as equalizing
+        self.pend_edge, self.pend_eq, self.pend_broad = None, True, False   # until its width reaches T_EQ
         if flywheel:
             self.miss += 1
             if self.miss > MISS_MAX:
@@ -205,8 +221,15 @@ class Capture:
         else:
             self.miss = 0
 
-    def _line_class_update(self, width_so_far, still_low):
-        """Called every sample of the current line while the pulse that started it lasts."""
+    def _line_class_update(self, width_so_far, pending):
+        """Called every sample while the accepted pulse of the current line (pending False) or of the pending
+        line (pending True: accepted before the start event) lasts."""
+        if pending:
+            if width_so_far >= T_EQ:
+                self.pend_eq = False
+            if width_so_far >= T_BROAD:
+                self.pend_broad = True
+            return
         if width_so_far >= T_EQ:
             self.pulse_was_eq = False
         if width_so_far >= T_BROAD and not self.pulse_was_broad:
@@ -253,10 +276,16 @@ class Capture:
         started = False
         if edge:
             if self.locked:
-                pred = self.last_start + self.hp
-                if abs(self.pulse_start - pred) <= WIN:
-                    self._start_line(self.pulse_start, False)
-                    started = True
+                # the first edge within WIN of the prediction is the line's: it nudges the next prediction
+                # and carries the period estimate (edge to edge); the line itself starts at the prediction
+                if self.pend_edge is None and abs(self.pulse_start - self.pred) <= WIN:
+                    self.pend_edge = self.pulse_start
+                    if self.prev_had_edge:       # else last_edge is more than a line back: no period
+                        period = self.pulse_start - self.last_edge
+                        self.hp_acc = clamp(self.hp_acc + (period - self.hp),
+                                            (H_NOM - H_TOL) << HP_SHIFT, (H_NOM + H_TOL) << HP_SHIFT)
+                        self.hp = (self.hp_acc + (1 << (HP_SHIFT - 1))) >> HP_SHIFT
+                    self.last_edge = self.pulse_start
             elif self.have_start:
                 # free running: pulses closer than a line (equalizing and broad pulses at half
                 # lines, noise) are not line starts; a line period locks
@@ -265,25 +294,37 @@ class Capture:
                     # a line period locks, when the pulse that started the line was a real sync (width
                     # >= T_EQ): noise crossing the swept slicer makes edges a line apart, not such pulses
                     self.locked = period <= H_NOM + H_TOL and not self.pulse_was_eq
-                    self._start_line(self.pulse_start, False)
+                    self._start_line(self.pulse_start, False, self.pulse_start)
                     started = True
+                    if self.locked:
+                        self.last_edge = self.pulse_start
+                        self.prev_had_edge = True
+                        self.hp = period                          # the locking period seeds the estimate
+                        self.hp_acc = period << HP_SHIFT
+                        self.pred = self.pulse_start + self.hp
             else:
-                self._start_line(self.pulse_start, False)
+                self._start_line(self.pulse_start, False, self.pulse_start)
                 started = True
-        if self.locked and not started and self.have_start and self.n == self.last_start + self.hp + WIN:
-            self._start_line(self.last_start + self.hp, True)
+        if self.locked and not started and self.n == self.pred + WIN:
+            # the start event, WIN samples after the prediction: with or without an edge (flywheel)
+            had_edge, err = self.pend_edge is not None, (self.pend_edge or 0) - self.pred
+            self._start_line(self.pred, not had_edge, self.pend_edge)
             started = True
+            self.prev_had_edge = had_edge
+            if self.locked:       # the start may have dropped the lock (MISS_MAX flywheel lines)
+                self.pred += self.hp + (((err + (1 << (PLL_SHIFT - 1))) >> PLL_SHIFT) if had_edge else 0)
 
         # -- within the line ----------------------------------------------------------------
         if self.pos >= 0:
             if not started:
                 self.pos += 1
             p = self.pos
-            # the pulse that started this line (a flywheel start has no pulse: eq stays False)
-            if self.in_pulse and self.pulse_start == self.last_start:
+            # the accepted pulse of this line, or of the pending one (a flywheel start has no pulse: eq stays
+            # False)
+            if self.in_pulse and self.cur_edge is not None and self.pulse_start == self.cur_edge:
+                self._line_class_update(self.pulse_width, False)
+            elif self.in_pulse and self.pend_edge is not None and self.pulse_start == self.pend_edge:
                 self._line_class_update(self.pulse_width, True)
-            elif started and self.cur_bad:
-                self.pulse_was_eq = False
             if SYNC_WIN[0] <= p < SYNC_WIN[1]:
                 self.sync_sum += s
             if PORCH_WIN[0] <= p < PORCH_WIN[1]:
