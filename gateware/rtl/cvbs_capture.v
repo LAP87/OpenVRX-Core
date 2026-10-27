@@ -54,14 +54,15 @@ module cvbs_capture #(
     reg  [5:0]  slice_r;
     reg  [11:0] g_r;
     reg  [7:0]  blank2_r;
-    // the slicer on the moving sum of the last AVG samples, this one included (bench 2026-10-27: the C5VRX sync
-    // tip's noise moved the first-three-low edge up to 32 samples; the mixer then refused the lengths)
+    // the slicer on the moving sum of the AVG samples before this one (bench 2026-10-27: the C5VRX sync tip's
+    // noise moved the first-three-low edge up to 32 samples; the mixer then refused the lengths). The sum is a
+    // register: with this sample added in front of the comparison, mix.b_clk missed 75 MHz (70.4).
     localparam SW = 6 + $clog2(AVG + 1);
     reg  [5:0]  win [0:AVG-1];         // the AVG most recent samples before this one, oldest at win_i
     reg  [SW-1:0] win_sum;             // their sum
     reg  [$clog2(AVG + 1)-1:0] win_i;
     wire [SW-1:0] sum_now = win_sum + {{(SW-6){1'b0}}, d} - {{(SW-6){1'b0}}, win[win_i]};
-    wire        low = sum_now < ({{(SW-6){1'b0}}, slice_r} * AVG);
+    wire        low = win_sum < ({{(SW-6){1'b0}}, slice_r} * AVG);
     integer     wi;
     always @(posedge clk) begin
         if (rst) begin

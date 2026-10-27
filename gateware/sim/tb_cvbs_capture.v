@@ -7,7 +7,7 @@
 `timescale 1ns / 1ps
 module tb_cvbs_capture;
 `ifndef CVBS_AVG
-`define CVBS_AVG 8                      // +define+CVBS_AVG=1: the slicer on the bare sample (the old edge)
+`define CVBS_AVG 8                      // +define+CVBS_AVG=1: the slicer on the previous sample alone (the old edge, a sample late)
 `endif
 `ifndef CVBS_COMB
 `define CVBS_COMB 1

@@ -64,9 +64,10 @@ SYNC_INIT, BLANK_INIT = 4, 20
 # at 31 codes, where a slicer of 12 never saw a pulse (hub docs/bench, 2026-10-27).
 BOOT_STEP = 2 * H_NOM
 BOOT_MIN, BOOT_MAX = 8, 40
-# The slicer sees the sum of the last AVG samples against AVG times the level (bench 2026-10-27: the C5VRX sync
-# tip carries +-8 codes of noise; the first-three-low-samples edge then wandered up to 32 samples from line to
-# line, the mixer refused the lengths and the picture jumped; an 8-sample average keeps the periods within 3).
+# The slicer sees the sum of the AVG samples before the current one against AVG times the level (bench
+# 2026-10-27: the C5VRX sync tip carries +-8 codes of noise; the first-three-low-samples edge then wandered up to
+# 32 samples from line to line, the mixer refused the lengths and the picture jumped; an 8-sample average keeps
+# the periods within 3). The current sample is left out so that the RTL compares a registered sum.
 AVG = 8
 
 
@@ -225,10 +226,11 @@ class Capture:
             self.len_ticks += 1
         locked_before = self.locked
         slice_level = (self.sync + self.blank) >> 1 if self.levels_fresh else self.boot_slice
-        # the slicer on the moving sum of the last avg samples, this one included
+        # the slicer on the moving sum of the avg samples before this one (the RTL keeps that sum in a register,
+        # so no adder sits in front of the comparison); then this sample enters the window
+        low = self.win_sum < slice_level * self.avg
         self.win_sum += s - self.window[self.n % self.avg]
         self.window[self.n % self.avg] = s
-        low = self.win_sum < slice_level * self.avg
         if low:
             self.low_run = min(self.low_run + 1, 3)
             self.high_run = 0
