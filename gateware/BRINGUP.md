@@ -48,8 +48,10 @@ flasharens PR-bygge har klockan av), se designnoten. 3,3 V-logik, korta trådar.
 | D5 | bit 1 | J5-5 (PIN42) | | D9 | bit 5 | J5-13 (PIN86) |
 | D6 | bit 2 | J5-6 (PIN41) | | GND | jord | GND |
 
-Data byter värde på klockans negativa flank och samplas på den positiva. Dekoder A (TVP, RX5808) är orörd: A analog mot B
-digital från samma kamera är det första diversity-provet. Klart när lysdiod 2 (rader från B) lyser, hjärtslaget går från
+Data byter värde på klockans negativa flank och samplas på den positiva. Mätt på bussen 2026-10-27 (`top/m7_digin_probe.v`,
+navets `docs/BENCH.md` "Den digitala bussen"): klockan 40,0 MHz, synktopp kod 22–24, släckning 30–32, video 40–56, vitt 62;
+`cvbs_capture` sveper därför skiljaren tills den hittar synken (grenen `digin/levels`; `6b845e8` väntade synk vid 4 och gav
+inga rader). Dekoder A (TVP, RX5808) är orörd: A analog mot B digital från samma kamera är det första diversity-provet. Klart när lysdiod 2 (rader från B) lyser, hjärtslaget går från
 4 Hz till 1 Hz på B:s eget lås (`cvbs_capture` `lock`, sedan 2026-10-26; bitströmmen `6b845e8` före det blinkar 4 Hz med
 bara B) och bilden från B syns på HDMI; inget synklås krävs från någon TVP för kanal B. M6 har ingen digital ingång än,
 så M6-loggens B-fält gäller TVP B.

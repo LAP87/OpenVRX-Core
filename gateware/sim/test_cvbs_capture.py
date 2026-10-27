@@ -18,9 +18,9 @@ sys.path.insert(0, str(GW / 'model'))
 import cvbs_capture_ref as m  # noqa: E402
 
 
-def run(samples, comb=True, tag='run', want_lock=False):
+def run(samples, comb=True, tag='run', want_lock=False, avg=m.AVG):
     """Entries the RTL emits for the samples, decoded like the model's tuples; with want_lock also
-    the (sample index, locked) list of every change of the flywheel lock."""
+    the (sample index, locked) list of every change of the flywheel lock. avg: the slicer's window."""
     work = HERE / 'build' / 'cvbs_capture' / tag
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -31,7 +31,7 @@ def run(samples, comb=True, tag='run', want_lock=False):
     outfile = work / 'entries.txt'
     lockfile = work / 'lock.txt'
     m.write_hex(hexfile, samples)
-    defines = [] if comb else ['-DCVBS_COMB=0']
+    defines = ([] if comb else ['-DCVBS_COMB=0']) + ([] if avg == m.AVG else [f'-DCVBS_AVG={avg}'])
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), *defines, '-o', 'sim.vvp', '-s', 'tb_cvbs_capture',
                     str(HERE / 'tb_cvbs_capture.v'), str(GW / 'rtl' / 'cvbs_capture.v')],
                    cwd=work, env=env, check=True)
@@ -150,6 +150,81 @@ def test_lock_negative_controls():
     _, got = run(s, tag='lock_cut', want_lock=True)
     offs = lock_offsets(got, exp)
     assert all(0 <= o <= 8 for o in offs) and max(offs) - min(offs) <= 1, offs
+
+
+def test_c5vrx_levels_lock_by_sweep():
+    """The levels the M7 probe measured on the C5VRX bus (bench 2026-10-27: sync 23, blanking 31, white 62):
+    the slicer of 12 sees no pulse, the sweep reaches one, the lock comes after at least ten sweep steps and
+    the picture then comes out like a standard one (the lock lands in the first field, after its vertical
+    sync: the three fields after it are numbered, 728 markers of two frames, lengths in tolerance), RTL as
+    model."""
+    s = m.synth(m.bars, frames=2, levels=(23, 31, 62))
+    exp = m.expected_lock_trace(s)
+    assert [v for _, v in exp] == [True], exp
+    assert 10 * m.BOOT_STEP <= exp[0][0] < 30 * m.H_NOM, exp
+    entries, got = run(s, tag='c5vrx_levels', want_lock=True)
+    offs = lock_offsets(got, exp)
+    assert all(0 <= o <= 8 for o in offs), offs
+    diff = first_difference(entries, m.expected_entries(s))
+    assert diff is None, diff
+    markers = [e for e in entries if e[0] == 'marker']
+    assert len(markers) == 729, len(markers)         # 243 + 244 + 242: the last marker needs the next start
+    assert all(abs(e[5] - 1716) <= 2 for e in markers)
+    assert not any(e[4] for e in markers)
+    cap = m.Capture()
+    cap.run(s)
+    assert (cap.sync, cap.blank) == (23, 31)
+
+
+def test_sweep_negative_controls():
+    """Edges a line apart are not enough: a black picture at the C5VRX levels with every sync cut to 100
+    samples (below T_EQ, equalizing width) never locks, RTL and model, although the swept slicer sees the
+    pulses between 24 and 31 (above 31 everything is low: no edges); and the standard levels still lock on
+    the second sync, before the sweep has moved."""
+    s = list(m.synth(lambda ln, x: 16, frames=1, levels=(23, 31, 62)))
+    i, cut = 0, 0
+    while i < len(s):
+        if s[i] == 23:
+            j = i
+            while j < len(s) and s[j] == 23:
+                j += 1
+            if j - i > 150:
+                s[i + 100:j] = [31] * (j - i - 100)
+                cut += 1
+            i = j
+        else:
+            i += 1
+    assert cut > 400, cut
+    assert m.expected_lock_trace(s) == []
+    _, got = run(s, tag='sweep_narrow', want_lock=True)
+    assert got == [], got
+    std = m.synth(m.bars, frames=1)
+    exp = m.expected_lock_trace(std)
+    assert [v for _, v in exp] == [True] and exp[0][0] < 3 * m.BOOT_STEP, exp     # the slicer still 12 to 14
+
+
+def test_noisy_sync_edges_hold_the_line_length():
+    """The C5VRX-level stream with three codes of noise (the bench's sync tip wobbles +-8): with the 8-sample
+    slicer window at most 5 % of the lines leave the mixer's length tolerance (3.4 % in the model: the rest is
+    for the flywheel-smoothed line start, the next step) and no lock is lost, RTL as model;
+    the negative control is the same stream through the bare-sample slicer (AVG = 1, the old edge), which does
+    not even find the vertical sync in this noise and numbers no line, RTL as model too."""
+    s = m.synth(m.bars, frames=2, levels=(23, 31, 62), noise=3.0, seed=7)
+    exp = m.expected_entries(s)
+    entries, got = run(s, tag='noisy_avg8', want_lock=True)
+    diff = first_difference(entries, exp)
+    assert diff is None, diff
+    assert [v for _, v in got] == [True], got
+    markers = [e for e in entries if e[0] == 'marker']
+    assert len(markers) >= 700, len(markers)
+    off8 = sum(1 for e in markers if abs(e[5] - 1716) > 2)
+    assert off8 <= len(markers) * 0.05, (off8, len(markers))
+    exp1 = m.expected_entries(s, avg=1)
+    entries1 = run(s, tag='noisy_avg1', avg=1)
+    diff = first_difference(entries1, exp1)
+    assert diff is None, diff
+    markers1 = [e for e in entries1 if e[0] == 'marker']
+    assert len(markers1) < len(markers) // 2, (len(markers1), len(markers))
 
 
 if __name__ == '__main__':

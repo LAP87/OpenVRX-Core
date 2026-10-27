@@ -58,6 +58,17 @@ WORDS = 360
 SYNC_WIN = (40, 72)     # samples after the start averaged for the sync tip (inside the 188-sample pulse)
 PORCH_WIN = (320, 352)  # samples after the start averaged for the back porch (after the burst, before active)
 SYNC_INIT, BLANK_INIT = 4, 20
+# Bootstrap (bench 2026-10-27): the slicer sweeps one code every BOOT_STEP samples while unlocked, from
+# (SYNC_INIT + BLANK_INIT) / 2 up to BOOT_MAX and round from BOOT_MIN, until a line with a real sync has been
+# measured; then the measured levels replace the estimates at once. C5VRX puts its sync at 23 and the blanking
+# at 31 codes, where a slicer of 12 never saw a pulse (hub docs/bench, 2026-10-27).
+BOOT_STEP = 2 * H_NOM
+BOOT_MIN, BOOT_MAX = 8, 40
+# The slicer sees the sum of the AVG samples before the current one against AVG times the level (bench
+# 2026-10-27: the C5VRX sync tip carries +-8 codes of noise; the first-three-low-samples edge then wandered up to
+# 32 samples from line to line, the mixer refused the lengths and the picture jumped; an 8-sample average keeps
+# the periods within 3). The current sample is left out so that the RTL compares a registered sum.
+AVG = 8
 
 
 def gain_table():
@@ -76,11 +87,17 @@ class Capture:
     """Feed samples one at a time with step(); entries collect in .entries as
     ('word', field, line, idx, data32) and ('marker', field, line, hf, bad, length)."""
 
-    def __init__(self, comb=True):
+    def __init__(self, comb=True, avg=AVG):
         self.comb = comb
+        self.avg = avg
+        self.window = [0] * avg      # the last avg samples, zeros before the first
+        self.win_sum = 0
         self.entries = []
         self.n = 0
         self.sync16, self.blank16 = SYNC_INIT << 4, BLANK_INIT << 4   # level estimates in 1/16 codes
+        self.levels_fresh = False    # the estimates come from a measured line (else the slicer sweeps)
+        self.boot_slice = (SYNC_INIT + BLANK_INIT) >> 1
+        self.boot_cnt = 0
         self.low_run = self.high_run = 0
         self.in_pulse = False
         self.pulse_start = 0
@@ -137,10 +154,17 @@ class Capture:
             if self.pos >= PORCH_WIN[1] and not self.cur_bad and not self.pulse_was_eq:
                 # a real line sync or broad pulse lies under the sync window; the porch window is
                 # clean only after a line sync (a broad pulse is still low there)
-                # 32-sample means in 1/16 codes: sum >> 5 << 4 = sum >> 1; shift-by-two IIR (floor)
-                self.sync16 += ((self.sync_sum >> 1) - self.sync16) >> 2
-                if not self.pulse_was_broad:
-                    self.blank16 += ((self.porch_sum >> 1) - self.blank16) >> 2
+                # 32-sample means in 1/16 codes: sum >> 5 << 4 = sum >> 1; shift-by-two IIR (floor);
+                # the first measured line replaces the bootstrap estimates outright
+                if not self.levels_fresh:
+                    self.sync16 = self.sync_sum >> 1
+                    if not self.pulse_was_broad:
+                        self.blank16 = self.porch_sum >> 1
+                        self.levels_fresh = True
+                else:
+                    self.sync16 += ((self.sync_sum >> 1) - self.sync16) >> 2
+                    if not self.pulse_was_broad:
+                        self.blank16 += ((self.porch_sum >> 1) - self.blank16) >> 2
             if self.cur_active:
                 self.entries.append(('marker', self.cur_field, self.cur_line, self.hf, int(self.cur_bad),
                                      min(self.len_ticks, 4095)))
@@ -177,6 +201,7 @@ class Capture:
             if self.miss > MISS_MAX:
                 self.locked = False
                 self.have_start = False
+                self.levels_fresh = False    # the next signal may sit at other levels: sweep again
         else:
             self.miss = 0
 
@@ -199,8 +224,13 @@ class Capture:
         if self.acc_len >= LEN_MOD:
             self.acc_len -= LEN_MOD
             self.len_ticks += 1
-        slice_level = (self.sync + self.blank) >> 1
-        low = s < slice_level
+        locked_before = self.locked
+        slice_level = (self.sync + self.blank) >> 1 if self.levels_fresh else self.boot_slice
+        # the slicer on the moving sum of the avg samples before this one (the RTL keeps that sum in a register,
+        # so no adder sits in front of the comparison); then this sample enters the window
+        low = self.win_sum < slice_level * self.avg
+        self.win_sum += s - self.window[self.n % self.avg]
+        self.window[self.n % self.avg] = s
         if low:
             self.low_run = min(self.low_run + 1, 3)
             self.high_run = 0
@@ -232,7 +262,9 @@ class Capture:
                 # lines, noise) are not line starts; a line period locks
                 period = self.pulse_start - self.last_start
                 if period >= H_NOM - H_TOL:
-                    self.locked = period <= H_NOM + H_TOL
+                    # a line period locks, when the pulse that started the line was a real sync (width
+                    # >= T_EQ): noise crossing the swept slicer makes edges a line apart, not such pulses
+                    self.locked = period <= H_NOM + H_TOL and not self.pulse_was_eq
                     self._start_line(self.pulse_start, False)
                     started = True
             else:
@@ -304,6 +336,14 @@ class Capture:
                     else:
                         self.y_pending = y
                     self.y_count += 1
+        # the slicer sweep while unlocked (the lock state at the start of this sample, as the RTL's register)
+        if locked_before:
+            self.boot_cnt = 0
+        else:
+            self.boot_cnt += 1
+            if self.boot_cnt == BOOT_STEP:
+                self.boot_cnt = 0
+                self.boot_slice = BOOT_MIN if self.boot_slice >= BOOT_MAX else self.boot_slice + 1
         if self.locked != self._lock_prev:
             self.lock_trace.append((self.n, self.locked))
             self._lock_prev = self.locked
@@ -417,13 +457,13 @@ def bars(ln, x):
     return 16 + (x * 8 // 720) * 31
 
 
-def expected_entries(samples, comb=True):
-    return Capture(comb=comb).run(samples)
+def expected_entries(samples, comb=True, avg=AVG):
+    return Capture(comb=comb, avg=avg).run(samples)
 
 
-def expected_lock_trace(samples, comb=True):
+def expected_lock_trace(samples, comb=True, avg=AVG):
     """(sample index, locked) at every change of the line flywheel's lock."""
-    c = Capture(comb=comb)
+    c = Capture(comb=comb, avg=avg)
     c.run(samples)
     return c.lock_trace
 
