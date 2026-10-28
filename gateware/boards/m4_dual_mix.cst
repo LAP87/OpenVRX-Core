@@ -178,3 +178,7 @@ IO_LOC "IO_sdram_dq[30]" IOR44A;
 IO_PORT "IO_sdram_dq[30]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
 IO_LOC "IO_sdram_dq[31]" IOR44B;
 IO_PORT "IO_sdram_dq[31]"  IO_TYPE=LVCMOS33 BANK_VCCIO=3.3;
+// onboard BL616 USB-UART RX (as M6): held at the UART idle level by the top, since a floating pin fed the bridge
+// garbage until it wedged (bench 2026-10-28)
+IO_LOC  "uart_txd" 69;
+IO_PORT "uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=NONE;

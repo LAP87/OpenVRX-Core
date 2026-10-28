@@ -41,6 +41,8 @@ module m4_dual_mix #(
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
+    output wire        uart_txd,          // PIN69 -> the onboard BL616 USB-UART, held at the idle level: M4 has no log,
+                                          // and a floating pin fed the bridge garbage until it wedged (bench 2026-10-28)
     output wire        O_sdram_clk, O_sdram_cke, O_sdram_cs_n, O_sdram_cas_n, O_sdram_ras_n, O_sdram_wen_n,
     output wire [3:0]  O_sdram_dqm,
     output wire [10:0] O_sdram_addr,
@@ -164,5 +166,6 @@ module m4_dual_mix #(
     end
     wire [1:0] st_led = st_pass ? 2'b01 : st_other ? 2'b10 : 2'b11;     // {LED 2, LED 1} lit
     assign led = ~{st_show != 0 ? st_led : {b_lines, a_lines}, beat};
+    assign uart_txd = 1'b1;
 endmodule
 `default_nettype wire
