@@ -6,7 +6,9 @@ The algorithm, integer only, bit for bit what the RTL does:
 
 * Levels. Per line the sync tip (mean of 32 samples inside the pulse) and the back porch (mean of
   32 samples just before the active part) are measured; running estimates follow them with a
-  shift-by-two IIR. The slicer sits halfway between them.
+  shift-by-two IIR. The slicer sits halfway between them. Until a line has been measured the slicer sweeps
+  (BOOT_*), and the first measured line counts only if it looks like a sync and a porch around the swept slicer
+  (BOOT_DMIN, BOOT_KMIN); otherwise the lock drops and the sweep steps on.
 * Sync. A sample below the slicer is `low`. Three low samples in a row start a pulse (its start is
   the first of the three), three high ones end it. Width < T_EQ is an equalizing pulse, width
   >= T_BROAD a broad (serration) pulse, in between a line sync.
@@ -70,6 +72,15 @@ SYNC_INIT, BLANK_INIT = 4, 20
 # at 31 codes, where a slicer of 12 never saw a pulse (hub docs/bench, 2026-10-27).
 BOOT_STEP = 2 * H_NOM
 BOOT_MIN, BOOT_MAX = 8, 40
+# The first measured line must look like a sync and a porch around the slicer that found it: sync mean below the
+# slicer, porch mean at or above it, and at least BOOT_DMIN codes between them. Otherwise the lock is dropped and the
+# slicer steps on at once (bench 2026-10-28: with the slicer at or above the blanking level the sweep locked on the
+# dark picture's period and measured 24/24, 25/25 or 32/39 where the sync sat at 13, then stayed "locked" with
+# no usable line; 80 of 337 locks over the day's captures). And the sync mean must lie within BOOT_KMIN codes of the
+# line's lowest slicer average: a real sync tip is the lowest level of its line, while a lock on a dark part of the
+# picture (slicer above the blanking, 32/39 with the sync at 14) measures something well above it.
+BOOT_DMIN = 4
+BOOT_KMIN = 4
 # The slicer sees the sum of the AVG samples before the current one against AVG times the level (bench
 # 2026-10-27: the C5VRX sync tip carries +-8 codes of noise; the first-three-low-samples edge then wandered up to
 # 32 samples from line to line, the mixer refused the lengths and the picture jumped; an 8-sample average keeps
@@ -97,9 +108,10 @@ class Capture:
     """Feed samples one at a time with step(); entries collect in .entries as
     ('word', field, line, idx, data32) and ('marker', field, line, hf, bad, length)."""
 
-    def __init__(self, comb=True, avg=AVG, white_x8=WHITE_X8_STD):
+    def __init__(self, comb=True, avg=AVG, white_x8=WHITE_X8_STD, boot_check=True):
         self.comb = comb
         self.avg = avg
+        self.boot_check = boot_check   # False: the first measured line is taken as it is (before 2026-10-28; tests)
         self.gain = GAIN[white_x8] if white_x8 in GAIN else gain_table(white_x8)
         self.window = [0] * avg      # the last avg samples, zeros before the first
         self.win_sum = 0
@@ -109,6 +121,8 @@ class Capture:
         self.levels_fresh = False    # the estimates come from a measured line (else the slicer sweeps)
         self.boot_slice = (SYNC_INIT + BLANK_INIT) >> 1
         self.boot_cnt = 0
+        self.boot_rejects = 0        # first measured lines refused (BOOT_DMIN, BOOT_KMIN), for the tests
+        self.line_min = (1 << 16) - 1   # the lowest slicer sum (win_sum) since the line start
         self.low_run = self.high_run = 0
         self.in_pulse = False
         self.pulse_start = 0
@@ -177,12 +191,22 @@ class Capture:
                 # a real line sync or broad pulse lies under the sync window; the porch window is
                 # clean only after a line sync (a broad pulse is still low there)
                 # 32-sample means in 1/16 codes: sum >> 5 << 4 = sum >> 1; shift-by-two IIR (floor);
-                # the first measured line replaces the bootstrap estimates outright
+                # the first measured line replaces the bootstrap estimates outright, if it passes the check
                 if not self.levels_fresh:
-                    self.sync16 = self.sync_sum >> 1
-                    if not self.pulse_was_broad:
-                        self.blank16 = self.porch_sum >> 1
+                    sync_m16, porch_m16, slice16 = self.sync_sum >> 1, self.porch_sum >> 1, self.boot_slice << 4
+                    if self.pulse_was_broad:
+                        self.sync16 = sync_m16
+                    elif not self.boot_check or (
+                            sync_m16 < slice16 <= porch_m16 and porch_m16 - sync_m16 >= BOOT_DMIN << 4
+                            and sync_m16 * self.avg <= (self.line_min << 4) + (BOOT_KMIN << 4) * self.avg):
+                        self.sync16, self.blank16 = sync_m16, porch_m16
                         self.levels_fresh = True
+                    else:
+                        # not a sync and a porch around this slicer: drop the lock, sweep on from the next code
+                        self.locked = False
+                        self.boot_slice = BOOT_MIN if self.boot_slice >= BOOT_MAX else self.boot_slice + 1
+                        self.boot_cnt = 0
+                        self.boot_rejects += 1
                 else:
                     self.sync16 += ((self.sync_sum >> 1) - self.sync16) >> 2
                     if not self.pulse_was_broad:
@@ -256,7 +280,8 @@ class Capture:
         slice_level = (self.sync + self.blank) >> 1 if self.levels_fresh else self.boot_slice
         # the slicer on the moving sum of the avg samples before this one (the RTL keeps that sum in a register,
         # so no adder sits in front of the comparison); then this sample enters the window
-        low = self.win_sum < slice_level * self.avg
+        ws = self.win_sum
+        low = ws < slice_level * self.avg
         self.win_sum += s - self.window[self.n % self.avg]
         self.window[self.n % self.avg] = s
         if low:
@@ -318,6 +343,9 @@ class Capture:
             self.prev_had_edge = had_edge
             if self.locked:       # the start may have dropped the lock (MISS_MAX flywheel lines)
                 self.pred += self.hp + (((err + (1 << (PLL_SHIFT - 1))) >> PLL_SHIFT) if had_edge else 0)
+        # the line's lowest slicer sum: the ending line's was read by _finish_line above, the new line starts with
+        # this sample's
+        self.line_min = ws if started else min(self.line_min, ws)
 
         # -- within the line ----------------------------------------------------------------
         if self.pos >= 0:

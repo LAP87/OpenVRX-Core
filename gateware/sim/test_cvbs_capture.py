@@ -305,5 +305,46 @@ def test_jittered_edges_keep_the_prediction():
     assert all(0 <= o <= 8 for o in offs), offs
 
 
+BENCH_1251 = GW / 'vectors' / 'digin_bench_2026-10-28_1251.hex'
+
+
+def test_bench_capture_refuses_the_blanking_lock():
+    """A real C5VRX capture (bench 2026-10-28 12:51, M7 probe, 65 536 samples: sync 13, blanking 24, a dark
+    room), twice in a row behind 30 lines of a flat level 50 that carry the sweep above the blanking before the
+    picture comes. Without the bootstrap check (the negative control, model before 2026-10-28) the sweep locks on
+    the dark picture's period and takes 24/26 as sync and blanking, as on the bench; with it the first measured
+    lines are refused until the slicer has come round, and the lock holds the real levels. RTL as model: the same
+    lock changes and the same entries."""
+    x = [int(v, 16) for v in BENCH_1251.read_text().split()]
+    assert len(x) == 65536
+    s = [50] * (30 * m.H_NOM) + x + x
+    old = m.Capture(comb=True, white_x8=m.WHITE_X8_C5VRX, boot_check=False)
+    old.run(s)
+    assert old.locked and old.levels_fresh and old.blank - old.sync < 4, (old.sync, old.blank)
+    new = m.Capture(comb=True, white_x8=m.WHITE_X8_C5VRX)
+    new.run(s)
+    assert new.boot_rejects >= 1
+    assert new.locked and new.levels_fresh and (new.sync, new.blank) in ((13, 24), (13, 25)), (new.sync, new.blank)
+    exp = new.lock_trace
+    entries, got = run(s, tag='bench_1251', want_lock=True, white_x8=m.WHITE_X8_C5VRX)
+    offs = lock_offsets(got, exp)
+    assert all(0 <= o <= 8 for o in offs), offs
+    diff = first_difference(entries, new.entries)
+    assert diff is None, diff
+
+
+def test_bootstrap_check_keeps_the_standard_locks():
+    """The check refuses nothing on the synthetic streams the other tests lock on (standard and C5VRX levels,
+    noise of three codes): the same lock time as without it."""
+    for s in (m.synth(m.bars, frames=1), m.synth(m.bars, frames=1, levels=(23, 31, 62)),
+              m.synth(m.bars, frames=1, levels=(23, 31, 62), noise=3.0, seed=7),
+              m.synth(m.bars, frames=1, levels=(13, 24, 50), noise=2.0, seed=5)):
+        with_check, without = m.Capture(), m.Capture(boot_check=False)
+        with_check.run(s)
+        without.run(s)
+        assert with_check.boot_rejects == 0
+        assert with_check.lock_trace == without.lock_trace, (with_check.lock_trace, without.lock_trace)
+
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-q']))
