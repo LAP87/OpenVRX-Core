@@ -7,7 +7,9 @@ module mixer2 #(
     parameter TIMEOUT = 262144,             // alive_a/alive_b only (indicators)
     parameter BLEND_Q8 = 38, SWITCH_Q8 = 64,
     parameter T_PAIR = 1024, N_STEP = 8, N_DEAD = 40,  // see line_mixer.v
-    parameter B_DIGITAL = 0                 // 1: channel B is a composite sample bus (cvbs_capture.v), not a TVP
+    parameter B_DIGITAL = 0,                // 1: channel B is a composite sample bus (cvbs_capture.v), not a TVP
+    parameter B_WHITE_X8 = 20               // B_DIGITAL: the bus source's white swing over its sync swing, times 8
+                                            // (cvbs_capture.v WHITE_X8; 31 for C5VRX)
 ) (
     input  wire        a_clk,
     input  wire [7:0]  a_d,
@@ -65,7 +67,7 @@ module mixer2 #(
     generate if (B_DIGITAL != 0) begin : g_b_digital
         // channel B is a 6-bit composite sample bus at 40 MS/s (the C5VRX receiver's PARLIO
         // bus): cvbs_capture.v makes the same entries as chan_capture.v (task 64)
-        cvbs_capture cap_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse),
+        cvbs_capture #(.WHITE_X8(B_WHITE_X8)) cap_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse),
                             .lock(b_lock));
         assign b_ext_bad = ~b_lock;
     end else begin : g_b_bt656

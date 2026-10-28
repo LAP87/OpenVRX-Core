@@ -90,8 +90,8 @@ module m7_digin_probe #(
     wire        e_valid, line_pulse, lock;
     wire [52:0] e_data;
     // d_q: one input flop before the capture, as mixer2's b_in in M4
-    cvbs_capture cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_q), .e_valid(e_valid), .e_data(e_data),
-                      .line_pulse(line_pulse), .lock(lock));
+    cvbs_capture #(.WHITE_X8(31)) cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_q), .e_valid(e_valid), .e_data(e_data),
+                                       .line_pulse(line_pulse), .lock(lock));
     wire        marker = e_valid && e_data[52];
     wire [11:0] mlen   = e_data[12:1];
     wire        mbad   = |e_data[20:17];

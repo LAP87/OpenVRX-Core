@@ -111,7 +111,8 @@ module m4_dual_mix #(
     // a decoder without a whole poll round reporting H and V lock loses against one that has it (dec_bad.v)
     wire nolock_a, nolock_b;
     dec_bad lockrule (.status_valid(st_valid), .status0(st0), .status1(st1), .bad({nolock_b, nolock_a}));
-    mixer2 #(.B_DIGITAL(B_DIGITAL)) mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
+    // DIGIN: the bus source is C5VRX, white 62 over blanking 31 over sync 23 (bench 2026-10-27): WHITE_X8 31
+    mixer2 #(.B_DIGITAL(B_DIGITAL), .B_WHITE_X8(B_DIGITAL ? 31 : 20)) mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
                 .ext_bad_a(nolock_a), .ext_bad_b(nolock_b), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
                 .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
                 .a_lines(a_lines), .b_lines(b_lines), .b_lock(b_lock), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
