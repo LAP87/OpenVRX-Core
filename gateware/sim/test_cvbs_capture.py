@@ -18,9 +18,10 @@ sys.path.insert(0, str(GW / 'model'))
 import cvbs_capture_ref as m  # noqa: E402
 
 
-def run(samples, comb=True, tag='run', want_lock=False, avg=m.AVG):
+def run(samples, comb=True, tag='run', want_lock=False, avg=m.AVG, white_x8=m.WHITE_X8_STD):
     """Entries the RTL emits for the samples, decoded like the model's tuples; with want_lock also
-    the (sample index, locked) list of every change of the flywheel lock. avg: the slicer's window."""
+    the (sample index, locked) list of every change of the flywheel lock. avg: the slicer's window;
+    white_x8: the gain table (20 standard, 31 C5VRX)."""
     work = HERE / 'build' / 'cvbs_capture' / tag
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -31,7 +32,8 @@ def run(samples, comb=True, tag='run', want_lock=False, avg=m.AVG):
     outfile = work / 'entries.txt'
     lockfile = work / 'lock.txt'
     m.write_hex(hexfile, samples)
-    defines = ([] if comb else ['-DCVBS_COMB=0']) + ([] if avg == m.AVG else [f'-DCVBS_AVG={avg}'])
+    defines = (([] if comb else ['-DCVBS_COMB=0']) + ([] if avg == m.AVG else [f'-DCVBS_AVG={avg}'])
+               + ([] if white_x8 == m.WHITE_X8_STD else [f'-DCVBS_WHITE_X8={white_x8}']))
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), *defines, '-o', 'sim.vvp', '-s', 'tb_cvbs_capture',
                     str(HERE / 'tb_cvbs_capture.v'), str(GW / 'rtl' / 'cvbs_capture.v')],
                    cwd=work, env=env, check=True)
@@ -65,9 +67,30 @@ def first_difference(got, exp):
 
 
 def test_gain_table_matches_model():
-    """rtl/cvbs_gain.vh is the model's table (regenerate with cvbs_capture_ref.write_gain_vh)."""
-    vh = (GW / 'rtl' / 'cvbs_gain.vh').read_text()
-    assert vh.endswith(m.gain_vh())
+    """rtl/cvbs_gain.vh and rtl/cvbs_gain_c5.vh are the model's tables (regenerate with
+    cvbs_capture_ref.write_gain_vh)."""
+    assert (GW / 'rtl' / 'cvbs_gain.vh').read_text().endswith(m.gain_vh(m.WHITE_X8_STD))
+    assert (GW / 'rtl' / 'cvbs_gain_c5.vh').read_text().endswith(m.gain_vh(m.WHITE_X8_C5VRX))
+    assert m.gain_table(20)[16] == 1402 and m.gain_table(31)[16] == 904     # 219*256/(2.5*16), /(3.875*16)
+
+
+def test_c5vrx_gain_keeps_white_below_the_clamp():
+    """The C5VRX levels (white 62, blanking 31, sync 23) through the C5VRX gain table: the brightest grey bar
+    (luma 233) comes out at 233 and black at 16, RTL as model; through the standard table (the negative
+    control) the same stream clips every bar above code 51 to 254, RTL as model too."""
+    s = m.synth(m.bars, frames=1, levels=(23, 31, 62))
+    for white_x8, top in ((m.WHITE_X8_C5VRX, 233), (m.WHITE_X8_STD, 254)):
+        exp = m.expected_entries(s, white_x8=white_x8)
+        got = run(s, tag=f'gain{white_x8}', white_x8=white_x8)
+        diff = first_difference(got, exp)
+        assert diff is None, diff
+        ys = [((e[4] >> 24) & 0xFF, (e[4] >> 8) & 0xFF) for e in got if e[0] == 'word']
+        flat = [y for pair in ys for y in pair]
+        assert abs(max(flat) - top) <= 2, (white_x8, max(flat))        # 233 maps to 234 with this table's rounding
+        assert min(flat) == 16, (white_x8, min(flat))
+    clipped = sum(1 for e in m.expected_entries(s, white_x8=m.WHITE_X8_STD) if e[0] == 'word'
+                  and ((e[4] >> 24) & 0xFF) == 254)
+    assert clipped > 30000, clipped                     # three of the eight bars sit above code 51 (one luma byte counted)
 
 
 def test_clean_frame_matches_model():

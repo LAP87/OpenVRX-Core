@@ -41,6 +41,8 @@ module m4_dual_mix #(
     output wire        tmds_clk_p, tmds_clk_n,
     output wire [2:0]  tmds_d_p, tmds_d_n,
     output wire [2:0]  led,
+    output wire        uart_txd,          // PIN69 -> the onboard BL616 USB-UART, held at the idle level: M4 has no log,
+                                          // and a floating pin fed the bridge garbage until it wedged (bench 2026-10-28)
     output wire        O_sdram_clk, O_sdram_cke, O_sdram_cs_n, O_sdram_cas_n, O_sdram_ras_n, O_sdram_wen_n,
     output wire [3:0]  O_sdram_dqm,
     output wire [10:0] O_sdram_addr,
@@ -111,7 +113,8 @@ module m4_dual_mix #(
     // a decoder without a whole poll round reporting H and V lock loses against one that has it (dec_bad.v)
     wire nolock_a, nolock_b;
     dec_bad lockrule (.status_valid(st_valid), .status0(st0), .status1(st1), .bad({nolock_b, nolock_a}));
-    mixer2 #(.B_DIGITAL(B_DIGITAL)) mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
+    // DIGIN: the bus source is C5VRX, white 62 over blanking 31 over sync 23 (bench 2026-10-27): WHITE_X8 31
+    mixer2 #(.B_DIGITAL(B_DIGITAL), .B_WHITE_X8(B_DIGITAL ? 31 : 20)) mix (.a_clk(tvpa_sclk), .a_d(tvpa_d), .b_clk(tvpb_sclk), .b_d(tvpb_d), .sys_clk(sd_clk), .rst_async(rst),
                 .ext_bad_a(nolock_a), .ext_bad_b(nolock_b), .ext_weak_a(1'b0), .ext_weak_b(1'b0),
                 .out_empty(m_empty), .out_data(m_data), .out_pop(m_pop),
                 .a_lines(a_lines), .b_lines(b_lines), .b_lock(b_lock), .alive_a(alive_a), .alive_b(alive_b), .cur(cur),
@@ -163,5 +166,6 @@ module m4_dual_mix #(
     end
     wire [1:0] st_led = st_pass ? 2'b01 : st_other ? 2'b10 : 2'b11;     // {LED 2, LED 1} lit
     assign led = ~{st_show != 0 ? st_led : {b_lines, a_lines}, beat};
+    assign uart_txd = 1'b1;
 endmodule
 `default_nettype wire
