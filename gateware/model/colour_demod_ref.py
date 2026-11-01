@@ -17,7 +17,7 @@ Chain, all integer, all at 40 MS/s:
 * Burst lock. The burst sits in the back porch, samples BURST_LO..BURST_HI after the line start,
   at subcarrier phase 180 deg. Over that window the model accumulates the burst vector against the
   running NCO: with the NCO at subcarrier phase + delta, burst_i ~ (A*N/2)*sin(delta) (the
-  double-frequency terms average out over the 9 burst cycles), so est = burst_i*256/mag is delta
+  double-frequency terms average out over the 9 burst cycles), so est ~ 256*burst_i/mag is delta
   in 1/256-cycle units. est > 0 means the NCO leads the burst, so the increment must shrink:
   inc = FSC_INC - err*LOOP_GAIN/256, with err the shift-by-four IIR of est (LOOP_GAIN =
   256 * 2^32/(FS*H_NOM) ~ 6621*256 closes one line's phase error in about one line), clamped.
@@ -127,6 +127,10 @@ D_LINE = 2 * math.pi * cv.H_NOM / SPC
 ROT_C8 = round(127 * math.cos(D_LINE / 2))
 ROT_S8 = round(127 * math.sin(D_LINE / 2))
 COMB_RES = 2 * abs(math.sin(D_LINE / 2))        # comb chroma gain: 1.996 (not 2)
+# burst discriminator without a divider (the RTL has none): est = (burst_i*INV_LUT[min(mag,255)])>>8
+# approximates 256*burst_i/mag through a reciprocal ROM, INV_LUT[m] = round(65536/m). Worst relative
+# error ~0.2% (at m=255); the shift-by-four IIR absorbs the rounding, the metrics are unchanged.
+INV_LUT = [65535] + [min(65535, round(65536 / m)) for m in range(1, 256)]   # 16-bit ROM: m=1 clamps to 65535
 
 
 def chroma_k(white_blank):
@@ -162,7 +166,8 @@ class ColourDemod:
         self.k = chroma_k
         self.phase = 0                  # 32-bit NCO phase, continuous across lines
         self.err = 0                    # filtered burst phase error, 1/256-cycle units
-        self.inc = FSC_INC
+        self.inc = FSC_INC              # increment applied to the phase this sample
+        self.inc_new = FSC_INC          # computed at the burst-lock sample, applied from the next
         self.n = 0
         self.line_start_at = None
         self.cur_active = False
@@ -210,18 +215,33 @@ class ColourDemod:
     def _burst_lock(self):
         """Once per line, at the end of the burst window: fold the measured burst vector into err.
         With the NCO at subcarrier phase + delta, the burst (at subcarrier phase + 180 deg)
-        accumulates as burst_i ~ (A*N/2)*sin(delta): est = burst_i*256/mag is delta in 1/256-cycle
-        units. burst_i > 0 means the NCO leads the burst, so the increment must shrink (raising
-        inc raises delta -- the other sign is positive feedback, verified by a phase scan)."""
+        accumulates as burst_i ~ (A*N/2)*sin(delta): est ~ burst_i*256/mag is delta in 1/256-cycle
+        units (a reciprocal ROM approximates the division; see INV_LUT). burst_i > 0 means the
+        NCO leads the burst, so the increment must shrink (raising inc raises delta -- the other
+        sign is positive feedback, verified by a phase scan)."""
         if not self.burst_n:
             return
         mag = abs(self.burst_i) + abs(self.burst_q) + 1
         if mag < BURST_MIN:
             return                  # no burst in the window (vertical-interval line): skip
-        est = clamp((self.burst_i * PHASES) // mag, -512, 512)
-        self.err += (est - self.err) >> self.loop_shift
-        self.inc = clamp(FSC_INC - ((self.err * LOOP_GAIN) >> 8), FSC_INC - INC_CLAMP, FSC_INC + INC_CLAMP)
-        self.burst_phase_err_deg.append(self.err * 360.0 / PHASES)
+        # reciprocal ROM instead of a divider: est = (burst_i * INV_LUT[min(mag,255)]) >> 8
+        # approximates burst_i*256/mag (the RTL has no divider; the IIR absorbs the ~0.2% error)
+        m8 = mag if mag < 256 else 255
+        est = clamp((self.burst_i * INV_LUT[m8]) >> 8, -512, 512)
+        # err is a 12-bit two's-complement register in the RTL: the difference est-err is formed
+        # in 12 bits (it wraps when |est-err| >= 2048, which happens for large err), so emulate
+        # that wrap here to stay bit-exact with rtl/colour_demod.v
+        d = ((est & 0x7FF) | (0x800 if est < 0 else 0)) - (self.err & 0xFFF)
+        dv = ((d & 0xFFF) ^ 0x800) - 0x800
+        self.err = (self.err + ((dv >> self.loop_shift) & 0xFFF)) & 0xFFF
+        # the RTL registers the new inc on the clock after the lock sample and applies it on the
+        # clock after that; the model applies the new increment to the phase one sample after the
+        # lock sample to stay bit-exact with rtl/colour_demod.v (see the inc pipeline at the end
+        # of step()). The metrics only see the filtered err, which is unaffected by this shift.
+        # err is 12-bit two's complement: read it back signed for the gain multiply and the metric
+        err_s = (self.err ^ 0x800) - 0x800
+        self.inc_new = clamp(FSC_INC - ((err_s * LOOP_GAIN) >> 8), FSC_INC - INC_CLAMP, FSC_INC + INC_CLAMP)
+        self.burst_phase_err_deg.append(err_s * 360.0 / PHASES)
 
     def step(self, s):
         """One sample. Returns (y, cb, cr) at a luma tick on an active line, else None."""
@@ -284,6 +304,9 @@ class ColourDemod:
                         self.cr = clamp(128 - (((i_lp * ROT_S8 - q_lp * ROT_C8) * self.k) >> 14), 1, 254)
                     out = (self.y, self.cb, self.cr)
         self.phase = (self.phase + self.inc) & 0xFFFFFFFF
+        # inc pipeline: the value _burst_lock wrote this sample applies from the next sample
+        # (the RTL: inc is registered at the lock clock, the phase adds it from the next clock)
+        self.inc = self.inc_new
         self.n += 1
         return out
 
@@ -384,6 +407,89 @@ def colour_bars_chroma(ln, x):
 
 
 # ---- metrics ------------------------------------------------------------------------------------
+def capture_events(samples, comb=True, white_x8=None, levels=(4, 22, 62)):
+    """Run cvbs_capture_ref.Capture over the samples and return (cap, events): events maps the
+    sample index of each line-start event to (start_at, active, sync, blank), with active taken
+    from _finish_line (the capture only decides cur_active at ACT_CHECK, after the start event).
+    white_x8 defaults to the table matching `levels` (same convention as run_frame)."""
+    cap, events, _ = drive_capture(samples, comb=comb, white_x8=white_x8, levels=levels)
+    return cap, events
+
+
+def drive_capture(samples, comb=True, white_x8=None, levels=(4, 22, 62), demod=None,
+                  on_entry=None, events=None):
+    """Run a fresh cvbs_capture_ref.Capture over the samples, recording the line-start events
+    (start_at, active, sync, blank) at their sample index. The capture only decides cur_active
+    at the line's end (_finish_line, at the next start), so the events are complete only after
+    the run: with events=None this is pass 1, which just collects them. With precomputed events
+    (pass 2), a ColourDemod given as `demod` is driven in lockstep -- line_start before its step
+    at the event's sample -- and on_entry(e) is called with every entry the capture emits, after
+    the demod has stepped the same sample. Returns (cap, events, demod)."""
+    if white_x8 is None:
+        white_x8 = round(8 * (levels[2] - levels[1]) / (levels[1] - levels[0]))
+    cap = cv.Capture(comb=comb, white_x8=white_x8)
+    if events is None:
+        starts = {}
+        orig_s, orig_f = cap._start_line, cap._finish_line
+
+        def wrapped_s(start_at, flywheel, edge):
+            orig_s(start_at, flywheel, edge)
+            starts[cap.n] = [start_at, None, cap.sync, cap.blank]
+
+        def wrapped_f(flywheel_next):
+            active = cap.cur_active
+            orig_f(flywheel_next)
+            if starts:
+                starts[max(starts)][1] = active
+
+        cap._start_line = wrapped_s
+        cap._finish_line = wrapped_f
+        for s in samples:
+            cap.step(s)
+        events = {n: (ev[0], bool(ev[1]), ev[2], ev[3]) for n, ev in starts.items()}
+    else:
+        for i, s in enumerate(samples):
+            if demod is not None and i in events:
+                st, act, sync, blank = events[i]
+                demod.line_start(st, act, sync, blank)
+            n0 = len(cap.entries)
+            cap.step(s)
+            if demod is not None:
+                demod.step(s)
+            if on_entry is not None:
+                for e in cap.entries[n0:]:
+                    on_entry(e)
+    return cap, events, demod
+
+
+def expected_colour_entries(samples, comb=True, levels=(4, 22, 62), white_x8=None,
+                            chroma_k=None):
+    """The mixer entries rtl/cvbs_capture.v with COLOUR=1 emits for these samples: the capture's
+    own entries (words and markers, in order) with each word's chroma bytes [23:16]/[7:0] filled
+    from ColourDemod (Cr/Cb at the word's tick, 4:2:2) instead of 0x80. Bit-for-bit the target of
+    sim/test_colour_demod_rtl.py, like cvbs_capture_ref.expected_entries is for test_cvbs_capture."""
+    if white_x8 is None:
+        white_x8 = round(8 * (levels[2] - levels[1]) / (levels[1] - levels[0]))
+    if chroma_k is None:
+        chroma_k = globals()['chroma_k'](levels[2] - levels[1])
+    _, events, _ = drive_capture(samples, comb=comb, white_x8=white_x8, levels=levels)
+    dem = ColourDemod(comb=comb, white_x8=white_x8, chroma_k=chroma_k)
+    entries = []
+
+    def on_entry(e):
+        if e[0] == 'word':
+            # the capture emits the word at the tick with odd y_count; the demod updated cb/cr
+            # at that same tick (its even ticks), so they pair with Y1
+            data = (e[4] & 0xFF00FFFF) | (dem.cr << 16) | dem.cb
+            entries.append(('word', e[1], e[2], e[3], data))
+        else:
+            entries.append(e)
+
+    drive_capture(samples, comb=comb, white_x8=white_x8, levels=levels, demod=dem,
+                  on_entry=on_entry, events=events)
+    return entries
+
+
 def run_frame(luma_fn=cv.bars, chroma_fn=colour_bars_chroma, lines=120, first_line=1,
               noise=0.0, seed=1, phase_ramp=0.0, comb=True, levels=(4, 22, 62),
               with_burst=True, hue_skip=10, white_x8=None):
@@ -405,75 +511,26 @@ def run_frame(luma_fn=cv.bars, chroma_fn=colour_bars_chroma, lines=120, first_li
     # test_cvbs_capture's C5VRX case: levels (23, 31, 62) with white_x8 31).
     if white_x8 is None:
         white_x8 = round(8 * (levels[2] - levels[1]) / (levels[1] - levels[0]))
-    cap = cv.Capture(comb=comb, white_x8=white_x8)
-    events = {}         # cap.n at the start event -> [start_at, line, field, sync, blank]
-    orig = cap._start_line
-
-    def wrapped(start_at, flywheel, edge):
-        orig(start_at, flywheel, edge)
-        # cur_active is only decided ACT_CHECK samples later; the marker the capture appends at
-        # the line's end carries (field, line) of the lines that were active, so patch the flag
-        # from those markers after the run
-        events[cap.n] = [start_at, cap.cur_line, cap.cur_field, cap.sync, cap.blank]
-
-    cap._start_line = wrapped
-    cap.run(samples)
-    # a line is active when the capture emitted a marker for it (the capture's own active
-    # decision, made ACT_CHECK samples after the start); the event's line number is only valid
-    # for active lines, so map the event to the marker by order: markers come at line ends, in the
-    # same order as the starts of active lines
-    marker_keys = [(m[1], m[2]) for m in cap.entries if m[0] == 'marker']
-    active_starts = [ev[0] for ev in events.values()]
-    # pair each active line's start with its marker in order: the k-th marker belongs to the k-th
-    # line that became active; walk the starts and count the ones the capture marked
-    marked = set()
-    ai = 0
-    for n in sorted(events):
-        # the capture decides active at ACT_CHECK; find whether this start's line got a marker by
-        # matching start_at + H to the marker's position is fragile, so instead: rerun a tiny
-        # probe -- simpler: the capture sets cur_line/cur_field only for active lines, and the
-        # next _start_line sees the previous line's values in prev_active; use the fact that
-        # events recorded after orig() runs carry cur_line of THIS line only when active
-        pass
-    # direct approach: hook _finish_line as well, it sees cur_active at the line's end
-    cap2 = cv.Capture(comb=comb)
-    starts2 = {}
-    orig2 = cap2._start_line
-    fin = cap2._finish_line
-    def wrapped2(start_at, flywheel, edge):
-        orig2(start_at, flywheel, edge)
-        starts2[cap2.n] = [start_at, None, cap2.sync, cap2.blank]
-    def fin2(flywheel_next):
-        active = cap2.cur_active
-        ln, fld = cap2.cur_line, cap2.cur_field
-        fin(flywheel_next)
-        # record on the most recent start
-        if starts2:
-            n = max(starts2)
-            starts2[n][1] = (active, ln, fld)
-    cap2._start_line = wrapped2
-    cap2._finish_line = fin2
-    cap2.run(samples)
-    events = {n: [ev[0], ev[1][1] if ev[1] else 0, ev[1][2] if ev[1] else 0, ev[2], ev[3],
-                  bool(ev[1] and ev[1][0])] for n, ev in starts2.items()}
+    cap, events, _ = drive_capture(samples, comb=comb, white_x8=white_x8, levels=levels)
     dem = ColourDemod(comb=comb, white_x8=white_x8, chroma_k=chroma_k(levels[2] - levels[1]))
-    ys, cbs, crs, line_of_tick, tick_abs = [], [], [], [], []
-    k_line = 0
-    si = 0
+    ys, cbs, crs, tick_abs = [], [], [], []
     for i, s in enumerate(samples):
-        while si < len(starts) and i >= starts[si][0]:
-            k_line = si + 1
-            si += 1
         if i in events:
-            start_at, _line, _field, sync, blank, active = events[i]
+            start_at, active, sync, blank = events[i]
             dem.line_start(start_at, active, sync, blank)
         r = dem.step(s)
         if r is not None:
             ys.append(r[0])
             cbs.append(r[1])
             crs.append(r[2])
-            line_of_tick.append(k_line)
             tick_abs.append(i)       # absolute sample index of the tick
+    # the line each tick belongs to: the latest synth line start <= the tick's sample index
+    line_of_tick = []
+    si = 0
+    for i in tick_abs:
+        while si < len(starts) and i >= starts[si][0]:
+            si += 1
+        line_of_tick.append(si)      # 1-based index into starts
     # truth per emitted tick from the ABSOLUTE sample index: x = (i - line_start - ACT_START)*13.5/40
     # (the synth now writes the subcarrier per sample at the absolute index, so this is exact)
     truth_y, truth_cb, truth_cr = [], [], []
@@ -504,6 +561,26 @@ def run_frame(luma_fn=cv.bars, chroma_fn=colour_bars_chroma, lines=120, first_li
     return {'luma_snr_db': luma_snr, 'hue_rms_deg': hue_rms, 'chroma_rms': crms,
             'sync_hits': hits, 'markers': len(markers), 'burst_lines': len(dem.burst_phase_err_deg),
             'demod_samples': n, 'y': ys, 'cb': cbs, 'cr': crs}
+
+
+
+def lut_vh():
+    """The case arms of the three rtl/colour_luts_*.vh includes: the 8-bit cos/sin tables (phase =
+    top 8 bits of the 32-bit NCO accumulator, values biased by +128) and the 256-entry reciprocal
+    ROM INV_LUT (est = burst_i*INV_LUT[m]>>8 ~ 256*burst_i/m), as the RTL functions cos_of/sin_of/
+    inv_of see them. sim/test_colour_demod_rtl.py checks the files against this."""
+    cos = [f"                8'd{p}: cos_of = 8'sd{c + 128};" for p, c in enumerate(COS_T)]
+    sin = [f"                8'd{p}: sin_of = 8'sd{s + 128};" for p, s in enumerate(SIN_T)]
+    inv = [f"                8'd{m}: inv_of = 16'd{v};" for m, v in enumerate(INV_LUT)]
+    head = '// Generated by gateware/model/colour_demod_ref.py (lut_vh); do not edit.\n'
+    return {'colour_luts_cos.vh': head + '// cos(2*pi*p/256), +-127, biased +128.\n' + '\n'.join(cos) + '\n',
+            'colour_luts_sin.vh': head + '// sin(2*pi*p/256), +-127, biased +128.\n' + '\n'.join(sin) + '\n',
+            'colour_luts_inv.vh': head + '// round(65536/m); index 0 unused.\n' + '\n'.join(inv) + '\n'}
+
+
+def write_lut_vh(dirpath):
+    for name, text in lut_vh().items():
+        Path(dirpath, name).write_text(text)
 
 
 def table(lines=120):

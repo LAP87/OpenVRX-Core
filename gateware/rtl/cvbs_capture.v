@@ -4,8 +4,9 @@
 // Bit-exact counterpart of gateware/model/cvbs_capture_ref.py; the rules are described there.
 //   word:   {1'b0, field, line[9:0], idx[8:0], Y1, 80, Y0, 80}
 //   marker: {1'b1, field, line[9:0], hf[19:0], bad[3:0], 4'b0, length[11:0], 1'b0}
-// Luma only in this step (Cb = Cr = 128): the 1H comb (COMB = 1) adds the previous line's
-// sample so that the NTSC subcarrier cancels; colour is task 65.
+// Luma plus, with COLOUR = 1, NTSC colour demodulation (task 65, colour_demod.v): the word's
+// chroma bytes carry Cr/Cb instead of 8'h80. With COLOUR = 0 (the default) the words are exactly
+// as before: {1'b0, field, line[9:0], idx[8:0], Y1, 80, Y0, 80}.
 // `lock` is the line flywheel's lock (task 69): mixer2 uses it as channel B's health in place of
 // a TVP status that a sample bus does not have; the model records the same changes (lock_trace).
 //
@@ -17,9 +18,11 @@
 module cvbs_capture #(
     parameter COMB = 1,
     parameter AVG = 8,                 // the slicer sees the sum of the last AVG samples (1: the sample itself)
-    parameter WHITE_X8 = 20            // the source's white-to-blanking swing over its blanking-to-sync swing, times 8:
+    parameter WHITE_X8 = 20,           // the source's white-to-blanking swing over its blanking-to-sync swing, times 8:
                                        // 20 = standard composite (100/40 IRE), 31 = C5VRX's bus (white 62, blanking 31,
                                        // sync 23; the standard table clipped everything above code 51 to white)
+    parameter COLOUR = 0,              // 1: colour_demod.v fills the word's Cr/Cb bytes (task 65); 0: 8'h80 as before
+    parameter [11:0] CHROMA_K = 12'hBFF  // colour_demod's K: chroma_k(white-blank), -1025 for white-blank 40
 ) (
     input  wire        clk,            // the sample clock, 40 MHz
     input  wire        rst,
@@ -231,6 +234,22 @@ module cvbs_capture #(
                                                            : boot_slice;
     wire [6:0]  dlvl_nx   = (blank_lvl_nx > sync_lvl_nx) ? ({1'b0, blank_lvl_nx - sync_lvl_nx} << 1) : 7'd0;
 
+    // ---- colour demod (task 65): shares this module's comb partner, levels and tick -------------
+    // the chroma bytes are registered at the even luma ticks; the word is emitted three clocks
+    // after its Y1 tick, so the pair is stable when packed
+    wire [7:0] cb_c, cr_c;
+    generate
+        if (COLOUR != 0) begin : colour
+            colour_demod #(.COMB(COMB), .CHROMA_K(CHROMA_K)) cd (
+                .clk(clk), .rst(rst), .d(d), .started(started), .line_open(line_open),
+                .pos_c(pos_c), .use_prev(use_prev), .prev_q(prev_q),
+                .blank6(blank_lvl_nx), .tick(tick), .y_now(y_now), .cb(cb_c), .cr(cr_c));
+        end else begin
+            assign cb_c = 8'h80;
+            assign cr_c = 8'h80;
+        end
+    endgenerate
+
     // ---- luma pipeline ------------------------------------------------------------------------
     // stage 0: the tick and its operands
     wire        use_prev = (COMB != 0) && prev_active && (pos_c < 16'd4096) && (pos_c < prev_len);
@@ -251,7 +270,7 @@ module cvbs_capture #(
     reg  [19:0] hf;
     wire [7:0]  y_diff = (y2 > y_prev) ? y2 - y_prev : y_prev - y2;
     wire        word_now = v2 && yc2[0];
-    wire [52:0] word = {1'b0, f2, l2, yc2[9:1], y2, 8'h80, y_pend, 8'h80};
+    wire [52:0] word = {1'b0, f2, l2, yc2[9:1], y2, cr_c, y_pend, cb_c};
 
     // ---- the marker, two clocks after the start so that the line's last words are out --------
     reg  [1:0]  mk_sr;
