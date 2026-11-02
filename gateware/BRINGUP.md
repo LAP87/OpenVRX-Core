@@ -37,15 +37,28 @@ Ordningen är M0 → M3 → M2a → M4 → M6; M2a kan också tas direkt efter M
 **Digital ingång på dekoder B:s plats (byggvalet `DIGIN=1`, `m4_dual_mix_digin.fs`).** Kanal B tar då C5VRX-mottagarens
 6-bitars sampelbuss (XIAO ESP32-C5, PARLIO TX 40 MS/s, komposit med färgbärvågen) i stället för en TVP5150; `rtl/cvbs_capture.v`
 gör samma radord och markörer som `chan_capture.v`, i det här steget bara luma (navets `docs/design/2026-10-24/DIGITAL_INGANG.md`).
-Firmwaren måste lägga ut sampelklockan på MTMS-paden (GPIO2, kortets baksida): det privata bygget från 2026-10-24
-(synkhjulet av med konsol `U`) eller Twotoz PR #257 byggd med klockvalet `C5VRX_OUT_DAC6_CLOCK` (inget synkhjul;
-flasharens PR-bygge har klockan av), se designnoten. 3,3 V-logik, korta trådar.
+Firmwaren måste lägga ut sampelklockan. Sedan C5VRX-5 v5.0.573 (2026-10-31) är det en vanlig inställning,
+EXPERIMENTAL → Clock Pin D10: klockan på D10/GPIO10 och DAC-bit 2 flyttad från D6 till D3/GPIO7 (gäller från
+nästa start). De äldre privata byggena (klockan på MTMS-paden GPIO2, bit 2 på D6) står i navets designnot och
+bänkprotokoll. 3,3 V-logik, korta trådar. **Gå efter stiftnumren tryckta på Tang-kortet**, inte efter en räknad
+position i kontakten: det tredje stiftet i raden visade sig vara jord på bänken 2026-10-28.
 
-| XIAO | Signal | Tang | | XIAO | Signal | Tang |
+Koppling för v5.0.573 med Clock Pin D10 på:
+
+| XIAO | Signal | Tang-stift (tryckt) | | XIAO | Signal | Tang-stift (tryckt) |
 |---|---|---|---|---|---|---|
-| MTMS-pad (GPIO2) | sampelklocka 40 MHz | J5-4 (PIN80) | | D7 | bit 3 | J5-10 (PIN48) |
-| D4 | bit 0 | J5-3 (PIN76) | | D8 | bit 4 | J5-12 (PIN49) |
-| D5 | bit 1 | J5-5 (PIN42) | | D9 | bit 5 | J5-13 (PIN86) |
+| D10 | sampelklocka 40 MHz | 80 | | D7 | bit 3 | 48 |
+| D4 | bit 0 | 76 | | D8 | bit 4 | 49 |
+| D5 | bit 1 | 42 | | D9 | bit 5 | 86 |
+| D3 | bit 2 | 41 | | D6 | oanvänd | |
+
+Äldre koppling (de privata byggena 2026-10-24/26, klockan på MTMS-paden):
+
+| XIAO | Signal | Tang-stift (tryckt) | | XIAO | Signal | Tang-stift (tryckt) |
+|---|---|---|---|---|---|---|
+| MTMS-pad (GPIO2) | sampelklocka 40 MHz | 80 | | D7 | bit 3 | 48 |
+| D4 | bit 0 | 76 | | D8 | bit 4 | 49 |
+| D5 | bit 1 | 42 | | D9 | bit 5 | 86 |
 | D6 | bit 2 | J5-6 (PIN41) | | GND | jord | GND |
 
 Data byter värde på klockans negativa flank och samplas på den positiva. Mätt på bussen 2026-10-27 (`top/m7_digin_probe.v`,
