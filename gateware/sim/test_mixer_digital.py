@@ -17,8 +17,10 @@ PROJECT = GW.parent
 sys.path.insert(0, str(GW / 'model'))
 import cvbs_capture_ref as m  # noqa: E402
 
+import pair_align_ref as pa  # noqa: E402
+
 RTL = ('bt656_rx.v', 'word_packer.v', 'async_fifo.v', 'dual_clock_ram.v', 'chan_capture.v', 'cvbs_capture.v',
-       'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'noise_stats.v', 'mixer2.v')
+       'pair_align.v', 'mix_chan.v', 'line_mixer.v', 'snow_stats.v', 'noise_stats.v', 'mixer2.v')
 
 
 def run(samples, digital, tag):
@@ -50,8 +52,10 @@ def run(samples, digital, tag):
 
 @pytest.fixture(scope='module')
 def picture():
-    """40 lines of clean composite: the flywheel locks a few lines in."""
-    return list(m.synth(m.bars, frames=1)[:40 * m.H_NOM])
+    """40 lines of clean composite as the bus sends them, every sample twice (pair_align_ref.pair_stream), with
+    the bench's late bit-2 edge in half of the first copies: the flywheel locks a few lines in."""
+    paired = pa.pair_stream(m.synth(m.bars, frames=1)[:40 * m.H_NOM])
+    return pa.glitch(paired, p_late=0.5)[0]
 
 
 def test_digital_b_health_is_the_capture_lock(picture):
