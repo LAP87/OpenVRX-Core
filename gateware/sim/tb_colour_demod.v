@@ -6,7 +6,7 @@
 //   vvp sim.vvp +hex=<samples> +out=<entries> [+n=<samples to drive>]
 // +define+CVBS_COLOUR=0 builds the capture without the colour demod (the chroma bytes 8'h80);
 // +define+CVBS_COMB=0 builds it without the 1H comb (the negative control);
-// +define+CVBS_WHITE_X8=31 selects the C5VRX gain table (and CHROMA_K for white-blank 31).
+// +define+CVBS_WHITE_X8=31 selects the C5VRX gain table; +define+CVBS_CHROMA_K=12'hAD6 the matching K.
 `timescale 1ns / 1ps
 module tb_colour_demod;
 `ifndef CVBS_COLOUR
@@ -18,14 +18,9 @@ module tb_colour_demod;
 `ifndef CVBS_WHITE_X8
 `define CVBS_WHITE_X8 20
 `endif
-    // chroma_k(white-blank): -1025 (12'hBFF) for white-blank 40, -1322 (12'hAD6) for 31
-`ifdef CVBS_WHITE_X8
-`if CVBS_WHITE_X8 == 31
-`define CVBS_CHROMA_K 12'hAD6
-`else
-`define CVBS_CHROMA_K 12'hBFF
-`endif
-`else
+    // chroma_k(white-blank) as a 12-bit two's complement define set by the test, e.g. -1322 = 12'hAD6
+    // for C5VRX's levels 23/31/62 (white-blank 31); 12'hBFF (-1025) is the model's K for white-blank 40
+`ifndef CVBS_CHROMA_K
 `define CVBS_CHROMA_K 12'hBFF
 `endif
     reg clk = 1'b0;

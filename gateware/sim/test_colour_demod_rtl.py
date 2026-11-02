@@ -37,7 +37,23 @@ def have_iverilog():
     return shutil.which('iverilog', path=env.get('PATH')) and shutil.which('vvp', path=env.get('PATH'))
 
 
-def run(samples, colour=1, comb=True, white_x8=cd.cv.WHITE_X8_STD, tag='run'):
+# The RTL has gain tables for WHITE_X8 20 (standard) and 31 (C5VRX) only, so the test levels are
+# chosen to land on those: C5VRX's measured 23/31/62 (white-blank 31, blank-sync 8 -> 31) and a
+# standard set 8/22/57 (35/14 -> 20). The Vibe draft used 4/22/62 (-> 18), which no RTL table
+# serves, so the RTL silently took the 20 table and the comparison could never match.
+LV_C5 = (23, 31, 62)
+LV_STD = (8, 22, 57)
+
+
+def wx8(levels):
+    return round(8 * (levels[2] - levels[1]) / (levels[1] - levels[0]))
+
+
+def kdef(levels):
+    return "12'h%03X" % (cd.chroma_k(levels[2] - levels[1]) & 0xFFF)
+
+
+def run(samples, colour=1, comb=True, white_x8=cd.cv.WHITE_X8_STD, chroma_k_def=None, tag='run'):
     """Entries the RTL emits for the samples, decoded like the model's tuples."""
     work = HERE / 'build' / 'colour_demod' / tag
     work.mkdir(parents=True, exist_ok=True)
@@ -48,6 +64,8 @@ def run(samples, colour=1, comb=True, white_x8=cd.cv.WHITE_X8_STD, tag='run'):
     defines = [f'-DCVBS_COLOUR={colour}', '-DCVBS_COMB=%d' % (1 if comb else 0)]
     if white_x8 != cv.WHITE_X8_STD:
         defines.append(f'-DCVBS_WHITE_X8={white_x8}')
+    if chroma_k_def is not None:
+        defines.append(f'-DCVBS_CHROMA_K={chroma_k_def}')
     subprocess.run(['iverilog', '-g2012', '-I', str(GW / 'rtl'), *defines, '-o', 'sim.vvp',
                     '-s', 'tb_colour_demod', str(HERE / 'tb_colour_demod.v'),
                     str(GW / 'rtl' / 'cvbs_capture.v'), str(GW / 'rtl' / 'colour_demod.v')],
@@ -78,7 +96,7 @@ def first_difference(got, exp):
 
 
 def colour_samples(lines=30, **kw):
-    kw.setdefault('levels', (4, 22, 62))
+    kw.setdefault('levels', LV_C5)
     return cd.synth_colour(cv.bars, cd.colour_bars_chroma, lines=lines, first_line=1, **kw)[0]
 
 
@@ -98,8 +116,8 @@ def test_model_entry_stream_fills_chroma():
     plain capture (the word's own two Y bytes differ only where the comb partner differs between
     the two runs, which it does not: both use comb=True)."""
     s = colour_samples(lines=30)
-    ent = cd.expected_colour_entries(s)
-    plain = cv.expected_entries(s, white_x8=18)
+    ent = cd.expected_colour_entries(s, levels=LV_C5)
+    plain = cv.expected_entries(s, white_x8=wx8(LV_C5))
     assert len(ent) == len(plain)
     n_filled = 0
     for a, b in zip(plain, ent):
@@ -118,11 +136,12 @@ def test_model_entry_stream_fills_chroma():
 def test_colour_frame_matches_model():
     """A clean colour-bars stretch: every word (Y1/Cr/Y0/Cb) and marker as the model, bit for
     bit (the 2-3 clock pipeline delay does not change the entry order)."""
-    s = colour_samples(lines=30)
-    exp = cd.expected_colour_entries(s)
-    got = run(s, colour=1, white_x8=18, tag='clean')
-    diff = first_difference(got, exp)
-    assert diff is None, diff
+    for lv, tag in ((LV_C5, 'clean_c5'), (LV_STD, 'clean_std')):
+        s = colour_samples(lines=30, levels=lv)
+        exp = cd.expected_colour_entries(s, levels=lv)
+        got = run(s, colour=1, white_x8=wx8(lv), chroma_k_def=kdef(lv), tag=tag)
+        diff = first_difference(got, exp)
+        assert diff is None, (tag, diff)
     words = [e for e in got if e[0] == 'word']
     assert any(((e[4] >> 16) & 0xFF) not in (0, 0x80, 255) or (e[4] & 0xFF) not in (0, 0x80, 255)
                for e in words)          # real chroma, not the placeholder
@@ -133,8 +152,8 @@ def test_noise_frame_matches_model():
     """Noise of one code and a burst phase ramp of 2 deg/line: the same entries as the model
     (exercises the burst loop and the boxcar under non-ideal phase)."""
     s = colour_samples(lines=30, noise=1.0, seed=3, phase_ramp=2.0)
-    exp = cd.expected_colour_entries(s)
-    got = run(s, colour=1, white_x8=18, tag='noise')
+    exp = cd.expected_colour_entries(s, levels=LV_C5)
+    got = run(s, colour=1, white_x8=wx8(LV_C5), chroma_k_def=kdef(LV_C5), tag='noise')
     diff = first_difference(got, exp)
     assert diff is None, diff
 
@@ -144,8 +163,8 @@ def test_colour_zero_keeps_placeholder_bytes():
     """COLOUR=0 emits exactly the luma-only entries of the model's plain capture (8'h80 chroma
     bytes): existing builds are bit-identical."""
     s = colour_samples(lines=30)
-    exp = cv.expected_entries(s, white_x8=18)
-    got = run(s, colour=0, white_x8=18, tag='luma')
+    exp = cv.expected_entries(s, white_x8=wx8(LV_C5))
+    got = run(s, colour=0, white_x8=wx8(LV_C5), tag='luma')
     diff = first_difference(got, exp)
     assert diff is None, diff
     assert all((e[4] >> 16 & 0xFF) == 0x80 and (e[4] & 0xFF) == 0x80
@@ -157,12 +176,12 @@ def test_comb_off_is_the_negative_control():
     """With the 1H comb off (COMB=0) the RTL matches the model's comb-off entries: luma leaks
     into the chroma bytes (they move with the picture), which is the negative control."""
     s = colour_samples(lines=30)
-    exp = cd.expected_colour_entries(s, comb=False)
-    got = run(s, colour=1, comb=False, white_x8=18, tag='nocombs')
+    exp = cd.expected_colour_entries(s, comb=False, levels=LV_C5)
+    got = run(s, colour=1, comb=False, white_x8=wx8(LV_C5), chroma_k_def=kdef(LV_C5), tag='nocombs')
     diff = first_difference(got, exp)
     assert diff is None, diff
-    plain = cv.expected_entries(s, comb=False, white_x8=18)
-    got_luma = run(s, colour=0, comb=False, white_x8=18, tag='nocombl')
+    plain = cv.expected_entries(s, comb=False, white_x8=wx8(LV_C5))
+    got_luma = run(s, colour=0, comb=False, white_x8=wx8(LV_C5), tag='nocombl')
     assert first_difference(got_luma, plain) is None
     # the comb-off chroma tracks the luma: on the white bar the Cb byte is far from 128
     words = [e for e in got if e[0] == 'word']
