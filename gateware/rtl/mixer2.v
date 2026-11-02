@@ -8,8 +8,10 @@ module mixer2 #(
     parameter BLEND_Q8 = 38, SWITCH_Q8 = 64,
     parameter T_PAIR = 1024, N_STEP = 8, N_DEAD = 40,  // see line_mixer.v
     parameter B_DIGITAL = 0,                // 1: channel B is a composite sample bus (cvbs_capture.v), not a TVP
-    parameter B_WHITE_X8 = 20               // B_DIGITAL: the bus source's white swing over its sync swing, times 8
+    parameter B_WHITE_X8 = 20,              // B_DIGITAL: the bus source's white swing over its sync swing, times 8
                                             // (cvbs_capture.v WHITE_X8; 31 for C5VRX)
+    parameter B_PAIR = 1                    // B_DIGITAL: pair_align.v in front of the capture (the bus sends every
+                                            // sample twice; the first copy can miss a late edge, bench 2026-10-27/28)
 ) (
     input  wire        a_clk,
     input  wire [7:0]  a_d,
@@ -66,8 +68,18 @@ module mixer2 #(
     wire b_ext_bad;
     generate if (B_DIGITAL != 0) begin : g_b_digital
         // channel B is a 6-bit composite sample bus at 40 MS/s (the C5VRX receiver's PARLIO
-        // bus): cvbs_capture.v makes the same entries as chan_capture.v (task 64)
-        cvbs_capture #(.WHITE_X8(B_WHITE_X8)) cap_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse),
+        // bus): cvbs_capture.v makes the same entries as chan_capture.v (task 64). The bus sends every
+        // sample twice and the first copy can miss a bit's late edge: pair_align.v (B_PAIR) feeds the
+        // capture the settled copy in both positions, one clock late
+        wire [5:0] b_cap;
+        if (B_PAIR != 0) begin : g_b_pair
+            wire        b_phase;
+            wire [11:0] b_mism;
+            pair_align pa_b (.clk(b_clk), .rst(brst), .d(b_in[5:0]), .q(b_cap), .phase(b_phase), .mism(b_mism));
+        end else begin : g_b_raw
+            assign b_cap = b_in[5:0];
+        end
+        cvbs_capture #(.WHITE_X8(B_WHITE_X8)) cap_b (.clk(b_clk), .rst(brst), .d(b_cap), .e_valid(eb_v), .e_data(eb_d), .line_pulse(b_pulse),
                             .lock(b_lock));
         assign b_ext_bad = ~b_lock;
     end else begin : g_b_bt656

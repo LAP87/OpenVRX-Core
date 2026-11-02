@@ -70,6 +70,8 @@ nudgad av kanten (grenen `digin/line-start`): med kanten som start hackade bilde
 bara B) och bilden från B syns på HDMI; inget synklås krävs från någon TVP för kanal B. M6 har ingen digital ingång än,
 så M6-loggens B-fält gäller TVP B.
 
+Sedan 2026-11-02 (grenen `digin/pair-align`, uppgift 71) ser `cvbs_capture` bussen genom `rtl/pair_align.v` i M4 `DIGIN=1` och i M7:s statistikfångst: bussen sänder varje sampel två gånger, och i bänkfångsterna saknade första kopian bit 2 i 41–66 % av bit 2:s stigande flanker (den sena flanken på D6/GPIO11) och bar varje ensamt kod 0-sampel, medan andra kopian alltid var färdig; steget hittar parfasen och byter första kopian mot andra. M7:s CAP-rad slutar därför med `p=<parfas><skeva par i senaste fönstret om 2 048, tre hexsiffror>`: `p=1000` eller `p=0000` betyder identiska par (svaret på Twotoz fråga om bit 2 på D3), bussen 10-27/28 gav 86–350 per fönster i modellen på fångsterna. Dumpen är den råa bussen, så parstatistiken per bit räknas offline som förut.
+
 **Gemensamt:** SCL till båda modulerna och OLED:n på J6-3 (PIN75). RESETB till båda på J6-18 (PIN18, lysdiod 3). GND till GND (J6-20, J5-2). Pull-up 2,2–4,7 kΩ till 3,3 V på SCL och båda SDA, om modulerna inte redan har det.
 
 J6-10 (PIN25) används inte. En utgång där ligger i samma bank som HDMI-klockparet och ändrar hur Apicula packar det (avsnitt 5).

@@ -10,7 +10,9 @@
 //   END
 // Between dumps one statistics line from a cvbs_capture running on the live bus (the measurement tap of
 // task 69): "CAP t=<window in 65536 bus clocks> l=<locked now> c=<lock changes> n=<line markers> b=<bad ones>
-// m=<shortest line, ticks> M=<longest> w=<words>", all hex, the window being the time since the previous line.
+// m=<shortest line, ticks> M=<longest> w=<words> x=<lengths outside 1716 +- 2> p=<pair phase><mismatching pairs
+// in pair_align's last window of 2 048>", all hex, the window being the time since the previous line. The capture
+// sees the bus through pair_align.v as M4 does (the settled copy of every pair); the dump is the raw bus.
 // LEDs (active low): 0 heartbeat 2 Hz, 1 lit while a capture is sent, 2 lit while the bus clock is seen.
 // Bench 2026-10-27: m3_probe showed the clock (> 33.5 MHz, its counter's top) and all six bits toggling, but
 // m4_dual_mix_digin produced no lines; this shows what the bits carry.
@@ -89,8 +91,13 @@ module m7_digin_probe #(
     always @(posedge tvpb_sclk or posedge rst) if (rst) rst_b <= 3'b111; else rst_b <= {rst_b[1:0], 1'b0};
     wire        e_valid, line_pulse, lock;
     wire [52:0] e_data;
-    // d_q: one input flop before the capture, as mixer2's b_in in M4
-    cvbs_capture #(.WHITE_X8(31)) cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_q), .e_valid(e_valid), .e_data(e_data),
+    // d_q: one input flop before the capture, as mixer2's b_in in M4; then pair_align as mixer2's B_PAIR (the
+    // settled copy of every pair; the dump above stays the raw bus, so the pair statistics can still be measured)
+    wire [5:0]  d_al;
+    wire        pa_phase;
+    wire [11:0] pa_mism;
+    pair_align pa (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_q), .q(d_al), .phase(pa_phase), .mism(pa_mism));
+    cvbs_capture #(.WHITE_X8(31)) cap (.clk(tvpb_sclk), .rst(rst_b[2]), .d(d_al), .e_valid(e_valid), .e_data(e_data),
                                        .line_pulse(line_pulse), .lock(lock));
     wire        marker = e_valid && e_data[52];
     wire [11:0] mlen   = e_data[12:1];
@@ -105,12 +112,14 @@ module m7_digin_probe #(
     wire        moff   = mlen < 12'd1714 || mlen > 12'd1718;
     reg  [11:0] c_min = 12'hFFF, c_max = 12'd0, l_min = 12'hFFF, l_max = 12'd0;
     reg  [27:0] c_words = 28'd0, l_words = 28'd0;
+    reg  [11:0] l_pm = 12'd0;                 // pair_align's mismatching pairs in its last window (4 096 bus clocks)
+    reg         l_ph = 1'b0;                  // and its pair phase
     always @(posedge tvpb_sclk) begin
         snap_s <= {snap_s[1:0], snap_t};
         lock_q <= lock;
         if (snap_s[2] != snap_s[1]) begin
             l_t <= c_t; l_chg <= c_chg; l_lines <= c_lines; l_bad <= c_bad; l_min <= c_min; l_max <= c_max;
-            l_words <= c_words; l_lock <= lock; l_off <= c_off;
+            l_words <= c_words; l_lock <= lock; l_off <= c_off; l_pm <= pa_mism; l_ph <= pa_phase;
             c_t <= 16'd0; c_chg <= 24'd0; c_lines <= 24'd0; c_bad <= 24'd0; c_min <= 12'hFFF; c_max <= 12'd0;
             c_words <= 28'd0; c_off <= 24'd0;
             ack_t <= ~ack_t;
@@ -130,12 +139,14 @@ module m7_digin_probe #(
     reg [2:0] ack_s = 3'b000;
     always @(posedge clk) ack_s <= {ack_s[1:0], ack_t};
     wire ack_p = ack_s[2] ^ ack_s[1];
-    // "CAP t=tttt l=L c=cccccc n=nnnnnn b=bbbbbb m=mmm M=MMM w=wwwwwww x=xxxxxx\n" (73 bytes, hex): t window in
-    // 65 536 bus clocks, l lock now, c lock changes, n line markers, b of them bad, m/M shortest/longest line
-    // (ticks), w words, x markers with a length outside 1716 +- 2 (the mixer's tolerance)
-    localparam STAT_LEN = 73;
+    // "CAP t=tttt l=L c=cccccc n=nnnnnn b=bbbbbb m=mmm M=MMM w=wwwwwww x=xxxxxx p=Pppp\n" (80 bytes, hex): t
+    // window in 65 536 bus clocks, l lock now, c lock changes, n line markers, b of them bad, m/M shortest/longest
+    // line (ticks), w words, x markers with a length outside 1716 +- 2 (the mixer's tolerance), p pair_align's
+    // phase (P) and mismatching pairs in its last window of 2 048 pairs (ppp)
+    localparam STAT_LEN = 80;
     function [7:0] stat_byte(input [6:0] i, input [15:0] t, input l, input [23:0] c, input [23:0] n,
-                             input [23:0] b, input [11:0] mn, input [11:0] mx, input [27:0] w, input [23:0] o);
+                             input [23:0] b, input [11:0] mn, input [11:0] mx, input [27:0] w, input [23:0] o,
+                             input ph, input [11:0] pm);
         case (i)
             6'd0: stat_byte = "C"; 6'd1: stat_byte = "A"; 6'd2: stat_byte = "P"; 6'd3: stat_byte = " ";
             6'd4: stat_byte = "t"; 6'd5: stat_byte = "=";
@@ -167,6 +178,9 @@ module m7_digin_probe #(
             7'd64: stat_byte = "x"; 7'd65: stat_byte = "=";
             7'd66: stat_byte = hex(o[23:20]); 7'd67: stat_byte = hex(o[19:16]); 7'd68: stat_byte = hex(o[15:12]);
             7'd69: stat_byte = hex(o[11:8]); 7'd70: stat_byte = hex(o[7:4]); 7'd71: stat_byte = hex(o[3:0]);
+            7'd72: stat_byte = " ";
+            7'd73: stat_byte = "p"; 7'd74: stat_byte = "="; 7'd75: stat_byte = ph ? "1" : "0";
+            7'd76: stat_byte = hex(pm[11:8]); 7'd77: stat_byte = hex(pm[7:4]); 7'd78: stat_byte = hex(pm[3:0]);
             default: stat_byte = 8'h0A;
         endcase
     endfunction
@@ -237,7 +251,8 @@ module m7_digin_probe #(
             S_SNAPW: if (ack_p) begin state <= S_STAT; i <= 0; end
             S_STAT:  if (u_free) begin
                          u_send <= 1'b1;
-                         u_data <= stat_byte(i[6:0], l_t, l_lock, l_chg, l_lines, l_bad, l_min, l_max, l_words, l_off);
+                         u_data <= stat_byte(i[6:0], l_t, l_lock, l_chg, l_lines, l_bad, l_min, l_max, l_words, l_off,
+                                             l_ph, l_pm);
                          i <= i + 1'b1;
                          if (i[6:0] == STAT_LEN - 1) begin stat_done <= 1'b1; state <= S_PAUSE; end
                      end
