@@ -822,3 +822,12 @@ avvisade fel bildord/källrad i nybilden i båda fallen. Kraven på 144/720 rade
 Detta accepterar dessa två opt-in-prover och parameter-/resume-kontrollerna.
 Det är ingen ny 260-frökampanj, helsvit eller FPGA-routning; gamlaFAIL-kvitton
 och C2:s tidigare källa med 604 pass och dess byggen bevaras. Ingen FPGA-hårdvara är verifierad.
+
+
+### IQ PLL model experiment (task 74, 2026-11-06)
+
+The opt-in integer PLL improves luma SNR in the fixed six-case comparison but
+misses Core #28's sync-hit target. Adjacent phase remains the default. Twelve
+focused tests and the 720-test quick selection pass; no full-suite or hardware
+acceptance is claimed. Equations, the preserved failed first test and the
+measured tradeoff are in [the model report](../docs/IQ_PLL_2026-11-06.md).
