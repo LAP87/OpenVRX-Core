@@ -831,3 +831,13 @@ misses Core #28's sync-hit target. Adjacent phase remains the default. Twelve
 focused tests and the 720-test quick selection pass; no full-suite or hardware
 acceptance is claimed. Equations, the preserved failed first test and the
 measured tradeoff are in [the model report](../docs/IQ_PLL_2026-11-06.md).
+
+
+### IQ through composite Capture (task 75, 2026-11-06)
+
+A nominal six-bit adapter now exercises the unchanged Capture after IQ
+phase-difference or PLL demodulation. Clean controls recover 972 rows;
+the fixed C/N 4/8/12 dB cases recover no rows meeting both marker and pixel
+budgets. Ten focused tests and the 720-test quick selection pass. This is a
+grey-pattern model result, not RF, temporal-field or hardware acceptance:
+[measurements and limits](../docs/IQ_CAPTURE_2026-11-06.md).
