@@ -13,9 +13,9 @@ Chain, all at FS = 40 MS/s:
                 100 IRE, as the bench saw 22 of 64 codes in use), for the composite path of task 64
 
 What it does not model: pre-emphasis, the receiver's own filter calibration, DC offsets, Wi-Fi bursts,
-multipath, the U85Q phase tracker and C5VRX's gain loop. It is a bound for a dumb demodulator, so a
-real design can only be better than the numbers here; it answers whether 7-bit IQ in the FPGA can beat
-the 4-bit internal path and the 6-bit composite output, not what either achieves in the field.
+multipath, the U85Q phase tracker and C5VRX's gain loop. These are results for the specified synthetic
+chain, not a lower bound for real hardware. A different receiver can do better or worse. The model
+compares bit depths and demodulators; it does not establish what either achieves in the field.
 
     .venv/bin/python gateware/model/iq_demod_ref.py            # the table
     .venv/bin/python gateware/model/iq_demod_ref.py --lines 120 --dev 2.8 --bw 12e6
@@ -127,6 +127,46 @@ def fm_demodulate(z, dev_mhz_per_volt):
     d = np.angle(z[1:] * np.conj(z[:-1]))
     f_inst = np.concatenate([[0.0], d]) * FS / (2 * np.pi)
     return f_inst / (dev_mhz_per_volt * 1e6) * IRE_PER_VOLT
+
+
+def fm_demodulate_pll(z, bits, dev_mhz_per_volt, gated=True, loop_sign=1):
+    """Opt-in integer-loop experiment; adjacent phase remains run_case's default."""
+    from fm_pll_ref import FMPLL, TURN
+    pll = FMPLL(bits, gated=gated, loop_sign=loop_sign)
+    scale = 1 << (bits-1)
+    integer_i = np.rint(z.real*scale).astype(np.int16)
+    integer_q = np.rint(z.imag*scale).astype(np.int16)
+    inc = np.fromiter((pll.step(int(i), int(q)) for i, q in zip(integer_i, integer_q)),
+                      dtype=np.float64, count=len(z))
+    return inc * FS / TURN / (dev_mhz_per_volt*1e6) * IRE_PER_VOLT
+
+
+def compare_discriminators(cn_db, bits, lines=60, dev=2.8, bw=12e6, video_bw=4.2e6, seed=1):
+    """Three demodulators consume the same immutable quantised complex stream.
+
+    Metrics retain the original zero-phase FIR, sync tolerance and time origin;
+    no delay search or alignment is performed to improve the PLL's score.
+    """
+    import hashlib
+    clean, starts, info = composite_ire(cv.bars, lines)
+    video = lowpass(clean, video_bw)
+    z = lowpass(fm_modulate(video, dev), bw/2, taps=95)
+    z = lowpass(add_noise(z, cn_db, bw, np.random.default_rng(seed)), bw/2, taps=95)
+    z = quantise_iq(z, bits)
+    scale = 1 << (bits-1)
+    raw = np.column_stack((np.rint(z.real*scale), np.rint(z.imag*scale))).astype('<i2').tobytes()
+    row = dict(cn_db=cn_db, bits=bits, lines=lines, fs=FS, dev=dev, bw=bw,
+               video_bw=video_bw, seed=seed, iq_sha256=hashlib.sha256(raw).hexdigest(),
+               iq_samples=len(z), metrics={})
+    streams = [('adjacent', fm_demodulate(z, dev)),
+               ('gated_pll', fm_demodulate_pll(z, bits, dev, gated=True)),
+               ('ungated_pll', fm_demodulate_pll(z, bits, dev, gated=False))]
+    for name, demod in streams:
+        filtered = lowpass(demod, video_bw)
+        row['metrics'][name] = dict(luma_snr_db=float(luma_snr_db(filtered, video, info)),
+                                    sync_hits=sync_hit_rate(filtered, starts))
+    row['gated_sync_not_worse'] = row['metrics']['gated_pll']['sync_hits'] >= row['metrics']['adjacent']['sync_hits']
+    return row
 
 
 # ---- metrics ----------------------------------------------------------------------------------------
