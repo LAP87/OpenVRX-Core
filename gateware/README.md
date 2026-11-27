@@ -44,7 +44,7 @@ Milstolpetabellen nedan har samma byggen. Avsnitten om C2, C1 och C3 efter den �
 
 M6 kan begära TV eller VCR för båda dekodrarna via filterfältet i menyn. Styrenheten håller ett pågående skrivvärde fast, registrerar det faktiskt kvitterade värdet per dekoder och försöker igen efter parad pollning vid NACK. OLED, OSD och USB-logg visar det begärda menyvalet; loggen är 85 byte inklusive CRLF sedan RSSI-fälten kom 2026-10-13 (62 byte före) och `snowlog.py` bevarar de äldre radformaten.
 
-Den frysta sviten gav **604 pass i 39 filer**, utan fel, skips eller xfails, på **5411,439 s (1:30:11)**. Alla 570 tidigare testnoder finns kvar och samtliga 157 källhashar är oförändrade. Root granskade 19 cocotb-rapportidentiteter, 7 formella bevis och 14 verkliga negativa motexempel. Riktad C2-verifiering gav 56 pass och två subtester; nio isolerade gamla BUS-/parser-vakter underkänns för de avsedda semantiska felen. Svitens acceptans-SHA-256: `c783407e79a31e9a09f3bc82f76debff1160aebee80091c25368d261d1c09bfc`.
+Den frysta sviten gav **604 pass i 39 filer**, utan fel, skips eller xfails, på **5411,439 s (1:30:11)**. Alla 570 tidigare testnoder finns kvar och samtliga 157 källhashar är oförändrade. Root granskade 19 cocotb-rapportidentiteter, 7 formella bevis och 14 verkliga negativa motexempel. Riktad C2-verifiering gav 56 pass och två subtester; nio isolerade gamla BUS-/parser-vakter underkänns för de avsedda semantiska felen. Svitens acceptans-SHA-256: `7c0d8672ee82ca199c43f90f9228cf64b27b500098b5ec1ec894538440a6222f`.
 
 Färska byggen från samma källa, med beslutade seeds och oförändrade stift, IOB och SDC:
 
@@ -60,7 +60,7 @@ Samtliga 24 arkiverade byggartefakter och deras manifest är granskade. Alla fyr
 
 Ett helt utelämnat fält kunde förbruka F-gränsen utan att skicka ord. När nästa synliga fält började med ett högre radnummer än det föregående slog BUF och LOW ihop dem. Mixern håller nu gränsen väntande tills en rad skickas; flera helt utelämnade fält ger en enda synlig växling. Kanalval, radurval och dekoderns F-bit är oförändrade.
 
-Den frysta sviten gav **570 pass i 39 filer**, utan fel, skips eller xfails, på **3852,554 s (1:04:13)**. Alla 157 källhashar är oförändrade; 19 cocotb-rapporter, 7 formella bevis och 14 negativa motexempel är granskade. Riktad mixer/backend-verifiering gav 167 pass. Den verkliga gamla RTL-regeln underkänns av kontrollen på skickade ord med riktig BT.656-släcklucka. Svittens acceptans-SHA-256: `abe0f7de09f0500f3edecdc70a3ad2571e76463bf531a67c3390a788bf890692`.
+Den frysta sviten gav **570 pass i 39 filer**, utan fel, skips eller xfails, på **3852,554 s (1:04:13)**. Alla 157 källhashar är oförändrade; 19 cocotb-rapporter, 7 formella bevis och 14 negativa motexempel är granskade. Riktad mixer/backend-verifiering gav 167 pass. Den verkliga gamla RTL-regeln underkänns av kontrollen på skickade ord med riktig BT.656-släcklucka. Svittens acceptans-SHA-256: `52fc78c484d6435497f674883987de01afa83e72a1bd2cf73e1be1dfa909828b`.
 
 Färska byggen från samma källa, utan pin-, IOB-, SDC- eller seedbyte:
 
