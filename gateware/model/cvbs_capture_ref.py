@@ -2,7 +2,9 @@
 receiver's PARLIO bus), the mixer's 53-bit entries out, with the same meaning as chan_capture.v
 gives them for a TVP5150 (hub docs/design/2026-10-24/DIGITAL_INGANG.md).
 
-The algorithm, integer only, bit for bit what the RTL does:
+The default algorithm is integer only and matches the RTL. `robust_pulses=True`
+is a model-only proposal for Core #29, not implemented in RTL: after confirming
+settled pairs it tolerates short high excursions inside sync pulses.
 
 * Levels. Per line the sync tip (mean of 32 samples inside the pulse) and the back porch (mean of
   32 samples just before the active part) are measured; running estimates follow them with a
@@ -108,10 +110,21 @@ class Capture:
     """Feed samples one at a time with step(); entries collect in .entries as
     ('word', field, line, idx, data32) and ('marker', field, line, hf, bad, length)."""
 
-    def __init__(self, comb=True, avg=AVG, white_x8=WHITE_X8_STD, boot_check=True):
+    def __init__(self, comb=True, avg=AVG, white_x8=WHITE_X8_STD, boot_check=True,
+                 robust_pulses=False):
         self.comb = comb
         self.avg = avg
         self.boot_check = boot_check   # False: the first measured line is taken as it is (before 2026-10-28; tests)
+        # Model-only proposal for #29. Do not move a pulse's leading edge or the slicer window:
+        # require sixteen consecutive high averages to terminate it. This bridges brief positive
+        # noise excursions inside a broad pulse on the paired bus. Default remains the RTL's three.
+        # Eight did recover both lost fields but a measured eight-clock excursion still split
+        # seed 5's line 284. Sixteen is 0.4 us, below the 4.7 us normal sync and serration gap.
+        self.pulse_end_confirm = 16 if robust_pulses else 3
+        self.robust_pulses = robust_pulses
+        self.paired_input = False
+        self.pair_diffs = [0, 0]
+        self.pair_prev = 0
         self.gain = GAIN[white_x8] if white_x8 in GAIN else gain_table(white_x8)
         self.window = [0] * avg      # the last avg samples, zeros before the first
         self.win_sum = 0
@@ -271,6 +284,18 @@ class Capture:
 
     def step(self, s):
         """One 6-bit sample."""
+        if self.robust_pulses:
+            # The proposal is for the settled pairs after pair_align, not arbitrary input.
+            # Require one parity to match exactly over a 4096-clock window, with enough
+            # changes on the other parity to distinguish pairs from a flat signal. A raw
+            # bench capture with late bit edges must keep the original slicer behaviour.
+            if self.n and s != self.pair_prev:
+                self.pair_diffs[self.n & 1] += 1
+            self.pair_prev = s
+            if (self.n & 4095) == 4095:
+                self.paired_input = min(self.pair_diffs) == 0 and max(self.pair_diffs) >= 16
+                self.pair_diffs = [0, 0]
+            self.pulse_end_confirm = 16 if self.paired_input else 3
         # byte ticks at 27 MHz-equivalent, free running: the marker's length is the ticks per line
         self.acc_len += LEN_INC
         if self.acc_len >= LEN_MOD:
@@ -288,7 +313,7 @@ class Capture:
             self.low_run = min(self.low_run + 1, 3)
             self.high_run = 0
         else:
-            self.high_run = min(self.high_run + 1, 3)
+            self.high_run = min(self.high_run + 1, self.pulse_end_confirm)
             self.low_run = 0
         edge = False
         if not self.in_pulse and self.low_run == 3:
@@ -297,7 +322,7 @@ class Capture:
             self.pulse_width = 3
             edge = True
         elif self.in_pulse:
-            if self.high_run == 3:
+            if self.high_run == self.pulse_end_confirm:
                 self.in_pulse = False
             else:
                 self.pulse_width += 1
@@ -354,10 +379,13 @@ class Capture:
             p = self.pos
             # the accepted pulse of this line, or of the pending one (a flywheel start has no pulse: eq stays
             # False)
+            # Waiting longer to confirm the end must not itself turn a short pulse into a
+            # broad one. Retain the original classifier's allowance of two trailing high ticks.
+            class_width = self.pulse_width - max(0, self.high_run - 2)
             if self.in_pulse and self.cur_edge is not None and self.pulse_start == self.cur_edge:
-                self._line_class_update(self.pulse_width, False)
+                self._line_class_update(class_width, False)
             elif self.in_pulse and self.pend_edge is not None and self.pulse_start == self.pend_edge:
-                self._line_class_update(self.pulse_width, True)
+                self._line_class_update(class_width, True)
             if SYNC_WIN[0] <= p < SYNC_WIN[1]:
                 self.sync_sum += s
             if PORCH_WIN[0] <= p < PORCH_WIN[1]:

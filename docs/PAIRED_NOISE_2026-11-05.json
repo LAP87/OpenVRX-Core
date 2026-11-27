@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "reviewed_utc": "2026-11-05T20:15:13.297744+00:00",
+  "source_base": "a6e3c2bb473ef18442ac32a06e81c9bbb615029c",
+  "source": {
+    "gateware/model/cvbs_capture_ref.py": "82cdaf3d8f64b4689d249fce5f66cb45121119912f196d3861302f0eb113678a",
+    "gateware/model/paired_noise_audit.py": "8e151abda6c7caddf3c91bca12cf54e4e1c40624b1cc4c792f7fc4aa0bba284b",
+    "gateware/model/test_paired_noise.py": "dc520958b2c05b628a72229a508a5e19b0b0e4009fd024c8222d025d0e604e6b"
+  },
+  "model_only": true,
+  "rtl_changed": false,
+  "hardware_verified": false,
+  "full_suite_executed": false,
+  "targeted_pass": 14,
+  "targeted_seconds": 21.673,
+  "quick_requested_pass": 720,
+  "quick_processes": 458,
+  "quick_driver_seconds": 324.6457755300071,
+  "quick_source_fingerprint": null,
+  "source_runtime_bindings": 4790,
+  "inputs_unchanged": true,
+  "original_paired_words": [
+    84600,
+    86400,
+    0,
+    0,
+    85680,
+    85320
+  ],
+  "proposal_paired_words": [
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480
+  ],
+  "holdout_seeds": [
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "holdout_words": [
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480,
+    87480
+  ],
+  "raw": {
+    "baseline.json": {
+      "sha256": "f38084031e30d7e36c966a355450ed8b495f63e5c23b4492d46aab2ad054b1cc",
+      "size": 3823883
+    },
+    "proposal.json": {
+      "sha256": "5bab40586ea7c41ac0092528a6fa36cb2d277252e72830130967745d1d6b4b31",
+      "size": 3797581
+    },
+    "proposal16.json": {
+      "sha256": "afd7c77c4533eac2d5c9e3f54919e8387e3ec4791b9476c5cd9f1ba5af00ea2f",
+      "size": 3796350
+    },
+    "holdout.json": {
+      "sha256": "ca233af2990d3aa0193605e02c5fb59795beec2142398d52f4704e5e1f84119e",
+      "size": 3798934
+    },
+    "gap.json": {
+      "sha256": "3df72aceeddfd50bfdfc3e68f28edf72e346d8b8e3d80b09253a858f0b30d081",
+      "size": 684
+    },
+    "targeted.xml": {
+      "sha256": "bfd2e2b720be3220d6a01676d5118884f3eb7c2ed21b41e4ca470a4465350762",
+      "size": 3593
+    },
+    "targeted-v2.xml": {
+      "sha256": "3871f69571e0665bbd00025140969aa7d76b8e0d23e98625b65a182652b1fdec",
+      "size": 1834
+    },
+    "targeted-final.xml": {
+      "sha256": "6a0ecdb240f6b90e2d31e6c2d11a015c088be1521ae9e88e2288f085e11f6b32",
+      "size": 2090
+    },
+    "quick-suite/results.jsonl": {
+      "sha256": "4a99afd75d4454d921fd1154e0e20b67f35a625280b67d91390029319b4c3d3c",
+      "size": 316886
+    },
+    "quick-suite/report.txt": {
+      "sha256": "ccbac51318a2403f412a8d05954f4061833ce67c706a1cdcb45d50f1cbbd668e",
+      "size": 649
+    }
+  }
+}
